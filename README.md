@@ -1,44 +1,123 @@
 # Askoda · 数据需求智能分析助手
 
 > **[English](README.en.md) | 中文**
->
-> 业务用自然语言提数据需求，系统给出「口径明确、可解释、可审计」的 SQL。
-> 每一次取数都留下完整可追溯的判断链。
+
+<p align="center">
+  <b>以自然语言与业务意图驱动的企业级数据分析与检索工具</b><br/>
+  本体驱动 · Ontology-Driven Intent-to-Analytics
+</p>
+
+**一句话**：业务用一句自然语言提问，Askoda 给出**口径明确、可解释、可审计**的结果 —— 每一次取数都留下完整可追溯的判断链。
+
+它的完整链路是四段：
+
+> **① 知识底座（前置）** → **② 需求理解** → **③ 受控执行（安全 + 准确度门禁）** → **④ 合规审计（后置）**
+
+与通用「意图 → SQL」工具的根本差别在**首尾两段**：**问数之前先建知识底座，取数之后再做合规审计** —— 正是这两段，决定了它能否在企业级真实生产里落地。
 
 ---
 
 <p align="center">
   <a href="#一项目定位">项目定位</a> ·
+  <a href="#ontology">本体驱动</a> ·
   <a href="#二核心特性">核心特性</a> ·
   <a href="#三架构与设计原则">架构</a> ·
   <a href="#四目录结构">目录</a> ·
   <a href="#五快速上手">快速上手</a> ·
+  <a href="#mcp-tools">MCP 能力视图</a> ·
+  <a href="#mcp-ops">MCP 操作与升级</a> ·
   <a href="#六验证与自证">验证</a> ·
   <a href="#七里程碑与验收矩阵">里程碑</a> ·
   <a href="#八贡献指南">贡献</a> ·
-  <a href="#九路线图">路线图</a> ·
-  <a href="#十许可证">许可证</a>
+  <a href="#九路线图roadmap">路线图</a> ·
+  <a href="#十一许可证">许可证</a>
 </p>
 
 ---
 
 ## 一、项目定位
 
-Askoda 面向 **高合规行业的数据取数场景**（金融、监管、能源、政府、大型制造等）。它的目标不是"把问题翻译成 SQL"这么简单，而是让每一次取数都留下可追溯的判断链：
+Askoda 是**以自然语言与业务意图为驱动的企业级数据分析与检索工具**，本体论驱动。它面向的**不只是**高合规取数场景（金融、监管、能源、政府、大型制造等），而是**企业级真实生产中的通用数据分析与检索需求**。
 
-> 这句话是怎么被理解的 → 用了哪张表 → 口径从哪里来 → 生成前后的每一道门禁拦了什么 → 谁在什么时候执行过 → 结果为什么被判定为可交付。
+它与市面上常见「意图 → SQL」工具的根本区别在于：**它在需求分析之前先建知识底座，在数据提取之后再做合规审计**——正是这**首尾两段**，决定了它能否在企业级真实生产里落地。
+
+> 一次提问的完整判断链：这句话是怎么被理解的 → 用了哪张表 → 口径从哪里来 → 生成前后每一道门禁拦了什么 → 谁在什么时候执行过 → 结果为什么被判定为可交付。
 
 Askoda 不是"万能问数器"。对于**口径模糊、一对多放大、未建模字段、未确认指标**，它宁可**返回澄清问题或直接拒绝**，也不会用默认值静默兜底。这是它与市面上通用 AI-BI 工具最本质的区别。
 
+### 1.1 三层主线：事实 → 事理 → 行动
+
+<a id="ontology"></a>
+
+Askoda 的整体研发遵循 **本体论驱动的数据管理**理念（理论参考：《本体驱动的 AI 数据管理》，编写组 著，机械工业出版社，2026 年 5 月第 1 版，ISBN 978-7-111-81075-9）。一次取数被拆成自下而上的三层：
+
+| 层 | 承载什么 | 一句话 |
+|---|---|---|
+| **① 事实层 · Facts** | 业务需求受理 · 元数据采集与字典 · 附件归档 · Schema 快照 · 入口脱敏 | 把原始需求与元数据**归档治理**成事实 |
+| **② 事理层 · 本体知识库** | MDL 语义层 · 知识检索 · 证据编排 · 业务规则集 · 确认问答 | 把业务语义与专家知识**萃取沉淀**成本体知识库 |
+| **③ 行动层** | 两段式生成 · 五层门禁 · 只读执行 · 九字段留痕 · 审计回放 | 由一句自然语言**受控生成**查询、给出分析 |
+
+三层是**有向依赖，不可跳级**：事实层没治理干净，事理层无从萃取；事理层口径没定，行动层不允许生成。这正是 Askoda「宁可追问、不做默认值兜底」的根因。
+
+### 1.2 本体六要素落在哪
+
+| 本体要素 | 在 Askoda 里的载体 |
+|---|---|
+| 类 Class | MDL 模型（模拟库 A 6 个 / B 8 个） |
+| 实例 Instance | 只读执行返回的行记录（仅放行 `SELECT` / `WITH`） |
+| 属性 Property | MDL 字段 + 元数据字典（业务含义 / 别名；未建模字段显式标"AI 不可见"） |
+| 关系 Relation | MDL `relationships`（A 库 5 组 / B 库 10 组） |
+| 约束 Constraint | 枚举值域 · 颗粒度 · 字段可见性 · L3 只读边界 |
+| 规则 Rule | L2 静态规则集（11 条，其中 4 条命中即阻断）+ L4 语义层 dry-plan |
+
+### 1.3 最小切面：不建全量，先跑通一片
+
+本体是**长出来的**，不是一次性建出来的。Askoda 按「点 → 线 → 面」滚动推进，每一片当场可用、当场可验：
+
+| 切面 | 含义 | 本项目实测刻度 |
+|---|---|---|
+| **点** | 一张表 + 一个口径 | 单表建模 ≤ 2 人天（维表 0.5 / 汇总表 1 / 明细宽表 1.5–2） |
+| **线** | 一组强关联表 + 协同口径 + 关联方向 | 交易域链式（订单 → 明细 → 退款）一次打通，L2 规则可判 JOIN 方向 |
+| **面** | 一个数据域 = 一整套可版本化的 MDL | 模拟库 A / B 双面并存，**换库代码零改动（diffs = 0）**；一个完整面 ≈ 8 表 · 47 字段 · 9.5 人天 |
+
+先切哪里？优先选**语义复杂、规则明确、合规压力大**的真实痛点；个人探索式分析、"一句话出图"的演示场景不适用。
+
+### 1.4 边界（重要）
+
+本版本「行动层」生成的是 **SQL**，语义层用 **MDL** 承载；**「本体原生查询（图查询 / Cypher）」是路线图方向，尚未实现**。Askoda 采用本体论的思想与分层（事实 / 事理 / 行动、最小切面），但**并未**引入 RDF/OWL 本体库或 SPARQL / Cypher 引擎。任何对外材料请勿把路线图写成现状。
+
 **适用场景**
-- 分析师需要反复与业务对口径的 SQL 生产场景
-- 监管报送 / 内审 / 合规部门的取数留痕需求
+- **业务经营 / 业务需求分析人员**直接用自然语言提问、拿结果（权限到位时）
+- 分析师需要反复与业务对口径的查询生产场景
+- 监管报送 / 内审 / 合规部门的取数与留痕需求
 - 指标口径复杂、历史数据治理不完善的大型企业
-- 希望逐步落地"语义层 + 证据链"的数据中台建设
+- 希望逐步落地"知识底座 + 语义层 + 证据链"的数据中台建设
 
 **不适用场景**
 - 个人玩票 / 临时小数据集的探索式分析（直接用 ChatBI 更合适）
 - 追求"一句话出图表"的产品演示（Askoda 会追问，不会秒出结果）
+
+### 1.5 完整链路与差异化
+
+一次「问数」被拆成四段，**首段与末段是 Askoda 与普通「意图→SQL」工具的分水岭**（普通工具通常只做中间两段）：
+
+| 段 | 做什么 | 关键构件 |
+|---|---|---|
+| **① 知识底座（前置）** | 知识归集 → 语义分析 → 知识管理，沉淀为可版本化的本体知识库 | 事实层（需求 / 元数据 / 附件 / Schema / 脱敏）+ 事理层（MDL 语义层 / 知识检索 / 规则集） |
+| **② 需求理解** | 自然语言 / 业务意图 → 结构化需求 + 证据编排 + 澄清闭环 | `requirement_structured` / `analysis_*` / `confirmation_*` |
+| **③ 受控执行** | 两段式生成 → 五层门禁（**安全 + 准确度检查**）→ 只读执行 | `sql_plan` / `sql_generate` / `sql_review` / `sql_execute_readonly` |
+| **④ 合规审计（后置）** | 九字段留痕 + 审计回放 + 知识引用溯源（**事后审计补强**） | `sql_run_*` / `knowledge_citations` |
+
+| 维度 | 通用「意图→SQL」工具 | Askoda |
+|---|---|---|
+| 起点 | 直接生成 SQL | 先建**知识底座** |
+| 语义来源 | 靠大模型现场猜 | 靠**本体知识库**确定性对齐 |
+| 生成后 | 基本不校验 | **五层门禁**（语法 / 静态规则 / 只读 / 语义预演 / 结果断言） |
+| 出错时 | 静默给出"能跑但可能错"的数字 | **追问或拒绝**，不默认兜底 |
+| 留痕 / 合规 | 通常无 | **可整链回放 + 事后审计补强** |
+| 适用 | 演示 / 个人探索 | 企业级**真实生产** |
+
+**开放对象**：权限管控到位时按角色分权——既可开放给技术与数据开发人员，也可开放给业务经营、业务需求分析人员。
 
 ---
 
@@ -46,6 +125,9 @@ Askoda 不是"万能问数器"。对于**口径模糊、一对多放大、未建
 
 | 特性 | 说明 |
 |---|---|
+| **本体驱动的三层主线** | 事实（需求 / 元数据归档治理）→ 事理（MDL 语义层 + 专家知识萃取）→ 行动（受控生成查询）；三层有向依赖、不可跳级 |
+| **知识底座（前置）** | 需求分析之前先做知识归集 → 语义分析 → 知识管理，沉淀为可版本化的本体知识库（MDL + 元数据字典 + 规则集） |
+| **合规审计补强（后置）** | 九字段留痕 + 审计回放 + 知识引用溯源（`knowledge_citations`），面向合规的事后审计可整链复原 |
 | **需求受理与结构化** | 一句业务口吻的需求 → 结构化需求（指标/维度/过滤/颗粒度/时间窗），带 JSON Schema 契约校验 |
 | **语义层约束生成** | 不做自由生成，先把候选对象收敛到语义层（MDL）可见范围；未命中即拒绝，不猜 |
 | **五层 SQL 门禁** | L1 语法（sqlglot）→ L2 AST 静态规则 → L3 只读门禁 → L4 语义层 dry-plan → L5 结果断言 |
@@ -130,14 +212,14 @@ askoda/
 │   ├── collect.py    元数据采集：native / schemacrawler 双后端
 │   ├── attachments.py  MinIO 附件：上传 / 列举 / 临时下载链接
 │   ├── evidence.py   证据编排：P1–P9 阶梯 + 词表构建 + 冲突检测
-│   ├── rules.py      L2 静态规则：R1–R7，纯函数模块
+│   ├── rules.py      L2 静态规则：11 条（4 条阻断 / 7 条警告），纯函数模块
 │   ├── gates.py      五层门禁编排：L1→L2→L3→L4→L5
 │   ├── planner.py    确定性规划器兜底
 │   ├── requirement.py  结构化需求校验与版本管理
 │   ├── semantics.py  语义分析：六槽位确定性落地，纯函数不碰库
 │   ├── analysis.py   分析编排与落库：轮次 / 确认问答持久化
 │   ├── fallback.py   F1–F5 失败分类：纯函数、不抛异常
-│   ├── planner.py / sqlgen.py / sqlpack.py  两段式 SQL 生成（plan → generate）
+│   ├── sqlgen.py / sqlpack.py   两段式 SQL 生成（plan → generate）
 │   ├── sqlrun.py     只读执行 + 九字段留痕 + 列表筛选 + 审计回放接口
 │   └── healthcheck.py  双探活脚本（HTTP /healthz + MCP initialize）
 ├── tools/            自证与独立复扫脚本（每个里程碑一套，含对抗用例）
@@ -205,12 +287,12 @@ docker compose up -d --build
 
 | 项 | 地址 | 说明 |
 |---|---|---|
-| **MCP 端点** | `http://127.0.0.1:18080/mcp` | streamable-http，Agent 接这里，PROTOCOL_VERSION=2025-03-26 |
+| **MCP 端点** | `http://127.0.0.1:18080/mcp` | streamable-http，Agent 接这里（FastMCP 4.x，协议版本随客户端协商） |
 | **健康检查** | `http://127.0.0.1:18080/healthz` | 各数据集与组件连通性，返回 `degraded` 时查看 `components` 字段 |
 | **模拟库 A（电商）** | `127.0.0.1:9000`(MCP) / `15432`(PG) | 6 模型 / 29 字段 / 5 关系 |
 | **模拟库 B（零售会员）** | `127.0.0.1:9002`(MCP) / `15433`(PG) | 8 模型 / 47 字段 / 10 关系 |
 | **网关元数据库** | `127.0.0.1:15434`(PG) | user=assistant / 需求单、事件、元数据字典 |
-| **附件对象存储** | `127.0.0.1:19000`(S3) / `19001`(控制台) | MinIO，桶 `demand-attachments` |
+| **附件对象存储** | `127.0.0.1:19000`(S3) / `19001`(控制台) | MinIO，桶 `askoda-attachments` |
 | **知识底座（可选）** | `http://127.0.0.1:19380/api/v1` | RAGFlow v0.26.4 检索接口，网关只做客户端 |
 
 宿主机网关端口用 `18080` 而非 `8080`：`8080` 留给本地演示服务 `demo/demo-server.py`。
@@ -224,6 +306,225 @@ docker compose up -d --build
 | 知识库接口报 `host.docker.internal` 不可达 | RAGFlow 不在本机或未起来 | 在 `.env` 里把 `KNOWLEDGE_API_URL` 改为实际可达地址，或留空跳过（`degraded_sources` 会如实报告） |
 | 数据卷 `wren-pgdata` 报 `external volume not found` | 新机器上没有单栈时代遗留卷 | 在 `.env` 里改为 `WREN_PG_VOLUME=askoda_wren-pgdata` 或删除 `external: true` 由 compose 自建 |
 | `tools/*_verify.py` 报 ModuleNotFoundError | 脚本依赖网关内部模块，不能直接在宿主机跑 | 按脚本头部注释 `docker cp` 进容器 + `PYTHONPATH=/app` 执行 |
+
+---
+
+### 5.5 MCP 能力视图（41 个工具 · 九个域）
+
+<a id="mcp-tools"></a>
+
+网关通过**一个** streamable-http 端点对外暴露 **41 个工具**，按业务域分为九组。**工具名与入参以 `gateway/app.py` 的 `@mcp.tool` 注册处为唯一事实源**，下表与之逐条一致（自动核验见 `tools/mcp_acceptance_check.py`）。返回字段的完整承诺与边界条件见项目文档工作空间的《MCP 工具契约与注册说明》。
+
+| # | 域 | 数 | 工具 |
+|---|---|---|---|
+| 1 | 健康与数据集 | 4 | `gateway_health` `datasets` `knowledge_health` `schema_version` |
+| 2 | 兜底规划与 Wren 直通 | 5 | `plan` `wren_manifest` `wren_dry_run` `wren_query` `ask` |
+| 3 | 需求受理 | 5 | `demand_create` `demand_get` `demand_list` `demand_summarize` `demand_set_status` |
+| 4 | 知识检索 | 2 | `knowledge_search` `knowledge_documents` |
+| 5 | 元数据字典 | 3 | `metadata_lookup` `metadata_glossary` `metadata_collect` |
+| 6 | 附件 | 3 | `attachment_put` `attachment_list` `attachment_url` |
+| 7 | 语义分析与确认闭环 | 7 | `analysis_first_round` `analysis_rounds` `analysis_get` `analysis_evidence` `confirmation_generate` `confirmation_list` `confirmation_answer` |
+| 8 | 结构化需求与上下文包 | 5 | `schema_scan` `requirement_structured` `requirement_get` `schema_candidates` `sql_context_pack` |
+| 9 | 生成 · 门禁 · 执行 | 7 | `sql_review` `sql_plan` `sql_generate` `sql_execute_readonly` `sql_run_get` `sql_run_list` `sql_run_replay` |
+
+合计 **4+5+5+2+3+3+7+5+7 = 41**。
+
+> 约定：入参列 `名: 类型 = 默认`，标 ★ 为必填；`dataset` 多数默认 `B`（裸库 A 用于验证换库）。所有输入输出均为 JSON。
+
+#### 域 1 · 健康与数据集（4）
+
+| 工具 | 入参 | 返回要点 | 用途 |
+|---|---|---|---|
+| `gateway_health` | — | `{status, service, version, datasets[], components{meta_db, attachments, knowledge}}` | 全局探活；先跑它再谈别的 |
+| `datasets` | — | `{datasets:[{key, label, 模型数, 字段数, 关系数}]}` | 确认双库在册、选库 |
+| `knowledge_health` | — | `{ok, 可见数据集, 已解析文档数}` | 知识底座可用性 |
+| `schema_version` | `dataset="B"` | `{schema_version, 表数, 字段数}` | 取最近一次 Schema 快照版本号 |
+
+#### 域 2 · 兜底规划与 Wren 直通（5）
+
+| 工具 | 入参 | 返回要点 | 用途 |
+|---|---|---|---|
+| `plan` | ★`nl`, `dataset="B"` | `{blocked, intent, sql, objects, reason, steps}` | 确定性 NL→SQL（封闭世界，未命中即拒） |
+| `wren_manifest` | `dataset="B"` | `{models[], relationships[]}` | 读 MDL 语义层清单 |
+| `wren_dry_run` | ★`sql`, `dataset="B"` | `{ok, message, plan?}` | 语义层闭集预演（门禁 L4） |
+| `wren_query` | ★`sql`, `dataset="B"` | `{ok, row_count, columns, data, dtypes}` | 只读执行（先过只读门禁，再过 dry_run） |
+| `ask` | ★`nl`, `dataset="B"` | `{blocked, …, row_count, result}` | 一句话问数：规划→门禁→只读执行 |
+
+> `plan` / `ask` **只走确定性规划器**，不做语义分析与确认流转；后者是 `analysis_first_round` 的职责。
+
+#### 域 3 · 需求受理（5）
+
+| 工具 | 入参 | 返回要点 | 用途 |
+|---|---|---|---|
+| `demand_create` | ★`title` ★`business_context` ★`description` ★`expected_output` ★`contact`, `time_range=None`, `expected_finish_at=None`, `attachments=None`, `actor=""` | 需求单（**默认掩码版**）；四道校验不过 → `{ok:false, rejected:true, reason}` | 提交门户 |
+| `demand_get` | ★`demand_id`, `reveal=false`, `actor=""` | 单据详情 + 流转事件；`reveal=true` 返回原文并写 `reveal_original` 留痕 | 查单 |
+| `demand_list` | `status=None`, `limit=20`, `offset=0` | 需求单列表（可按状态过滤） | 看板 |
+| `demand_summarize` | `demand_id=None` | 给单号=单汇总；不给=全局看板 | 管理 |
+| `demand_set_status` | ★`demand_id` ★`status`, `note=None`, `actor=""` | 状态流转，不可覆盖、逐条留痕 | 回退闭环 |
+
+状态取值：`待分析 / 分析中 / 待业务确认 / 待补充修改 / 待审核通过 / 已通过 / 已退回`。
+
+#### 域 4 · 知识检索（2）
+
+| 工具 | 入参 | 返回要点 | 用途 |
+|---|---|---|---|
+| `knowledge_search` | ★`question`, `top_k=5`, `threshold=0.1`, `vector_weight=0.7`, `demand_id=""`, `round_no=0` | 带来源引用：`document_name` / `chunk_id` / `positions`；传 `demand_id` 时把引用登记进 `knowledge_citations` | 取证 |
+| `knowledge_documents` | `limit=50` | 已入库文档（名称 / 解析状态 / 分块数） | 知识储备 |
+
+> 实测两处：`threshold` **必须 >0**（传 0 会被按 falsy 回退到 0.2）；`vector_weight` 默认 0.7（官方 0.3 偏关键词，中文长问句易漏召回）。
+
+#### 域 5 · 元数据字典（3）
+
+| 工具 | 入参 | 返回要点 | 用途 |
+|---|---|---|---|
+| `metadata_lookup` | `table=None`, `dataset=None`, `keyword=None`, `include_hidden=false` | 表中文名 / 颗粒度 / 字段清单；`include_hidden=true` 带出未建模列并标"AI 不可见" | 数据字典 |
+| `metadata_glossary` | `term=None`, `keyword=None` | 业务口径词表（来源标 `mdl` / `manual`） | 数据字典 |
+| `metadata_collect` | `dataset="B"`, `engine="native"` | 采集物理结构入字典 + 一致性自检 | 数据源接入 |
+
+#### 域 6 · 附件（3）
+
+| 工具 | 入参 | 返回要点 | 用途 |
+|---|---|---|---|
+| `attachment_put` | ★`filename` ★`content_base64`, `demand_id=None` | `{ok, attachment}`；文本类（csv/txt/md/json）上传即敏感扫描，命中给 `risk` | 随单附件 |
+| `attachment_list` | `demand_id=None` | `{ok, prefix, objects[]}` | 列附件 |
+| `attachment_url` | ★`object_key`, `expires_seconds=3600` | `{ok, url}` 临时下载链接 | 前端直连下载 |
+
+#### 域 7 · 语义分析与确认闭环（7）
+
+| 工具 | 入参 | 返回要点 | 用途 |
+|---|---|---|---|
+| `analysis_first_round` | ★`demand_id`, `dataset="B"`, `actor=""` | 六槽位 / `evidence_chain` / `rule_check`(R1–R7) / `questions` / `dropped_questions` / `conflicts` / `degraded_sources` / `round_no`。**轮次只增不改** | 跑一轮分析 |
+| `analysis_rounds` | ★`demand_id` | 全部轮次元信息 | 看轮次 |
+| `analysis_get` | ★`demand_id`, `round_no=None` | 某轮完整结果（默认最新） | 看结论 |
+| `analysis_evidence` | ★`demand_id`, `round_no=None`, `level=None` | 证据链，可按 P1–P9 过滤 | 看证据 |
+| `confirmation_generate` | ★`demand_id`, `dataset="B"`, `actor=""` | **只刷新待确认问题**，不新增轮次 | 重问 |
+| `confirmation_list` | ★`demand_id`, `include_history=false` | 确认问答；`include_history=true` 回放全版本 | 看问答 |
+| `confirmation_answer` | ★`demand_id` ★`question_id` ★`answer`, `choice=None`, `actor=""` | 答复；**不覆盖历史**，插 `version+1` 并以 `supersedes` 指旧版 | 业务答复 |
+
+> 两类消费者别混发：`slots` 是**分析师视角**（含物理表名/字段名），`questions` 是**业务视角**（已过技术词闸门）。
+
+#### 域 8 · 结构化需求与上下文包（5）
+
+| 工具 | 入参 | 返回要点 | 用途 |
+|---|---|---|---|
+| `schema_scan` | `dataset="B"`, `persist=true` | 快照 + 稳定版本号 `schema_version`（同库两次采集必须同值） | 数据源接入 |
+| `requirement_structured` | ★`demand_id`, `dataset="B"` | 结构化技术需求对象 + `contract_ok` / `contract_errors`；版本化只增不改 | 合成需求 |
+| `requirement_get` | ★`demand_id`, `version=None` | 取某一版结构化需求（默认最新） | 取需求 |
+| `schema_candidates` | ★`demand_id`, `dataset="B"` | 主题表 / 关联路径 / 时间字段候选；只在 MDL 闭集内产生，未命中给 `miss_reason` | 生成准备 |
+| `sql_context_pack` | ★`demand_id`, `dataset="B"` | SQL 上下文包 + 溯源三件套 `schema_version` / `requirement_version` / `pack_version` | 生成准备 |
+
+#### 域 9 · 生成 · 门禁 · 执行（7）
+
+| 工具 | 入参 | 返回要点 | 用途 |
+|---|---|---|---|
+| `sql_review` | ★`sql`, `dataset="B"` | 五层门禁审查 `{status, layers[]}`：L1 语法 / L2 静态规则（分级阻断）/ L3 只读 / L4 语义 / L5 结果断言 | 门禁 |
+| `sql_plan` | ★`demand_id`, `dataset="B"` | 计划草稿（不含 SQL 正文）；选不出唯一解给候选集合并标「需人工审核」 | 生成第 1 段 |
+| `sql_generate` | ★`demand_id`, `dataset="B"`, `candidate_sql=None` | SQL 初稿；`candidate_sql` 为空则回落确定性规划器；多条且差异过大时 `hold` | 生成第 2 段 |
+| `sql_execute_readonly` | ★`demand_id`, `dataset="B"`, `sql=None`, `actor=""` | 先过五层门禁，全过才执行；每次写一条 `sql_runs`（溯源齐全，可回放） | 执行 |
+| `sql_run_get` | ★`demand_id` | 该需求全部运行记录（生成 SQL / 门禁结果 / 结果校验 / 溯源版本号） | 联调交付 |
+| `sql_run_list` | `demand_id=""`, `dataset=""`, `limit=20` | 跨需求执行留痕列表（时间倒序，可筛选） | 审计 |
+| `sql_run_replay` | ★`demand_id`, `version=0` | 按版本精确复原当时的输入 → pack_version → SQL → 审查 → 结果 | 审计回放 |
+
+> **L2 分级阻断**：4 条硬错误规则命中即**阻断** —— `JOIN_WITHOUT_CONDITION` / `ONE_TO_MANY_UNHANDLED` / `UNMAPPED_OBJECT_REF` / `ENUM_VALUE_INVALID`；其余 7 条只记警告、不阻断。
+>
+> **两套规则别混**：上述 L2 是 **SQL 静态规则**（`gateway/rules.py`，11 条，看 SQL AST）；而域 7 `analysis_first_round` 的 `rule_check`（R1–R7）是**需求语义规则**（`gateway/semantics.py`，看需求文本）。二者分层、独立演进、互不覆盖。
+
+#### 典型操作动线（八步链路）
+
+```
+demand_create
+ → analysis_first_round         # 六槽位 + 证据链 + R1–R7
+   → confirmation_list          # 有没有要问业务的
+     → confirmation_answer      # 业务答复（可多轮）
+   → requirement_structured     # 合成结构化需求 + 契约校验
+     → sql_context_pack         # 组装上下文包（带溯源三件套）
+       → schema_candidates      # 主题表 / 关联 / 时间字段候选
+       → sql_plan               # 计划草稿（无 SQL）
+       → sql_generate           # SQL 初稿（candidate_sql 为空则兜底）
+         → sql_review           # 五层门禁（可能被 L2/L3/L4 拦）
+           → sql_execute_readonly   # 全过才执行 + 留痕
+             → sql_run_get / sql_run_replay
+```
+
+任一步都可插 `knowledge_search(question, demand_id=…)` 把引用登记进 `knowledge_citations`。
+
+#### 最小调用示例（终端直接验）
+
+```bash
+# 1) 探活：status=ok，双库都 ok
+curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool
+
+# 2) 握手 + 取工具面（应返回 41 个工具）
+SID=$(curl -sD- -o/dev/null -X POST http://127.0.0.1:18080/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}}' \
+  | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}' | tr -d '\r')
+curl -s -X POST http://127.0.0.1:18080/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -H "mcp-session-id: $SID" \
+  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' -o /dev/null
+curl -s -X POST http://127.0.0.1:18080/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -H "mcp-session-id: $SID" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | grep -o '"name":"[a-z_]*"' | sort
+```
+
+> Agent 客户端（豆包 / WorkBuddy / Codex 等）不必手搓 HTTP：把 `http://127.0.0.1:18080/mcp` 注册为 MCP 服务后，直接按工具名调用即可。
+
+---
+
+### 5.6 MCP 操作指引与版本升级对照
+
+<a id="mcp-ops"></a>
+
+#### 5.6.1 接入前后自查（3 步）
+
+1. `curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool` → `status` 应为 `ok`（知识库单独展示，不可用不拖垮整体，会如实进 `degraded`）；
+2. 客户端 `tools/list` → 应为 **41 个**；
+3. 冒烟：调 `datasets` 看双库（A / B）是否都在册。
+
+#### 5.6.2 常用运维动作
+
+```bash
+docker compose ps                 # 7 服务是否全 healthy
+docker compose up -d --build      # 改过 gateway/ 后重建
+python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # 双探活（HTTP + MCP，含真调一次 gateway_health）
+python3 tools/mcp_acceptance_check.py                                 # 工具面 41 个逐条核对
+```
+
+> ⚠️ 容器内代码平铺 `/app`，但 `tools/` 不在 build context —— 跑容器内脚本前需 `docker cp`；走 HTTP 的脚本（`m4_verify` 等）**必须在宿主跑**，容器内会 connection refused。
+
+#### 5.6.3 版本标识对照（升级时最易搞混的一张表）
+
+| 版本标识 | 出现在哪 | 含义 | 何时变 |
+|---|---|---|---|
+| `GATEWAY_VERSION`（当前 `0.3.0`） | `gateway_health.version` / 启动日志 | **网关产品版本** | 每期里程碑 |
+| `serverInfo.version`（当前 `4.0.10`） | MCP `initialize` 握手 | **FastMCP 库版本**（`FastMCP(name)` 未显式传版本，取库默认） | 升级 `fastmcp` 依赖 |
+| `rules_version` | `sql_review` / `sql_runs` | L2 规则集内容哈希 | 改 `gateway/rules.py` |
+| `schema_version` | `schema_scan` / 上下文包 | 该库「表.列:类型」排序清单 sha256 前 8 位 | 库结构变化 |
+| `requirement_version` | `requirement_*` | 结构化需求版本（只增不改） | 每次合成 |
+| `pack_version` | `sql_context_pack` | sha256(schema_version + requirement_version + 规则集版本) 前 8 位 | 上述任一变化 |
+| 镜像标签 `askoda-gateway:0.3.0` | `docker-compose.yml` | **与 `GATEWAY_VERSION` 保持一致** | 每期里程碑 |
+
+> 关键提醒：**MCP 握手报的 `4.0.10` 是 FastMCP 库版本，不是网关版本**；对外讲版本请以 `gateway_health.version`（当前 `0.3.0`）为准。
+
+#### 5.6.4 升级操作清单（工具面变更必做）
+
+改 `gateway/app.py`（增删 `@mcp.tool`）后，按序执行：
+
+1. **同批更新文档**：项目文档工作空间《MCP 工具契约与注册说明》的逐工具契约与域计数 → 本 README 的双语域计数表与逐域工具表；
+2. **重建镜像**：`BUILDX_CONFIG="$PWD/.buildx" docker compose build gateway && docker compose up -d`；
+3. **核验工具面**：`tools/list` 的数量与清单须与文档一致（`python3 tools/mcp_acceptance_check.py`）；
+4. **跑回归**：`m4_verify`（51/0）、`m5_verify`（62/0）、`audit_verify`、`robustness_verify`，确认基线不退化；
+5. **同步镜像标签**与 `.env`（如涉及新环境变量）。
+
+> 联动红点（改工具面会牵动这些断言 / 清单，出改单时要一并扫）：`tools/mcp_acceptance_check.py` 的**计数与清单断言**、契约文档的域计数表、本 README 双语域计数表。
+
+---
+
+### 5.7 MCP 人工验证
+
+要按「最低成本、逐个确认可用」手工验一遍全部 41 个工具，步骤见项目文档工作空间的《MCP 服务人工验证方案》。最快路径：先跑一次 `tools/mcp_acceptance_check.py` 拿到机器级结论，再沿 5.5 的八步链路建**一个**需求单走通主干（覆盖约 30 个工具），最后补齐无依赖探针与负向抽查。
 
 ---
 
@@ -258,16 +559,16 @@ python3 tools/semantics_selftest.py
 
 ```bash
 # 例：M5 门禁端到端 62 断言
-docker cp tools/m5_verify.py demand-gateway:/app/tools/m5_verify.py
-docker exec -e PYTHONPATH=/app demand-gateway python /app/tools/m5_verify.py
+docker cp tools/m5_verify.py askoda:/app/tools/m5_verify.py
+docker exec -e PYTHONPATH=/app askoda python /app/tools/m5_verify.py
 
 # M6-4 审计回放断言（含反查 dataset + payload 列）
-docker cp tools/audit_verify.py demand-gateway:/app/tools/audit_verify.py
-docker exec -e PYTHONPATH=/app demand-gateway python /app/tools/audit_verify.py
+docker cp tools/audit_verify.py askoda:/app/tools/audit_verify.py
+docker exec -e PYTHONPATH=/app askoda python /app/tools/audit_verify.py
 
 # M6-3 健壮性（超时退避重试 + 并发 20 次 run_id 唯一性）
-docker cp tools/robustness_verify.py demand-gateway:/app/tools/
-docker exec -e PYTHONPATH=/app demand-gateway python /app/tools/robustness_verify.py
+docker cp tools/robustness_verify.py askoda:/app/tools/
+docker exec -e PYTHONPATH=/app askoda python /app/tools/robustness_verify.py
 ```
 
 ### 6.3 端到端演练
@@ -309,19 +610,17 @@ python3 tools/reset_demo_data.py --apply --purge-attachments
 | **M6-2** · 失败回退矩阵 F1–F5 | 分类纯函数 + F2 判据修正（按 `chosen_table` 空） | `m62_live_check.py` + `fallback_verify.py` | ✅ |
 | **M6-3** · 健壮性（超时 / 重试 / 并发） | 超时三级配置 + READ_TOOLS 3 次退避 + run_id 唯一 | `robustness_verify.py` | 18/18 ✅ |
 | **M6-4** · 审计留痕 + 回放 | actor 透传 + knowledge_citations + 列表按 dataset 反查 + 五段链条回放 | `audit_verify.py` | B 段 16/16 ✅ |
+| **M6-5** · M6 总验收 | M6 验收单 9 项（规则可枚举 / 正反例 / 5 类回退 / 连续 20 次 / 四类留痕 / 回放 / 零回归 / 换库 0 代码） | `m65_loop20_check.py` + 回归套件 | 9/9 ✅ |
 
 ### 7.2 POC 题库验收
 
 | 题库 | 正向准确率 | 拒绝覆盖率 | POC-3 陷阱拦截率 |
 |---|---|---|---|
 | POC-1（30 条） | 20/20 = 100% | 10/10 = 100% | — |
-| POC-3（10 条） | — | — | 7/10 = 70%（规则补强进行中） |
+| POC-3（10 条） | — | — | 10/10 = 100% |
 
 ### 7.3 技术债务清单（已知 · 非阻塞）
 
-- [ ] `docker-compose.yml` 中 `image: demand-assistant-gateway:0.1.0` 标签未随代码版本号（当前 0.3.0）同步更新
-- [ ] `.buildx` 目录未在 `.gitignore` 中声明（OrbStack 沙箱专用）
-- [ ] POC-3 3/10 拦截漏项：R4 多值拼接顺序、R6 时间列后缀黑名单扩展、R7 未建模字段跨表引用
 - [ ] 知识底座表格型 chunk 的 `positions` 恒空，需 RAGFlow 侧升级后对接精确坐标
 
 ---
@@ -367,12 +666,12 @@ Signed-off-by: 西北人 <fyp1984@yeah.net>
 
 ## 九、路线图（Roadmap）
 
-### 短期（v0.4 · 已立项）
+### 短期（v0.4 · 阶段二收尾 → 阶段三）
 
-- [ ] **M6-5**：SQL 多候选差异度（F3 系数 0.35 阈值）+ hold 状态人工审核工作台
-- [ ] **M6-6**：R4/R6/R7 规则补强，POC-3 陷阱拦截率目标从 70% → 90%
-- [ ] **M7**：对话式需求补全（客户端 Agent 多轮追问，不回写网关核心逻辑）
-- [ ] **M8**：指标口径词表在线管理 UI（当前走 knowledge 文档 + 元数据字典）
+- [x] **M6 · 规则体系 + 健壮性 + 留痕回放**（M6-0…M6-5）：规则库扩充（一对多 / 时间口径 / 装载日期 / DISTINCT 滥用）+ 失败回退矩阵 F1–F5 + 超时 / 重试 / 并发 + 审计回放；**M6-5 总验收 9/9 全过**。含 POC-3 规则补强（L2 分级阻断 + 枚举值校验）：陷阱拦截率 70% → 100%、误拦 0%
+- [ ] **M7 · MCP 工具面完善 + 前后端贯通**（关卡二）：41 工具契约收口 + Agent 仅凭一句业务需求自主编排串通全链路 + 最小前端闭环
+- [ ] **M8 · 五菜单工作台 + 交互**（客户化设计）：语义层 · MDL 字典 / 知识储备 / 数据源接入 / 需求分析 · SQL 生成 / SQL 联调 · 交付
+- [ ] **M9 · 真实业务系统接入 + 真实场景验收测试**
 
 ### 中期（v0.5 · 规划中）
 
@@ -380,10 +679,12 @@ Signed-off-by: 西北人 <fyp1984@yeah.net>
 - [ ] SQL 审查不通过后的一期自动改写（治理指引 `how_to_fix` → 自动 patch）
 - [ ] 数据集注册接口（当前走 `gateway/registry.py` 代码注册）
 - [ ] FastMCP 5.x 升级 + `create_proxy` 官方能力回归（去掉手写 Wren 客户端）
+- [ ] **本体原生查询（图查询 / Cypher）试点**：行动层在 SQL 之外增加一条本体原生路径（当前未实现）
 
 ### 长期（v1.0 · 概念阶段）
 
 - [ ] 多租户 + 按 dataset 的细粒度 RBAC
+- [ ] **标准本体表达栈（RDF / OWL / SKOS / SWRL 等）与推理机**：让「事理层」从 MDL 演进为可推理本体
 - [ ] 指标血缘可视化（从需求 → SQL → 表/字段 → 口径文档的追溯图）
 - [ ] 与主流 BI 工具（Metabase / Superset / Tableau）的导出对接
 - [ ] 私有化部署一键安装包（helm chart + 离线安装包）

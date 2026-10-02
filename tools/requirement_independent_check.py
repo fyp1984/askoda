@@ -11,8 +11,8 @@
 3. **边界正例**：confidence 恰为 0 / 1 必须**通过**（闭区间 [0,1]），防止实现把边界写成开区间。
 
 在容器内运行：
-    docker cp tools/requirement_independent_check.py demand-gateway:/tmp/
-    docker exec -e PYTHONPATH=/app demand-gateway python /tmp/requirement_independent_check.py
+    docker cp tools/requirement_independent_check.py askoda:/tmp/
+    docker exec -e PYTHONPATH=/app askoda python /tmp/requirement_independent_check.py
 退出码 0 = 全过。
 """
 import copy

@@ -16,7 +16,7 @@
   G. rules_version 稳定性与自洽
 
 用法（容器内；R5/R6 需要 MDL）：
-    docker exec -e PYTHONPATH=/app demand-gateway python /tmp/rules_independent_check.py
+    docker exec -e PYTHONPATH=/app askoda python /tmp/rules_independent_check.py
 退出码 0 = 全过；非 0 = 有失败（失败项即验收结论依据）。
 """
 import sys

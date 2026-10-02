@@ -9,11 +9,12 @@
 #   docker compose down && docker compose up -d     # 可复现性验证
 #
 # 说明：
+# - 命名：工程名 askoda —— compose 项目名 / 容器名 / 镜像名 / 数据卷名 / 附件桶名统一使用它。
 # - 数据卷 wren-pgdata / wren-pgdata-b 为 external，指向单栈时代已存在的数据卷，
 #   升级编排后历史数据与已部署 MDL 保持不变（零迁移）。
 # - 单栈 compose（wren-docker/ 、wren-docker-b/）保留作单库调试用；
 #   与本编排共用同一数据卷与容器名，**不可同时起两套**。
-name: demand-assistant
+name: askoda
 
 services:
   # ------------------------------------------------------------------
@@ -116,8 +117,8 @@ services:
       context: ./gateway
       args:
         PIP_INDEX: ${PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
-    image: demand-assistant-gateway:0.1.0
-    container_name: demand-gateway
+    image: askoda-gateway:0.3.0
+    container_name: askoda
     restart: unless-stopped
     depends_on:
       wren-mcp-a:
@@ -150,7 +151,7 @@ services:
       MINIO_ENDPOINT: "assistant-minio:9000"
       MINIO_ACCESS_KEY: "assistant"
       MINIO_SECRET_KEY: "assistant123"
-      MINIO_BUCKET: "demand-attachments"
+      MINIO_BUCKET: "askoda-attachments"
       # FileBay 知识底座（RAGFlow v0.26.4）检索接口
       KNOWLEDGE_API_URL: "${KNOWLEDGE_API_URL:-http://host.docker.internal:19380/api/v1}"
       KNOWLEDGE_API_KEY: "${KNOWLEDGE_API_KEY:-}"
@@ -169,7 +170,7 @@ services:
   # ------------------------------------------------------------------
   assistant-postgres:
     image: postgres:15-alpine
-    container_name: demand-postgres
+    container_name: askoda-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: assistant
@@ -178,7 +179,7 @@ services:
     ports:
       - "${ASSISTANT_PG_PORT:-15434}:5432"
     volumes:
-      - assistant-pgdata:/var/lib/postgresql/data
+      - askoda-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U assistant -d assistant"]
       interval: 5s
@@ -190,7 +191,7 @@ services:
   # ------------------------------------------------------------------
   assistant-minio:
     image: minio/minio:RELEASE.2024-11-07T00-52-20Z
-    container_name: demand-minio
+    container_name: askoda-minio
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -200,12 +201,15 @@ services:
       - "${ASSISTANT_MINIO_PORT:-19000}:9000"
       - "${ASSISTANT_MINIO_CONSOLE_PORT:-19001}:9001"
     volumes:
-      - assistant-minio-data:/data
+      - askoda-minio-data:/data
 
 volumes:
-  # M2 新增：网关元数据库与附件存储（本编排自建，非 external）
-  assistant-pgdata:
-  assistant-minio-data:
+  # M2 新增：网关元数据库与附件存储（本编排自建）
+  # 卷名显式 pin 为 askoda-*，与工程名统一；换目录名 / 项目名不影响已有数据
+  askoda-pgdata:
+    name: askoda-pgdata
+  askoda-minio-data:
+    name: askoda-minio-data
   # 沿用单栈时代的数据卷，零迁移
   wren-pgdata:
     external: true

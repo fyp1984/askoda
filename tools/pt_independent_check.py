@@ -10,7 +10,7 @@
         大小写差异、别名+序号混合、GROUP BY 序号越界不崩、过度归一保护（真不一致仍检出）。
 
 用法（容器内）：
-    docker exec -e PYTHONPATH=/app demand-gateway python /tmp/pt_independent_check.py
+    docker exec -e PYTHONPATH=/app askoda python /tmp/pt_independent_check.py
 退出码 0 = 全过。
 """
 import sys

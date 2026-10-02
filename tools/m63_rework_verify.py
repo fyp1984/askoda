@@ -8,9 +8,9 @@
   ③ 环境变量超时链 A3 / A4
 
 运行：
-  docker cp tools/m63_rework_verify.py demand-gateway:/app/tools/m63_rework_verify.py
+  docker cp tools/m63_rework_verify.py askoda:/app/tools/m63_rework_verify.py
   docker exec -e PYTHONPATH=/app -e WREN_B_TIMEOUT=0.002 \
-      demand-gateway python /app/tools/m63_rework_verify.py
+      askoda python /app/tools/m63_rework_verify.py
 
 退出码 0 = 全过，1 = 有失败。
 """

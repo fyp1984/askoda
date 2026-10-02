@@ -1,44 +1,123 @@
 # Askoda · Intelligent Data Requirement Assistant
 
 > **English | [中文](README.md)**
->
-> Askoda translates natural-language data requests into **well-calibrated, explainable, auditable SQL**.
-> Every data fetch leaves a complete, traceable chain of judgment.
+
+<p align="center">
+  <b>A natural-language & business-intent-driven analytics and retrieval tool for the enterprise</b><br/>
+  Ontology-driven · Intent-to-Analytics
+</p>
+
+**In one sentence:** ask in plain business language, and Askoda returns a **well-calibrated, explainable, auditable** answer — every fetch leaves a complete, traceable chain of judgment.
+
+Its full chain has four stages:
+
+> **① Knowledge base (upstream)** → **② Requirement understanding** → **③ Constrained execution (safety + accuracy gates)** → **④ Compliance audit (downstream)**
+
+The fundamental difference from a plain "intent → SQL" tool lies in the **outer two stages**: **build the knowledge base before the question, run the compliance audit after the fetch** — those two stages are what make it deployable in real enterprise production.
 
 ---
 
 <p align="center">
   <a href="#1-project-positioning">Positioning</a> ·
+  <a href="#ontology">Ontology-Driven</a> ·
   <a href="#2-core-features">Features</a> ·
   <a href="#3-architecture--design-principles">Architecture</a> ·
   <a href="#4-directory-structure">Structure</a> ·
   <a href="#5-quick-start">Quick Start</a> ·
+  <a href="#mcp-tools">MCP Capability Map</a> ·
+  <a href="#mcp-ops">MCP Ops & Upgrade</a> ·
   <a href="#6-verification--self-certification">Verification</a> ·
   <a href="#7-milestones--acceptance-matrix">Milestones</a> ·
   <a href="#8-contributing">Contributing</a> ·
   <a href="#9-roadmap">Roadmap</a> ·
-  <a href="#10-license">License</a>
+  <a href="#11-license">License</a>
 </p>
 
 ---
 
 ## 1. Project Positioning
 
-Askoda is built for **highly-regulated industries** (finance, energy, government, large manufacturing, etc.) where data retrieval must be defensible. It does not simply "translate questions into SQL" — it enforces an auditable judgment chain for every fetch:
+Askoda is a **natural-language & business-intent-driven analytics and retrieval tool for the enterprise**, built ontology-first. It is **not** limited to highly-regulated retrieval (finance, energy, government, large manufacturing, etc.) — it targets **general enterprise analytics and retrieval in real production**.
 
-> How was the request understood → Which table was used → Where did the metric definition come from → What did each gate block → Who executed it and when → Why was the result deemed deliverable.
+Its fundamental difference from typical "intent → SQL" tools: **it builds a knowledge base *before* requirement analysis, and performs compliance audit *after* data extraction** — these two outer stages are what make it deployable in real enterprise production.
+
+> The full judgment chain for one question: How was the request understood → Which table was used → Where did the metric definition come from → What did each gate block → Who executed it and when → Why was the result deemed deliverable.
 
 Askoda is **not a "universal AI chat-over-data" tool**. When definitions are ambiguous, one-to-many amplification is possible, fields are unmodeled, or metrics are not yet confirmed — Askoda **returns clarifying questions or refuses entirely** rather than guessing with silent defaults. This is the core difference from general AI-BI tools on the market.
 
+### 1.1 The 3-Layer Spine: Facts → Logic → Action
+
+<a id="ontology"></a>
+
+Askoda is designed around the idea of **ontology-driven data management** (theoretical reference: *Ontology-Driven AI Data Management*, compiled by an editorial board, China Machine Press, 1st ed., May 2026, ISBN 978-7-111-81075-9). A single data fetch is decomposed into three layers, bottom-up:
+
+| Layer | What it carries | In one line |
+|---|---|---|
+| **① Facts Layer** | Requirement intake · Metadata collection & dictionary · Attachment archive · Schema snapshot · Ingress masking | Turn raw requirements and metadata into governed **facts** |
+| **② Logic Layer · Ontology Knowledge Base** | MDL semantic layer · Knowledge retrieval · Evidence orchestration · Business ruleset · Clarification Q&A | Distill business semantics and expert knowledge into the **ontology knowledge base** |
+| **③ Action Layer** | Two-stage generation · 5-layer gate · Read-only execution · 9-field trace · Audit replay | **Constrain-generate** queries and analysis from one natural-language request |
+
+The three layers are **directionally dependent and cannot be skipped**: no clean facts, no distillation; no confirmed definitions, no generation. This is the root reason Askoda asks follow-ups instead of falling back to silent defaults.
+
+### 1.2 Where the Six Ontology Primitives Live
+
+| Ontology primitive | Carrier in Askoda |
+|---|---|
+| Class | MDL models (dataset A: 6 / dataset B: 8) |
+| Instance | Rows returned by read-only execution (`SELECT` / `WITH` only) |
+| Property | MDL fields + metadata dictionary (business meaning / aliases; unmodeled fields explicitly marked "invisible to AI") |
+| Relation | MDL `relationships` (A: 5 / B: 10) |
+| Constraint | Enum domains · granularity · field visibility · L3 read-only boundary |
+| Rule | L2 static ruleset (11 rules, 4 of them blocking) + L4 semantic dry-plan |
+
+### 1.3 Minimal Facet: Don't Build Everything, Ship One Slice
+
+An ontology is **grown, not built in one shot**. Askoda advances in `point → line → surface` slices, each verifiable on the spot:
+
+| Facet | Meaning | Measured in this project |
+|---|---|---|
+| **Point** | One table + one definition | ≤ 2 person-days per table (dim 0.5 / aggregate 1 / detail-wide 1.5–2) |
+| **Line** | A cluster of strongly related tables + shared definitions + join direction | Trade-domain chain (orders → items → refunds) landed in one pass; L2 resolves JOIN direction |
+| **Surface** | One data domain = one versionable MDL set | Datasets A / B coexist with **zero code change (diffs = 0)**; one full surface ≈ 8 tables · 47 fields · 9.5 person-days |
+
+Where to cut first? Prefer real pain points that are **semantically complex, rule-explicit, and compliance-heavy**; casual exploratory analysis and "one-sentence-to-chart" demos are not a fit.
+
+### 1.4 Boundary (Important)
+
+In this version the **Action layer generates SQL**, with **MDL** as the semantic layer. **Ontology-native querying (graph query / Cypher) is a roadmap direction and is not implemented.** Askoda borrows the ontology philosophy and its layering (facts / logic / action, minimal facets) but does **not** ship an RDF/OWL store or a SPARQL / Cypher engine. Please do not present the roadmap as current capability.
+
 **When to use Askoda**
-- SQL production workflows where analysts repeatedly align definitions with business stakeholders
+- **Business operations / business analysts** querying in natural language and getting results (with proper permissions)
+- Query-production workflows where analysts repeatedly align definitions with business stakeholders
 - Regulatory reporting / internal audit / compliance teams requiring immutable data provenance
 - Large enterprises with complex metrics and imperfect historical data governance
-- Data platform teams rolling out a "semantic layer + evidence chain" foundation incrementally
+- Data platform teams rolling out a "knowledge base + semantic layer + evidence chain" foundation incrementally
 
 **When NOT to use Askoda**
 - Casual ad-hoc analysis on small personal datasets (ChatBI tools are faster)
 - Pure product demos that demand "one sentence → instant chart" (Askoda will ask follow-ups, not jump to results)
+
+### 1.5 The Full Chain & What Makes It Different
+
+A single question is split into four stages. **The first and last are the watershed** between Askoda and ordinary "intent→SQL" tools (which usually do only the middle two):
+
+| Stage | What happens | Key components |
+|---|---|---|
+| **① Knowledge Base (front)** | Knowledge aggregation → semantic analysis → knowledge management, distilled into a versionable ontology knowledge base | Facts layer (requirement / metadata / attachments / schema / masking) + Logic layer (MDL semantic layer / knowledge retrieval / rules) |
+| **② Requirement Understanding** | Natural language / business intent → structured requirement + evidence orchestration + clarification loop | `requirement_structured` / `analysis_*` / `confirmation_*` |
+| **③ Constrained Execution** | Two-stage generation → 5-layer gate (**safety + accuracy checks**) → read-only execution | `sql_plan` / `sql_generate` / `sql_review` / `sql_execute_readonly` |
+| **④ Compliance Audit (back)** | 9-field traceability + audit replay + knowledge-citation provenance (**post-hoc audit hardening**) | `sql_run_*` / `knowledge_citations` |
+
+| Dimension | Generic "intent→SQL" tool | Askoda |
+|---|---|---|
+| Starting point | Generate SQL directly | Build a **knowledge base** first |
+| Semantics source | LLM guesses on the fly | **Ontology knowledge base**, deterministic alignment |
+| After generation | Almost no validation | **5-layer gate** (syntax / static rules / read-only / semantic dry-plan / result assertion) |
+| On error | Silently returns plausible-but-wrong numbers | **Asks or refuses** — no silent defaults |
+| Provenance / compliance | Usually none | **Full-chain replay + post-hoc audit hardening** |
+| Fit | Demos / personal exploration | Enterprise **production** |
+
+**Who can use it**: with permissions in place, access is role-scoped — usable by both technical / data-engineering staff and by business operations / business analysts.
 
 ---
 
@@ -46,6 +125,9 @@ Askoda is **not a "universal AI chat-over-data" tool**. When definitions are amb
 
 | Feature | Description |
 |---|---|
+| **Ontology-Driven 3-Layer Spine** | Facts (requirement / metadata governance) → Logic (MDL semantic layer + expert knowledge distillation) → Action (constrained query generation); the layers are directionally dependent and cannot be skipped |
+| **Knowledge Base (front)** | Before requirement analysis: knowledge aggregation → semantic analysis → knowledge management, distilled into a versionable ontology knowledge base (MDL + metadata dictionary + ruleset) |
+| **Compliance Audit Hardening (back)** | 9-field traceability + audit replay + knowledge-citation provenance (`knowledge_citations`); compliance-facing post-hoc audit can be replayed end to end |
 | **Requirement Intake & Structuring** | One business sentence → structured requirement (metric / dimension / filter / granularity / time window) with JSON Schema validation |
 | **Semantic-Layer Constrained Generation** | No free-form SQL. Candidate objects are narrowed to the semantic layer (MDL) closed set; misses are rejected rather than guessed |
 | **5-Layer SQL Gate** | L1 syntax (sqlglot) → L2 AST static rules → L3 read-only gate → L4 semantic dry-plan → L5 result assertion |
@@ -130,14 +212,14 @@ askoda/
 │   ├── collect.py    Metadata collection: native / schemacrawler dual backends
 │   ├── attachments.py  MinIO attachments: upload / list / pre-signed download URLs
 │   ├── evidence.py   Evidence orchestration: P1–P9 ladder + lexicon + conflict detection
-│   ├── rules.py      L2 static rules: R1–R7, pure-function module
+│   ├── rules.py      L2 static rules: 11 (4 blocking / 7 warn), pure-function module
 │   ├── gates.py      5-layer gate dispatcher: L1→L2→L3→L4→L5
 │   ├── planner.py    Deterministic planner fallback
 │   ├── requirement.py  Structured requirement validation + versioning
 │   ├── semantics.py  Semantic analysis: 6-slot deterministic resolution, pure no-IO
 │   ├── analysis.py   Analysis orchestration + persistence: rounds + Q&A versions
 │   ├── fallback.py   F1–F5 failure classification: pure, no exceptions
-│   ├── planner.py / sqlgen.py / sqlpack.py   2-stage SQL generation (plan → generate)
+│   ├── sqlgen.py / sqlpack.py   2-stage SQL generation (plan → generate)
 │   ├── sqlrun.py     Read-only execute + 9-field trace + list filter + audit replay
 │   └── healthcheck.py  Dual liveness (HTTP /healthz + MCP initialize/tools-list)
 ├── tools/            Self-cert & independent re-scan scripts (per-milestone suites + adversarial cases)
@@ -204,12 +286,12 @@ docker compose up -d --build
 
 | Item | URL | Notes |
 |---|---|---|
-| **MCP Endpoint** | `http://127.0.0.1:18080/mcp` | streamable-http, PROTOCOL_VERSION=2025-03-26 |
+| **MCP Endpoint** | `http://127.0.0.1:18080/mcp` | streamable-http (FastMCP 4.x; protocol version negotiated per client) |
 | **Health Check** | `http://127.0.0.1:18080/healthz` | Per-dataset/component status; if `degraded`, inspect the `components` field |
 | **Mock Dataset A (E-commerce)** | `127.0.0.1:9000`(MCP) / `15432`(PG) | 6 models / 29 fields / 5 relationships |
 | **Mock Dataset B (Retail Member)** | `127.0.0.1:9002`(MCP) / `15433`(PG) | 8 models / 47 fields / 10 relationships |
 | **Gateway Metadata DB** | `127.0.0.1:15434`(PG) | user=assistant / requirements, events, metadata glossary |
-| **Attachment Storage** | `127.0.0.1:19000`(S3) / `19001`(Console) | MinIO, bucket `demand-attachments` |
+| **Attachment Storage** | `127.0.0.1:19000`(S3) / `19001`(Console) | MinIO, bucket `askoda-attachments` |
 | **Knowledge Base (optional)** | `http://127.0.0.1:19380/api/v1` | RAGFlow v0.26.4 IR API; gateway acts only as a client |
 
 Gateway host port is `18080` (not `8080`) because port `8080` is reserved for the local demo server `demo/demo-server.py`.
@@ -223,6 +305,225 @@ Gateway host port is `18080` (not `8080`) because port `8080` is reserved for th
 | Knowledge API reports `host.docker.internal` unreachable | RAGFlow not running on host or different network | Set actual reachable `KNOWLEDGE_API_URL` in `.env`, or leave blank — `degraded_sources` will report honestly |
 | Volume `wren-pgdata` says `external volume not found` | Fresh host, no legacy volume from single-stack era | Change `WREN_PG_VOLUME=askoda_wren-pgdata` in `.env` or drop `external: true` to let compose manage it |
 | `tools/*_verify.py` raises ModuleNotFoundError | Script imports gateway internals; cannot run bare-metal on host | Follow script header comments: `docker cp` into container + run with `PYTHONPATH=/app` |
+
+---
+
+### 5.5 MCP Capability Map (41 Tools · 9 Domains)
+
+<a id="mcp-tools"></a>
+
+The gateway exposes **41 tools** over **one** streamable-http endpoint, grouped into nine business domains. **Tool names and parameters are governed by the `@mcp.tool` registrations in `gateway/app.py`**; the tables below match `tools/list` one-to-one (automated check: `tools/mcp_acceptance_check.py`). Full return-field contracts and edge conditions live in the project documentation workspace (MCP Tool Contract & Registration Notes).
+
+| # | Domain | Count | Tools |
+|---|---|---|---|
+| 1 | Health & datasets | 4 | `gateway_health` `datasets` `knowledge_health` `schema_version` |
+| 2 | Deterministic planning & Wren passthrough | 5 | `plan` `wren_manifest` `wren_dry_run` `wren_query` `ask` |
+| 3 | Requirement intake | 5 | `demand_create` `demand_get` `demand_list` `demand_summarize` `demand_set_status` |
+| 4 | Knowledge retrieval | 2 | `knowledge_search` `knowledge_documents` |
+| 5 | Metadata glossary | 3 | `metadata_lookup` `metadata_glossary` `metadata_collect` |
+| 6 | Attachments | 3 | `attachment_put` `attachment_list` `attachment_url` |
+| 7 | Semantic analysis & clarification loop | 7 | `analysis_first_round` `analysis_rounds` `analysis_get` `analysis_evidence` `confirmation_generate` `confirmation_list` `confirmation_answer` |
+| 8 | Structured requirement & context pack | 5 | `schema_scan` `requirement_structured` `requirement_get` `schema_candidates` `sql_context_pack` |
+| 9 | Generate · Gate · Execute | 7 | `sql_review` `sql_plan` `sql_generate` `sql_execute_readonly` `sql_run_get` `sql_run_list` `sql_run_replay` |
+
+Total **4+5+5+2+3+3+7+5+7 = 41**.
+
+> Convention: parameters are shown as `name: type = default`; ★ marks required. `dataset` defaults to `B` for most tools (raw dataset A is used to prove zero-code swap). All inputs/outputs are JSON.
+
+#### Domain 1 · Health & datasets (4)
+
+| Tool | Parameters | Returns (key fields) | Use |
+|---|---|---|---|
+| `gateway_health` | — | `{status, service, version, datasets[], components{meta_db, attachments, knowledge}}` | Global liveness; run this first |
+| `datasets` | — | `{datasets:[{key, label, models, fields, relationships}]}` | Confirm both datasets are registered |
+| `knowledge_health` | — | `{ok, visible dataset, parsed docs}` | Knowledge-base availability |
+| `schema_version` | `dataset="B"` | `{schema_version, tables, fields}` | Latest schema-snapshot version |
+
+#### Domain 2 · Deterministic planning & Wren passthrough (5)
+
+| Tool | Parameters | Returns (key fields) | Use |
+|---|---|---|---|
+| `plan` | ★`nl`, `dataset="B"` | `{blocked, intent, sql, objects, reason, steps}` | Deterministic NL→SQL (closed world; refuse on miss) |
+| `wren_manifest` | `dataset="B"` | `{models[], relationships[]}` | Read the MDL manifest |
+| `wren_dry_run` | ★`sql`, `dataset="B"` | `{ok, message, plan?}` | Semantic closed-set dry run (gate L4) |
+| `wren_query` | ★`sql`, `dataset="B"` | `{ok, row_count, columns, data, dtypes}` | Read-only execute (read-only gate → dry_run) |
+| `ask` | ★`nl`, `dataset="B"` | `{blocked, …, row_count, result}` | One-shot question: plan → gate → read-only run |
+
+> `plan` / `ask` use the **deterministic planner only** — no semantic analysis, no clarification loop (that is `analysis_first_round`'s job).
+
+#### Domain 3 · Requirement intake (5)
+
+| Tool | Parameters | Returns (key fields) | Use |
+|---|---|---|---|
+| `demand_create` | ★`title` ★`business_context` ★`description` ★`expected_output` ★`contact`, `time_range=None`, `expected_finish_at=None`, `attachments=None`, `actor=""` | Requirement record (**masked by default**); on validation failure → `{ok:false, rejected:true, reason}` | Submission portal |
+| `demand_get` | ★`demand_id`, `reveal=false`, `actor=""` | Record + event trace; `reveal=true` returns raw text and writes a `reveal_original` audit entry | Lookup |
+| `demand_list` | `status=None`, `limit=20`, `offset=0` | Requirement list (filter by status) | Board |
+| `demand_summarize` | `demand_id=None` | With ID = one record; without = global board | Admin |
+| `demand_set_status` | ★`demand_id` ★`status`, `note=None`, `actor=""` | State transitions — append-only, never overwritten | Rollback loop |
+
+Status values: `待分析 / 分析中 / 待业务确认 / 待补充修改 / 待审核通过 / 已通过 / 已退回` (pending analysis / analysing / awaiting business confirmation / awaiting revision / awaiting approval / approved / returned).
+
+#### Domain 4 · Knowledge retrieval (2)
+
+| Tool | Parameters | Returns (key fields) | Use |
+|---|---|---|---|
+| `knowledge_search` | ★`question`, `top_k=5`, `threshold=0.1`, `vector_weight=0.7`, `demand_id=""`, `round_no=0` | Cited hits: `document_name` / `chunk_id` / `positions`; passing `demand_id` logs citations into `knowledge_citations` | Evidence |
+| `knowledge_documents` | `limit=50` | Indexed documents (name / parse state / chunk count) | Knowledge stock |
+
+> Two measured caveats: `threshold` **must be > 0** (0 is falsy and silently falls back to 0.2); `vector_weight` defaults to 0.7 (upstream 0.3 over-weights keywords and misses long Chinese questions).
+
+#### Domain 5 · Metadata glossary (3)
+
+| Tool | Parameters | Returns (key fields) | Use |
+|---|---|---|---|
+| `metadata_lookup` | `table=None`, `dataset=None`, `keyword=None`, `include_hidden=false` | Table CN name / granularity / columns; `include_hidden=true` surfaces unmodeled columns marked "AI-invisible" | Data dictionary |
+| `metadata_glossary` | `term=None`, `keyword=None` | Metric-caliber glossary (source tagged `mdl` / `manual`) | Data dictionary |
+| `metadata_collect` | `dataset="B"`, `engine="native"` | Collect physical schema into the dictionary + consistency self-check | Onboarding |
+
+#### Domain 6 · Attachments (3)
+
+| Tool | Parameters | Returns (key fields) | Use |
+|---|---|---|---|
+| `attachment_put` | ★`filename` ★`content_base64`, `demand_id=None` | `{ok, attachment}`; text-like files (csv/txt/md/json) are PII-scanned on upload, hits reported in `risk` | Attach file |
+| `attachment_list` | `demand_id=None` | `{ok, prefix, objects[]}` | List attachments |
+| `attachment_url` | ★`object_key`, `expires_seconds=3600` | `{ok, url}` pre-signed download URL | Direct download |
+
+#### Domain 7 · Semantic analysis & clarification loop (7)
+
+| Tool | Parameters | Returns (key fields) | Use |
+|---|---|---|---|
+| `analysis_first_round` | ★`demand_id`, `dataset="B"`, `actor=""` | 6 slots / `evidence_chain` / `rule_check` (R1–R7) / `questions` / `dropped_questions` / `conflicts` / `degraded_sources` / `round_no`. **Rounds are append-only** | Run a round |
+| `analysis_rounds` | ★`demand_id` | Metadata for all rounds | List rounds |
+| `analysis_get` | ★`demand_id`, `round_no=None` | Full result of a round (latest by default) | Read verdict |
+| `analysis_evidence` | ★`demand_id`, `round_no=None`, `level=None` | Evidence chain, filterable by P1–P9 | Read evidence |
+| `confirmation_generate` | ★`demand_id`, `dataset="B"`, `actor=""` | **Refresh pending questions only**; no new round | Re-ask |
+| `confirmation_list` | ★`demand_id`, `include_history=false` | Q&A; `include_history=true` replays all versions | Read Q&A |
+| `confirmation_answer` | ★`demand_id` ★`question_id` ★`answer`, `choice=None`, `actor=""` | Answer; **never overwrites history** — inserts `version+1` with `supersedes` | Business answer |
+
+> Don't mix the two audiences: `slots` is the **analyst view** (contains physical table/column names), `questions` is the **business view** (already passed the tech-word gate).
+
+#### Domain 8 · Structured requirement & context pack (5)
+
+| Tool | Parameters | Returns (key fields) | Use |
+|---|---|---|---|
+| `schema_scan` | `dataset="B"`, `persist=true` | Snapshot + stable `schema_version` (two scans of the same DB must match) | Onboarding |
+| `requirement_structured` | ★`demand_id`, `dataset="B"` | Structured requirement object + `contract_ok` / `contract_errors`; append-only versioning | Compose |
+| `requirement_get` | ★`demand_id`, `version=None` | Fetch a version (latest by default) | Fetch |
+| `schema_candidates` | ★`demand_id`, `dataset="B"` | Subject table / join paths / time-field candidates; produced **only inside the MDL closed set**, returns `miss_reason` on miss | Prep |
+| `sql_context_pack` | ★`demand_id`, `dataset="B"` | Context pack + provenance triple `schema_version` / `requirement_version` / `pack_version` | Prep |
+
+#### Domain 9 · Generate · Gate · Execute (7)
+
+| Tool | Parameters | Returns (key fields) | Use |
+|---|---|---|---|
+| `sql_review` | ★`sql`, `dataset="B"` | 5-layer gate review `{status, layers[]}`: L1 syntax / L2 static rules (tiered blocking) / L3 read-only / L4 semantic / L5 result assertion | Gate |
+| `sql_plan` | ★`demand_id`, `dataset="B"` | Plan draft (**no SQL body**); returns candidate set marked "manual review" when no unique solution | Stage 1 |
+| `sql_generate` | ★`demand_id`, `dataset="B"`, `candidate_sql=None` | SQL draft; falls back to the deterministic planner when `candidate_sql` is empty; `hold` when candidates diverge too much | Stage 2 |
+| `sql_execute_readonly` | ★`demand_id`, `dataset="B"`, `sql=None`, `actor=""` | Runs only if all 5 gate layers pass; writes one `sql_runs` row per run (fully replayable) | Execute |
+| `sql_run_get` | ★`demand_id` | All run records for one requirement | Delivery |
+| `sql_run_list` | `demand_id=""`, `dataset=""`, `limit=20` | Cross-requirement run list (time-desc, filterable) | Audit |
+| `sql_run_replay` | ★`demand_id`, `version=0` | Reconstruct input → pack_version → SQL → review → result for a given version | Audit replay |
+
+> **L2 tiered blocking**: 4 hard-error rules block on hit — `JOIN_WITHOUT_CONDITION` / `ONE_TO_MANY_UNHANDLED` / `UNMAPPED_OBJECT_REF` / `ENUM_VALUE_INVALID`; the other 7 rules warn only.
+>
+> **Don't conflate the two rulesets**: the L2 above is the **SQL static ruleset** (`gateway/rules.py`, 11 rules over the SQL AST); `analysis_first_round`'s `rule_check` (R1–R7, Domain 7) is the **requirement-semantics ruleset** (`gateway/semantics.py`, over the request text). They are separate layers that evolve independently.
+
+#### Canonical end-to-end flow (8-step chain)
+
+```
+demand_create
+ → analysis_first_round         # 6 slots + evidence chain + R1–R7
+   → confirmation_list          # anything to ask the business?
+     → confirmation_answer      # business answers (multi-round OK)
+   → requirement_structured     # compose structured requirement + contract check
+     → sql_context_pack         # assemble context pack (with provenance triple)
+       → schema_candidates      # subject table / joins / time field
+       → sql_plan               # plan draft (no SQL)
+       → sql_generate           # SQL draft (deterministic fallback if candidate_sql empty)
+         → sql_review           # 5-layer gate (L2/L3/L4 may block here)
+           → sql_execute_readonly   # runs only if all layers pass + trace
+             → sql_run_get / sql_run_replay
+```
+
+`knowledge_search(question, demand_id=…)` can be interleaved at any step to log citations.
+
+#### Minimal invocation (verify from a terminal)
+
+```bash
+# 1) Liveness: status=ok, both datasets ok
+curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool
+
+# 2) Handshake + list tools (should return 41 tools)
+SID=$(curl -sD- -o/dev/null -X POST http://127.0.0.1:18080/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}}' \
+  | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}' | tr -d '\r')
+curl -s -X POST http://127.0.0.1:18080/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -H "mcp-session-id: $SID" \
+  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' -o /dev/null
+curl -s -X POST http://127.0.0.1:18080/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -H "mcp-session-id: $SID" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | grep -o '"name":"[a-z_]*"' | sort
+```
+
+> Agent clients (Doubao / WorkBuddy / Codex …) don't need raw HTTP: register `http://127.0.0.1:18080/mcp` as an MCP server and call tools by name.
+
+---
+
+### 5.6 MCP Operations & Version-Upgrade Guide
+
+<a id="mcp-ops"></a>
+
+#### 5.6.1 Pre/post-integration self-check (3 steps)
+
+1. `curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool` → `status` should be `ok` (the knowledge base is reported separately; if down it degrades honestly without taking the gateway down);
+2. Client `tools/list` → should be **41**;
+3. Smoke test: call `datasets` and confirm both datasets (A / B) are registered.
+
+#### 5.6.2 Common operations
+
+```bash
+docker compose ps                 # are all 7 services healthy?
+docker compose up -d --build      # rebuild after changing gateway/
+python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # dual liveness (HTTP + MCP, also calls gateway_health for real)
+python3 tools/mcp_acceptance_check.py                                 # verify all 41 tools one by one
+```
+
+> ⚠️ Container code is flattened to `/app`, but `tools/` is not in the build context — `docker cp` before running in-container scripts. HTTP-based scripts (`m4_verify` etc.) **must run on the host**; inside the container they get connection refused.
+
+#### 5.6.3 Version identifiers (the table people mix up during upgrades)
+
+| Identifier | Where it appears | Meaning | When it changes |
+|---|---|---|---|
+| `GATEWAY_VERSION` (currently `0.3.0`) | `gateway_health.version` / startup log | **Gateway product version** | Every milestone |
+| `serverInfo.version` (currently `4.0.10`) | MCP `initialize` handshake | **FastMCP library version** (`FastMCP(name)` passes no version, so the library default is used) | When `fastmcp` is upgraded |
+| `rules_version` | `sql_review` / `sql_runs` | Content hash of the L2 ruleset | When `gateway/rules.py` changes |
+| `schema_version` | `schema_scan` / context pack | sha256 (first 8) of the sorted "table.column:type" list | When DB schema changes |
+| `requirement_version` | `requirement_*` | Structured-requirement version (append-only) | Every composition |
+| `pack_version` | `sql_context_pack` | sha256 (first 8) of schema_version + requirement_version + ruleset version | When any of the above changes |
+| Image tag `askoda-gateway:0.3.0` | `docker-compose.yml` | **Kept in sync with `GATEWAY_VERSION`** | Every milestone |
+
+> Key reminder: the `4.0.10` reported in the MCP handshake is the **FastMCP library version, not the gateway version**. Use `gateway_health.version` (currently `0.3.0`) whenever you talk about the gateway version.
+
+#### 5.6.4 Upgrade checklist (mandatory when the tool surface changes)
+
+After editing `gateway/app.py` (adding/removing `@mcp.tool`), do the following in order:
+
+1. **Update docs in the same batch**: the per-tool contract and domain counts in the project documentation workspace (MCP Tool Contract & Registration Notes) → the domain-count and per-domain tables in this README (both languages);
+2. **Rebuild the image**: `BUILDX_CONFIG="$PWD/.buildx" docker compose build gateway && docker compose up -d`;
+3. **Verify the tool surface**: the `tools/list` count and list must match the docs (`python3 tools/mcp_acceptance_check.py`);
+4. **Run regressions**: `m4_verify` (51/0), `m5_verify` (62/0), `audit_verify`, `robustness_verify` — confirm no baseline regression;
+5. **Sync the image tag** and `.env` (if new environment variables are involved).
+
+> Knock-on red flags (tool-surface changes touch these assertions/lists — scan them all when writing the change ticket): the **count and list assertions** in `tools/mcp_acceptance_check.py`, the contract doc's domain-count table, and the domain-count tables in both READMEs.
+
+---
+
+### 5.7 Manual MCP Verification
+
+To manually verify all 41 tools at the lowest cost, follow the steps in the project documentation workspace (MCP Manual Verification Plan). Fastest path: run `tools/mcp_acceptance_check.py` once for a machine-level verdict, then walk the 8-step chain in 5.5 with **a single** requirement record (covering ~30 tools), and finally fill in the dependency-free probes and negative checks.
 
 ---
 
@@ -257,16 +558,16 @@ python3 tools/semantics_selftest.py
 
 ```bash
 # Example: M5 gate E2E, 62 assertions
-docker cp tools/m5_verify.py demand-gateway:/app/tools/m5_verify.py
-docker exec -e PYTHONPATH=/app demand-gateway python /app/tools/m5_verify.py
+docker cp tools/m5_verify.py askoda:/app/tools/m5_verify.py
+docker exec -e PYTHONPATH=/app askoda python /app/tools/m5_verify.py
 
 # M6-4 audit replay assertions (dataset back-ref + payload column correctness)
-docker cp tools/audit_verify.py demand-gateway:/app/tools/audit_verify.py
-docker exec -e PYTHONPATH=/app demand-gateway python /app/tools/audit_verify.py
+docker cp tools/audit_verify.py askoda:/app/tools/audit_verify.py
+docker exec -e PYTHONPATH=/app askoda python /app/tools/audit_verify.py
 
 # M6-3 robustness (timeout backoff retries + 20-concurrent run_id uniqueness)
-docker cp tools/robustness_verify.py demand-gateway:/app/tools/
-docker exec -e PYTHONPATH=/app demand-gateway python /app/tools/robustness_verify.py
+docker cp tools/robustness_verify.py askoda:/app/tools/
+docker exec -e PYTHONPATH=/app askoda python /app/tools/robustness_verify.py
 ```
 
 ### 6.3 End-to-End Drill
@@ -308,19 +609,17 @@ python3 tools/reset_demo_data.py --apply --purge-attachments
 | **M6-2** Fallback Matrix F1–F5 | Pure classification + F2 criterion fixed to (empty `chosen_table`) | `m62_live_check.py` + `fallback_verify.py` | ✅ |
 | **M6-3** Robustness (timeout/retry/concurrency) | 3-tier timeout config + READ_TOOLS 3× backoff + unique run_id | `robustness_verify.py` | 18/18 ✅ |
 | **M6-4** Audit Trace + Replay | actor pass-through + knowledge_citations + dataset-backed list filter + 5-segment replay | `audit_verify.py` | Section B 16/16 ✅ |
+| **M6-5** M6 Final Acceptance | 9-item M6 acceptance sheet (enumerable rules / positive-negative cases / 5 fallback classes / 20 consecutive runs / 4 trace classes / replay / zero regression / 0-code dataset swap) | `m65_loop20_check.py` + regression suites | 9/9 ✅ |
 
 ### 7.2 POC Question Bank Acceptance
 
 | Bank | Positive Precision | Refusal Coverage | POC-3 Trap Intercept Rate |
 |---|---|---|---|
 | POC-1 (30 items) | 20/20 = 100% | 10/10 = 100% | — |
-| POC-3 (10 items) | — | — | 7/10 = 70% (rule hardening in progress) |
+| POC-3 (10 items) | — | — | 10/10 = 100% |
 
 ### 7.3 Known Tech Debt (Non-Blocking)
 
-- [ ] `docker-compose.yml` tags `image: demand-assistant-gateway:0.1.0` while code reports version 0.3.0
-- [ ] `.buildx/` directory not declared in `.gitignore` (OrbStack sandbox-specific)
-- [ ] POC-3 3/10 misses: R4 multi-value ordering, R6 time-column suffix blacklist expansion, R7 cross-model unmodeled-field reference
 - [ ] RAGFlow table-derived chunks have empty `positions`; exact coordinates need upstream RAGFlow upgrade
 
 ---
@@ -366,12 +665,12 @@ Signed-off-by: 西北人 <fyp1984@yeah.net>
 
 ## 9. Roadmap
 
-### Short-Term (v0.4 · Scoped)
+### Short-Term (v0.4 · End of Phase 2 → Phase 3)
 
-- [ ] **M6-5**: Multi-candidate SQL divergence (F3 factor threshold 0.35) + hold-state manual review workbench
-- [ ] **M6-6**: R4/R6/R7 rule hardening, POC-3 trap intercept target 70% → 90%
-- [ ] **M7**: Conversational requirement completion (client agent multi-turn, no gateway core changes)
-- [ ] **M8**: Metric-caliber glossary online management UI (current path: knowledge docs + metadata dict)
+- [x] **M6 · Rules + Robustness + Trace/Replay** (M6-0…M6-5): rule expansion (1:N / time calibration / load-date ban / DISTINCT misuse) + fallback matrix F1–F5 + timeout/retry/concurrency + audit replay; **M6-5 final acceptance 9/9**. Includes the POC-3 rule hardening (tiered L2 blocking + enum-value rule): trap intercept 70% → 100%, zero false positives
+- [ ] **M7 · MCP Tool-Surface Completion + End-to-End Wiring** (Gate 2): finalise the 41-tool contract + agent orchestrates the full chain from a single business request + minimal frontend loop
+- [ ] **M8 · Five-Menu Workbench + Interaction** (customer-facing design): Semantic Layer·MDL Dictionary / Knowledge Stock / Data-Source Onboarding / Requirement Analysis·SQL Generation / SQL Integration·Delivery
+- [ ] **M9 · Real Business-System Integration + Real-Scenario Acceptance**
 
 ### Mid-Term (v0.5 · Planning)
 
@@ -379,10 +678,12 @@ Signed-off-by: 西北人 <fyp1984@yeah.net>
 - [ ] First-pass auto-rewrite after gate block (governance hint `how_to_fix` → patch SQL)
 - [ ] Dataset registration API (currently code-registry based via `gateway/registry.py`)
 - [ ] FastMCP 5.x upgrade + official `create_proxy` return (drop handwritten Wren client)
+- [ ] **Ontology-native query (graph query / Cypher) pilot**: an ontology-native path for the Action layer, alongside SQL (not implemented today)
 
 ### Long-Term (v1.0 · Concept)
 
 - [ ] Multi-tenancy + dataset-level fine-grained RBAC
+- [ ] **Standard ontology stack (RDF / OWL / SKOS / SWRL …) + reasoner**: evolve the Logic layer from MDL into a reasonable ontology
 - [ ] Metric lineage visualisation (demand → SQL → table/field → caliber doc trace graph)
 - [ ] Export integrations with mainstream BI (Metabase / Superset / Tableau)
 - [ ] Turnkey on-prem installers (helm chart + offline bundle)

@@ -245,7 +245,7 @@ def list_attachments(demand_ids):
     cli, err = _minio()
     if err:
         return None, err
-    bucket = os.getenv("MINIO_BUCKET", "demand-attachments")
+    bucket = os.getenv("MINIO_BUCKET", "askoda-attachments")
     known = set(demand_ids)
     try:
         if not cli.bucket_exists(bucket):

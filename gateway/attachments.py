@@ -32,7 +32,7 @@ except ImportError:
 ENDPOINT = os.getenv("MINIO_ENDPOINT", "127.0.0.1:19000")
 ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "assistant")
 SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "assistant123")
-BUCKET = os.getenv("MINIO_BUCKET", "demand-attachments")
+BUCKET = os.getenv("MINIO_BUCKET", "askoda-attachments")
 SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
 # 可做内容级敏感扫描的文本类附件
