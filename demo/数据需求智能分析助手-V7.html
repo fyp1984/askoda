@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>数据需求智能分析助手 · 模块化工作台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232f67ff'/%3E%3Ctext x='32' y='42' font-size='26' font-weight='800' font-family='Arial' fill='%23fff' text-anchor='middle'%3EC%3C/text%3E%3Ccircle cx='46' cy='20' r='6' fill='%23fff' opacity='.9'/%3E%3C/svg%3E">
+<style>
+:root{--bg:#f3f7fc;--panel:#ffffffee;--line:#dce6f3;--text:#1e2b3d;--soft:#66758b;--faint:#8a96aa;--pri:#2f67ff;--pri2:#6f6ee8;--priBg:#eaf0ff;--ok:#1d9b62;--okBg:#e8fbf1;--warn:#d98b14;--warnBg:#fff5e3;--bad:#d85959;--badBg:#fff0f0;--r:22px;--shadow:0 14px 34px rgba(24,49,95,.10)}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif;background:radial-gradient(circle at top right,rgba(47,103,255,.08),transparent 24%),radial-gradient(circle at top left,rgba(111,110,232,.07),transparent 20%),linear-gradient(180deg,#f8fbff,#eef4fb);color:var(--text)}
+button,input,textarea{font:inherit}button{cursor:pointer;border:none;transition:.18s ease}button:hover:not(:disabled){transform:translateY(-1px)}button:disabled{opacity:.42;cursor:not-allowed}
+.app{max-width:1380px;margin:0 auto;padding:16px;min-height:100vh}
+/* ===== 头部：品牌 + 主菜单 ===== */
+.header{position:sticky;top:12px;z-index:20;background:linear-gradient(180deg,#fffdfefe,#f8fafff3);border:1px solid #d9e4f2;border-radius:26px;box-shadow:var(--shadow);backdrop-filter:blur(12px);padding:14px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:space-between}
+.brand{display:flex;align-items:center;gap:14px;min-width:0}
+.logoWrap{width:50px;height:50px;border-radius:12px;overflow:hidden;flex:0 0 50px;display:flex;align-items:center;justify-content:center;background:#fff;border:1px solid #d4e0f3}
+.logo{width:100%;height:100%;object-fit:contain;padding:5px}
+.brandName{min-width:0}.brandName h1{margin:0;font-size:18px;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.brandName p{margin:2px 0 0;font-size:11.5px;color:var(--faint);letter-spacing:.03em}
+.nav{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.navTab{padding:9px 14px;border-radius:12px;background:#f3f7ff;border:1px solid #dce7f8;font-size:12.5px;font-weight:800;color:var(--soft)}
+.navTab.on{background:linear-gradient(135deg,#edf2ff,#f4f0ff);border-color:#bfd0ff;color:var(--pri);box-shadow:0 6px 14px rgba(47,103,255,.10)}
+.navTab small{display:block;font-size:10px;font-weight:500;color:var(--faint);margin-top:1px}
+.coreLine{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--soft)}
+.coreStep{padding:6px 11px;border-radius:999px;background:#f3f7ff;border:1px solid #dce7f8;font-weight:700}
+.coreStep.active{background:linear-gradient(135deg,#edf2ff,#f4f0ff);border-color:#bfd0ff;color:var(--pri)}
+/* ===== 视图 ===== */
+.view{display:none}.view.on{display:block;margin-top:16px}
+.grid{display:grid;grid-template-columns:380px minmax(0,1fr);gap:16px;align-items:start}
+.gridL{display:flex;flex-direction:column;gap:14px;position:sticky;top:150px}
+.card{background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:var(--r);padding:16px;backdrop-filter:blur(10px)}
+.card h3{margin:0 0 12px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.card h3 small{text-transform:none;font-weight:400;color:var(--soft);letter-spacing:0}
+.item{background:#fbfdff;border:1px solid #e2eaf6;border-radius:14px;padding:10px 12px;font-size:12.5px;line-height:1.6}
+.item.ok{background:var(--okBg);border-color:#c8edd9}
+.item.warn{background:var(--warnBg);border-color:#f0dab0}
+.item.bad{background:var(--badBg);border-color:#f1c8c8}
+.itemRow{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.sub{color:var(--soft);font-size:12px;line-height:1.65;margin-top:4px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.tblHead{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.tblName{font-size:13.5px;font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.tblComment{font-size:11px;color:var(--faint);margin-top:2px}
+.fields{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.fld{display:flex;align-items:center;gap:8px;font-size:12px;line-height:1.4;flex-wrap:wrap}
+.fldName{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;min-width:92px}
+.fldType{color:var(--faint);font-size:11px;min-width:44px}
+.fldCmt{color:var(--soft);flex:1;min-width:110px}
+.fld.sensitive .fldName{color:var(--bad)}
+.fld.pending .fldName{color:var(--warn)}
+.flowTag{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;padding:2px 7px;border-radius:999px;background:var(--warnBg);color:var(--warn);border:1px solid #f0dab0;font-weight:700}
+.dslItem{background:#fbfdff;border:1px solid #e2eaf6;border-radius:12px;padding:9px 11px;font-size:12px;line-height:1.55;margin-bottom:8px}
+.dslHead{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.dslName{font-weight:800;color:var(--pri)}
+.dslCode{background:#101a2d;color:#b9cbf5;border-radius:10px;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:1.6;white-space:pre-wrap;margin-top:8px}
+.dslCode .k{color:#7fb3ff}.dslCode .v{color:#d8e4ff}
+.kbType{font-size:10.5px;padding:2px 8px;border-radius:999px;background:var(--priBg);color:var(--pri);font-weight:700}
+.badge{display:inline-flex;align-items:center;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:800;white-space:nowrap}
+.chip{padding:6px 10px;border-radius:10px;background:#f4f8ff;border:1px solid #dee8f7;font-size:12px;color:var(--soft)}
+.chipRow{display:flex;flex-wrap:wrap;gap:8px}
+.btn{padding:9px 14px;border-radius:12px;font-size:12.5px;font-weight:800;background:linear-gradient(135deg,var(--pri),#5a88ff);color:#fff;box-shadow:0 10px 20px rgba(47,103,255,.18)}
+.btn2{background:#fff;border:1px solid #dce6f4;color:var(--soft);padding:9px 14px;border-radius:12px;font-size:12.5px;font-weight:800}
+.miniLink{padding:6px 10px;border-radius:10px;background:#f5f8fd;border:1px solid #dfe7f7;color:var(--pri);font-size:11.5px;font-weight:700}
+textarea{width:100%;min-height:72px;border:1px solid #d9e4f4;border-radius:14px;padding:11px 13px;outline:none;background:#fff;font-size:14px;line-height:1.7;resize:vertical}
+#sqlEditor{min-height:200px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;line-height:1.7;resize:vertical;overflow:hidden}
+.collectRow{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px}
+.resPanel{margin-top:12px;border:1px solid #d9e7f6;border-radius:16px;padding:14px;background:linear-gradient(180deg,#fbfdff,#f6faff)}
+.resHead{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.resGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}
+.resStat{background:#fff;border:1px solid #e2eaf6;border-radius:12px;padding:9px 11px;text-align:center}
+.resStat .v{font-size:18px;font-weight:800;color:var(--pri)}
+.resStat .l{font-size:11px;color:var(--faint);margin-top:2px}
+.barWrap{background:#fff;border:1px solid #e2eaf6;border-radius:12px;padding:10px;margin-bottom:12px}
+.barWrap .t{font-size:11.5px;color:var(--soft);margin:0 0 6px 4px;font-weight:700}
+.barWrap .t em{font-style:normal;color:var(--faint);font-weight:400}
+.dataTbl{width:100%;border-collapse:collapse;font-size:11.5px;background:#fff;border:1px solid #e2eaf6;border-radius:12px;overflow:hidden;table-layout:fixed}
+.dataTbl th{background:#f2f6fc;color:var(--soft);font-weight:800;text-align:left;padding:7px 10px;border-bottom:1px solid #dce6f4}
+.dataTbl td{padding:6px 10px;border-bottom:1px solid #eef3fa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.qaTbl td{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.55;vertical-align:top}
+.pocTblWrap{overflow-x:auto}
+@media (max-width:680px){.pocTblWrap .dataTbl{min-width:640px}}
+.dataTbl tr:last-child td{border-bottom:none}
+.code{background:#101a2d;border:1px solid #16223a;color:#d8e4ff;border-radius:14px;padding:12px;white-space:pre-wrap;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.65;max-height:220px}
+.hitList{display:flex;flex-direction:column;gap:8px}
+.hit{display:flex;align-items:center;gap:10px;background:#fbfdff;border:1px solid #e2eaf6;border-radius:12px;padding:8px 11px;font-size:12px;flex-wrap:wrap}
+.hit .hitName{font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.hit .hitWhy{color:var(--soft);font-size:11.5px;flex:1;min-width:140px}
+.hitScore{font-weight:800;font-size:13px;color:var(--pri)}
+.steps{display:flex;flex-direction:column;gap:10px}
+.stepCard{background:#fff;border:1px solid #e2eaf6;border-radius:18px;padding:13px 15px;position:relative;overflow:hidden}
+.stepCard:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:#dde6f4}
+.stepCard.now{background:linear-gradient(180deg,#f4f8ff,#fbfdff);border-color:#bfd0ff;box-shadow:0 12px 26px rgba(47,103,255,.09)}.stepCard.now:before{background:var(--pri)}
+.stepCard.pass{background:#fbfefc;border-color:#d5eadf}.stepCard.pass:before{background:var(--ok)}
+.stepCard.fail{background:#fffafa;border-color:#f0cdcd}.stepCard.fail:before{background:var(--bad)}
+.stepCard.wait{opacity:.62}
+.stHead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.stTitle{font-size:13.5px;font-weight:800}
+.stDesc{font-size:11px;color:var(--faint);letter-spacing:.03em;margin-top:2px}
+.stBody{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.testList{display:flex;flex-direction:column;gap:8px}
+.test{display:flex;align-items:center;gap:10px;background:#fbfdff;border:1px solid #e2eaf6;border-radius:12px;padding:8px 11px;font-size:12.5px;flex-wrap:wrap}
+.test .tName{font-weight:800}
+.test .tNote{color:var(--soft);font-size:11.5px;flex:1;min-width:120px}
+.connBox{background:linear-gradient(135deg,#f6faff,#f2f7ff);border:1px solid #cfddf3;border-radius:16px;padding:12px 14px;font-size:12.5px}
+.connBox .row{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;padding:3px 0}
+.connBox .lab{color:var(--faint);font-size:11px}
+.prog{height:6px;background:#edf2fb;border-radius:999px;overflow:hidden;flex:1;min-width:80px}.prog span{display:block;height:100%;background:linear-gradient(90deg,var(--pri),#7aa3ff);border-radius:999px}
+.mechStrip{margin-top:16px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.mech{display:flex;gap:10px;align-items:flex-start}
+.mech .n{width:24px;height:24px;border-radius:8px;background:var(--priBg);color:var(--pri);font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center;flex:0 0 24px}
+.mech strong{font-size:13px}.mech p{margin:4px 0 0;font-size:12px;color:var(--soft);line-height:1.6}
+.overlay{position:fixed;inset:0;display:none;z-index:30}
+.overlay.open{display:block}
+.scrim{position:absolute;inset:0;background:rgba(16,30,55,.35);backdrop-filter:blur(3px)}
+.loadingCard{position:absolute;inset:0;display:grid;place-items:center}
+.loadingBox{min-width:300px;padding:22px 26px;border-radius:24px;background:#fff;border:1px solid #d9e4f2;box-shadow:0 22px 60px rgba(22,41,80,.22);text-align:center}
+.spin{width:36px;height:36px;border:3px solid rgba(47,103,255,.15);border-top-color:var(--pri);border-radius:50%;margin:0 auto 14px;animation:s .8s linear infinite}@keyframes s{to{transform:rotate(360deg)}}
+.loadingBox strong{font-size:14px}.loadingBox p{margin:8px 0 0;font-size:12px;color:var(--soft);line-height:1.6}
+.toastWrap{position:fixed;right:18px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:40}
+.toast{min-width:230px;max-width:360px;padding:12px 14px;border-radius:14px;color:#fff;box-shadow:0 14px 34px rgba(20,35,60,.16);font-size:12.5px;line-height:1.6;display:flex;gap:10px;align-items:flex-start;animation:tIn .3s cubic-bezier(.22,1,.36,1)}
+.toast .tIco{flex:0 0 18px;width:18px;height:18px;margin-top:1px}
+@keyframes tIn{from{opacity:0;transform:translateX(22px)}to{opacity:1;transform:none}}
+.ti{background:linear-gradient(135deg,var(--pri),#628cff)}.ts{background:linear-gradient(135deg,var(--ok),#3cbc7f)}.te{background:linear-gradient(135deg,var(--bad),#ea7b7b)}
+/* ===== 原型交互体系：层次 / 弹窗 / 上传 / 按钮态 ===== */
+.viewHead{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.viewHead h2{margin:0;font-size:17.5px;letter-spacing:-.01em;font-weight:800;color:var(--text);text-wrap:balance}
+.viewHead .vhSub{margin:4px 0 0;font-size:12px;color:var(--faint);line-height:1.6}
+.vhSteps{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.vhStep{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:5px 10px;border-radius:999px;background:#fff;border:1px solid #dce6f4;color:var(--soft)}
+.vhStep.on{background:var(--priBg);border-color:#c3d6ff;color:var(--pri);font-weight:700}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--pri);outline-offset:2px}
+.btn:active{transform:translateY(0) scale(.98);box-shadow:none}
+.btn.loading{pointer-events:none;opacity:.78}
+.spinBtn{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
+.modalRoot{position:fixed;inset:0;z-index:50;display:none}
+.modalRoot.open{display:block}
+.modalScrim{position:absolute;inset:0;background:rgba(16,30,55,.45);backdrop-filter:blur(2px)}
+.modalCard{position:relative;max-width:520px;margin:8vh auto 0;background:#fff;border:1px solid #d9e4f2;border-radius:24px;box-shadow:0 30px 80px rgba(20,40,80,.25);padding:22px;animation:mIn .3s cubic-bezier(.22,1,.36,1)}
+.modalCard.lg{max-width:660px}
+@keyframes mIn{from{opacity:0;transform:translateY(16px) scale(.98)}to{opacity:1;transform:none}}
+.mHead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px}
+.mHead strong{font-size:15.5px;letter-spacing:-.01em}
+.mClose{width:30px;height:30px;border-radius:9px;background:#f2f6fc;color:var(--soft);font-size:15px;line-height:1;display:flex;align-items:center;justify-content:center}
+.mClose:hover{background:#e6eefb;color:var(--text)}
+.mBody{font-size:13px;color:var(--soft);line-height:1.7}
+.mFoot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.dropZone{border:2px dashed #c7d7f2;border-radius:18px;padding:26px 16px;text-align:center;background:#f8fbff;cursor:pointer;transition:border-color .18s,background .18s}
+.dropZone:hover,.dropZone.over{border-color:var(--pri);background:#f0f5ff}
+.dzIcon{width:46px;height:46px;margin:0 auto 10px;border-radius:14px;background:var(--priBg);color:var(--pri);display:flex;align-items:center;justify-content:center}
+.dropZone strong{font-size:13.5px;color:var(--text)}
+.dropZone p{margin:6px 0 0;font-size:11.5px;color:var(--faint);line-height:1.6}
+.uploaded{display:flex;align-items:center;gap:10px;background:#fbfdff;border:1px solid #e2eaf6;border-radius:12px;padding:10px 12px;font-size:12.5px}
+.uploaded .fName{font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.uploaded .fSize{color:var(--faint);font-size:11px;font-variant-numeric:tabular-nums}
+.progTrack{height:7px;background:#edf2fb;border-radius:999px;overflow:hidden;flex:1}
+.progTrack span{display:block;height:100%;background:linear-gradient(90deg,var(--pri),#7aa3ff);border-radius:999px;transition:width .25s ease}
+.formRow{display:flex;gap:10px;margin-bottom:10px}
+.formRow .fld2{flex:1;min-width:0}
+.formRow label{display:block;font-size:11px;color:var(--faint);margin-bottom:4px}
+.formRow input,.formRow select{width:100%;border:1px solid #d9e4f4;border-radius:10px;padding:8px 10px;font-size:12.5px;outline:none;background:#fff;transition:border-color .15s}
+.formRow input:focus{border-color:var(--pri)}
+.connStatus{display:flex;align-items:center;gap:8px;font-size:12px;margin-top:8px;color:var(--soft)}
+.view.on{animation:vFade .35s ease}
+@keyframes vFade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.fileInput{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.resultFailBox{background:var(--badBg);border:1px solid #f1c8c8;border-radius:12px;padding:12px 14px;font-size:12.5px;color:var(--bad);line-height:1.7}
+.resultFailBox strong{display:block;margin-bottom:4px}
+@media (prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+@media (max-width:1120px){.grid{grid-template-columns:1fr}.gridL{position:static}.mechStrip{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:680px){.app{padding:10px}.header{flex-direction:column;align-items:flex-start}.brandName h1{white-space:normal}.nav{width:100%}.navTab{flex:1;text-align:center}.mechStrip{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ===== 头部：品牌 + 主菜单 ===== -->
+  <header class="header">
+    <div class="brand">
+      <div class="logoWrap"><img class="logo" src="CheersAI-Logo.png" alt="CheersAI" onerror="this.style.display='none'"></div>
+      <div class="brandName"><h1>数据需求智能分析助手</h1><p>Wren 语义层基准 · MDL 口径字典 · 受控 NL→SQL · 测试联调交付</p></div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+  </header>
+
+  <!-- ===== 视图 0：语义层 · MDL 字典 ===== -->
+  <section class="view" id="view-mdl">
+    <div class="viewHead"><div><h2>语义层 · MDL 字典</h2><div class="vhSub">以 Wren AI MDL 为基准：表、字段含义、业务口径、表间关系写成 AI 可读的字典；未建模字段对 AI 不可见；修改走审核后 deploy 生效</div></div><div class="vhSteps"><span class="vhStep on">1 建模</span><span class="vhStep">2 校验</span><span class="vhStep">3 审核发布</span><span class="vhStep">4 被查询引用</span></div></div>
+    <div class="grid">
+      <div class="gridL">
+        <div class="card"><h3>语义引擎状态 <small>Wren Engine · MCP · dry-plan</small></h3><div id="mdlEngine"></div></div>
+        <div class="card"><h3>MDL 版本与变更 <small>Git 风格版本 · 候选审核后生效</small></h3><div id="mdlVer"></div></div>
+        <div class="card"><h3>语义规则 <small>knowledge/rules · 生成硬约束</small></h3><div id="mdlRules"></div></div>
+      </div>
+      <div class="card"><h3>MDL 模型资产 <small>模型 / 字段可见性 / 计算口径 / 关系与枚举</small></h3><div id="mdlModels"></div></div>
+    </div>
+  </section>
+
+  <!-- ===== 视图 1：知识储备 ===== -->
+  <section class="view" id="view-kb">
+    <div class="viewHead"><div><h2>知识储备</h2><div class="vhSub">四类知识统一收集、审核准入后参与语义检索；支持手动上传与多数据库自动获取</div></div><div class="vhSteps"><span class="vhStep on">1 收集</span><span class="vhStep">2 准入</span><span class="vhStep">3 检索引用</span></div></div>
+    <div class="grid">
+      <div class="gridL">
+        <div class="card"><h3>知识收集 <small>手动上传 · 自动获取</small></h3><div id="kbCollect"></div></div>
+        <div class="card"><h3>知识准入工作台 <small>状态机：收集 → 待准入 → 已准入 / 已拒绝</small></h3><div id="kbAdmit"></div></div>
+      </div>
+      <div class="card"><h3>知识库资产 <small>四类知识统一归档，准入后参与语义检索</small></h3><div id="kbAssets"></div></div>
+    </div>
+  </section>
+
+  <!-- ===== 视图 2：数据库直连 ===== -->
+  <section class="view" id="view-db">
+    <div class="viewHead"><div><h2>数据源接入</h2><div class="vhSub">业务数据库经 Wren Engine（ibis）接入，22+ 数据源统一方言；Schema 采集与差异自动生成 MDL 修改候选，审核后 deploy 生效</div></div><div class="vhSteps"><span class="vhStep on">1 连接</span><span class="vhStep">2 采集 / 生成 MDL 候选</span><span class="vhStep">3 审核部署</span></div></div>
+    <div class="grid">
+      <div class="gridL">
+        <div class="card"><h3>业务数据库接入 <small>Wren Engine 只读探测</small></h3><div id="dbConn"></div></div>
+        <div class="card"><h3>Schema 差异与 MDL 候选 <small>对比快照 → MDL 修改候选 → 审核 deploy</small></h3><div id="dbChange"></div></div>
+      </div>
+      <div class="card"><h3>接入的表结构与数据字典 <small>MDL 建模视图 · 字段级含义 / 敏感级别</small></h3><div id="dbSchema"></div></div>
+    </div>
+  </section>
+
+  <!-- ===== 视图 3：需求分析与 SQL 生成 ===== -->
+  <section class="view" id="view-req">
+    <div class="viewHead"><div><h2>业务需求分析 · SQL 生成</h2><div class="vhSub">业务语义分析 → MDL 语义对齐 → 用户确认后经 MDL 规划生成 SQL（未上架对象不可见 + 未命中即拒）</div></div><div class="vhSteps"><span class="vhStep on">1 语义分析</span><span class="vhStep">2 MDL 对齐</span><span class="vhStep">3 确认生成</span><span class="vhStep">4 dry-plan 门禁</span></div></div>
+    <div class="card" style="margin-bottom:12px">
+      <h3>业务需求分析输入</h3>
+      <textarea id="nlInput" placeholder="用自然语言描述业务取数需求，例如：华东门店 7-9 月复购用户数和复购率，按门店-月，用于区域经营周会"></textarea>
+      <div class="itemRow" style="margin-top:10px">
+        <div class="chipRow">
+          <button class="miniLink" id="demo1Btn">示例 A · 口径齐备（复购）</button>
+          <button class="miniLink" id="demo2Btn">示例 B · 口径未定义（情绪指数）</button>
+          <button class="miniLink" id="demo3Btn">示例 C · 口径待审核（券核销）</button>
+        </div>
+        <button class="btn" id="analyzeBtn">开始业务语义分析</button>
+      </div>
+    </div>
+    <div class="steps" id="reqSteps"></div>
+  </section>
+
+  <!-- ===== 视图 4：SQL 联调与交付 ===== -->
+  <section class="view" id="view-test">
+    <div class="viewHead"><div><h2>SQL 联调 · 交付</h2><div class="vhSub">直连测试库反复联调，结果可视化核查确认，通过后导出生产环境 SQL 脚本</div></div><div class="vhSteps"><span class="vhStep on">1 带入初稿</span><span class="vhStep">2 测试库联调</span><span class="vhStep">3 核查确认</span><span class="vhStep">4 导出交付</span></div></div>
+    <div class="grid">
+      <div class="gridL">
+        <div class="card"><h3>测试数据库直连 <small>联调专用 · 只读</small></h3><div id="tConn"></div></div>
+        <div class="card"><h3>联调记录 <small>迭代调试轨迹</small></h3><div id="tLog"></div></div>
+      </div>
+      <div class="card">
+        <h3>SQL 联调与导出 <small>从「需求分析与 SQL 生成」带入初稿，联调通过后导出生产脚本</small></h3>
+        <textarea id="sqlEditor" placeholder="SQL 初稿将自动从需求分析模块带入；也可在此手工编辑后执行联调"></textarea>
+        <div class="itemRow" style="margin-top:10px">
+          <button class="btn2" id="tRunBtn">执行联调（测试库）</button>
+          <button class="btn" id="tExportBtn" disabled>导出 SQL 脚本</button>
+        </div>
+        <div class="testList" id="tResult" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 视图 5：POC 验证与评估 ===== -->
+  <section class="view" id="view-poc">
+    <div class="viewHead"><div><h2>POC 验证 · 评估工作台</h2><div class="vhSub">三项最小验证：自建题库复核准确率 · 核心表 MDL 建模工作量 · dry-plan 拦截效果；题库与陷阱用例为模拟回放，环境基于 wren-docker 实测 Wren Engine v1.27.0</div></div><div class="vhSteps"><span class="vhStep on">1 题库复核</span><span class="vhStep">2 建模量评估</span><span class="vhStep">3 拦截验证</span></div></div>
+    <div class="grid">
+      <div class="gridL">
+        <div class="card"><h3>POC 运行与概览 <small>批量回放 · 三项指标</small></h3><div id="pocRun"></div></div>
+        <div class="card"><h3>验证环境 <small>wren-docker 本地实测</small></h3><div id="pocEnv"></div></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+        <div class="card"><h3>自建题库复核 <small>30 题 · 正向 20 / 负向 10 · golden 回放</small></h3><div id="pocQa"></div></div>
+        <div class="card"><h3>核心表 MDL 建模工作量 <small>8 张核心表 · 人天估算</small></h3><div id="pocMdl"></div></div>
+        <div class="card"><h3>dry-plan 拦截效果验证 <small>10 陷阱用例 · Wren dry_run 预演</small></h3><div id="pocGate"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 底部机制条 ===== -->
+  <section class="mechStrip">
+    <div class="card mech"><div class="n">1</div><div><strong>语义层先行</strong><p>以 Wren AI MDL 为基准：表、字段含义、口径、关系写成 AI 可读的字典，未建模字段对 AI 不可见，从源头杜绝"猜口径"。</p></div></div>
+    <div class="card mech"><div class="n">2</div><div><strong>知识先准入</strong><p>历史需求文档 / 分析脚本 / 资料归档 / 架构设计文档统一收集，经准入审核后才可被检索引用。</p></div></div>
+    <div class="card mech"><div class="n">3</div><div><strong>MDL 规划生成</strong><p>业务语义分析 → 用户确认 → 经 Wren 引擎 dry-plan 预演校验后生成 SQL（引擎 v1.27.0 已实测，错口径当场退回）。</p></div></div>
+    <div class="card mech"><div class="n">4</div><div><strong>测试联调交付</strong><p>只读测试库反复联调，dry-plan 门禁 + 语义门禁 + 样本校验全过，才可导出生产环境 SQL 脚本。</p></div></div>
+  </section>
+</div>
+
+<!-- ===== 加载遮罩 ===== -->
+<div class="overlay" id="loading">
+  <div class="scrim"></div>
+  <div class="loadingCard"><div class="loadingBox"><div class="spin"></div><strong id="loadingText">处理中…</strong><p>正在执行知识检索与语义分析</p></div></div>
+</div>
+
+<div class="toastWrap" id="toastWrap"></div>
+
+<!-- ===== 通用弹窗容器 ===== -->
+<div class="modalRoot" id="modalRoot"><div class="modalScrim" id="modalScrim"></div><div class="modalCard" id="modalCard"></div></div>
+
+<script>
+(() => {
+/* ============ 知识资产（四类：需求文档 / 分析脚本 / 资料归档 / 架构文档） ============ */
+const KB={
+  assets:[
+    {id:"A1",cat:"需求文档",name:"会员复购专题需求（2024Q4）",meta:"PRD · 复购用户数 / 复购率口径来源 · 产品组",status:"已准入",owner:"数据产品组",date:"2024-12"},
+    {id:"A2",cat:"需求文档",name:"区域经营周报取数需求（2025 修订）",meta:"周报模板 REP-08 需求源头 · 含口径确认记录",status:"已准入",owner:"数据产品组",date:"2025-06"},
+    {id:"A3",cat:"分析脚本",name:"复购分析 SQL 脚本（历史）",meta:"dwd_order_di 口径验证用脚本 · 含 refund 处理",status:"已准入",owner:"数仓团队",date:"2025-03"},
+    {id:"A4",cat:"分析脚本",name:"券核销归因 Python 脚本（历史）",meta:"核销 GMV / 券成本归因逻辑参考",status:"待准入",owner:"营销分析",date:"2025-09"},
+    {id:"A5",cat:"资料归档",name:"2024 大促活动复盘归档",meta:"含核销 / 复购交叉分析结论与 SQL 片段",status:"已准入",owner:"营销中心",date:"2025-01"},
+    {id:"A6",cat:"资料归档",name:"会员等级规则说明归档",meta:"升级 / 降级判定规则 · 周表口径来源",status:"待准入",owner:"运营部",date:"2025-08"},
+    {id:"A7",cat:"架构文档",name:"交易域数据库架构设计文档 v2",meta:"dwd_order_di / dim_store 字段设计依据",status:"已准入",owner:"数仓架构",date:"2025-02"},
+    {id:"A8",cat:"架构文档",name:"营销域数据库架构设计文档 v1",meta:"ads_coupon_order_di 字段与索引设计",status:"待准入",owner:"数仓架构",date:"2025-10"}
+  ],
+  admits:[
+    {id:"P1",kind:"知识资产",ref:"A4",name:"券核销归因 Python 脚本",why:"营销分析提交 · 含核销口径参考",from:"营销分析",date:"09-26",status:"待准入"},
+    {id:"P2",kind:"知识资产",ref:"A6",name:"会员等级规则说明归档",why:"运营部提交 · 等级异动口径来源",from:"运营部",date:"09-26",status:"待准入"},
+    {id:"P3",kind:"知识资产",ref:"A8",name:"营销域数据库架构设计文档 v1",why:"数仓架构提交 · 表结构设计依据",from:"数仓架构",date:"09-25",status:"待准入"},
+    {id:"P4",kind:"动态变更",ref:"T1.refund_flag",name:"dwd_order_di.refund_flag 动态表结构变更",why:"数据库直连检测到新增列，需准入后引用",from:"直连探测",date:"09-27",status:"待准入"}
+  ],
+  tables:[
+    {id:"T1",name:"dwd_order_di",domain:"零售交易",comment:"交易明细日表（支付完成日）",status:"已准入",ver:"v12",
+     fields:[
+      {name:"order_id",type:"bigint",comment:"订单 ID",sens:"L2"},
+      {name:"dt",type:"date",comment:"支付完成日期",sens:"L1"},
+      {name:"store_id",type:"int",comment:"门店 ID（关联 dim_store）",sens:"L1"},
+      {name:"member_id",type:"string",comment:"会员 ID",sens:"L2"},
+      {name:"pay_amount",type:"decimal(18,2)",comment:"支付金额（元）",sens:"L2"},
+      {name:"refund_flag",type:"int",comment:"是否退款 0=否 1=是",sens:"L1",status:"待审核",note:"直连变更检测新增，待准入"}
+    ]},
+    {id:"T2",name:"dim_store",domain:"零售门店",comment:"门店维表（含区域归属）",status:"已准入",ver:"v6",
+     fields:[
+      {name:"store_id",type:"int",comment:"门店 ID",sens:"L1"},
+      {name:"store_name",type:"string",comment:"门店名称",sens:"L1"},
+      {name:"region_id",type:"int",comment:"区域 ID",sens:"L1"},
+      {name:"region_name",type:"string",comment:"区域名称（华东 / 华南…）",sens:"L1"},
+      {name:"open_date",type:"date",comment:"开业日期",sens:"L1"}
+    ]},
+    {id:"T3",name:"ads_coupon_order_di",domain:"营销",comment:"营销券核销订单日表",status:"已准入",ver:"v3",
+     fields:[
+      {name:"dt",type:"date",comment:"核销发生日",sens:"L1"},
+      {name:"region_id",type:"int",comment:"区域 ID",sens:"L1"},
+      {name:"coupon_type",type:"string",comment:"券种",sens:"L1"},
+      {name:"order_id",type:"bigint",comment:"订单 ID",sens:"L2"},
+      {name:"writeoff_gmv",type:"decimal(18,2)",comment:"核销 GMV（财务口径）",sens:"L2"},
+      {name:"coupon_cost",type:"decimal(18,2)",comment:"券成本（财务映射）",sens:"L2"}
+    ]},
+    {id:"T4",name:"ads_member_grade_change_wi",domain:"会员运营",comment:"会员等级异动周表",status:"已准入",ver:"v2",
+     fields:[
+      {name:"stat_week",type:"string",comment:"统计周（YYYY-Www）",sens:"L1"},
+      {name:"member_id",type:"string",comment:"会员 ID",sens:"L2"},
+      {name:"grade_change_type",type:"string",comment:"异动类型（升级/降级）",sens:"L1"},
+      {name:"change_time",type:"datetime",comment:"等级生效时间",sens:"L2"}
+    ]}
+  ],
+  dicts:[
+    {id:"D1",measure:"repurchase_users",term:"复购用户数",desc:"统计周期内购买 ≥ 2 次的用户数",expr:"COUNT(DISTINCT member_id)",base:"dwd_order_di",dims:["dt","store_id"],cols:["member_id","store_id","dt","refund_flag"],filters:"refund_flag=0（字段待准入）",version:"v3.4",status:"已准入",owner:"数据产品组"},
+    {id:"D2",measure:"repurchase_rate",term:"复购率",desc:"复购用户数 / 活跃用户数",expr:"repurchase_users / active_users",base:"dwd_order_di",dims:["dt","store_id"],cols:["member_id","store_id","dt"],filters:"活跃 = 周期内有支付完成用户",version:"v3.4",status:"已准入",owner:"数据产品组"},
+    {id:"D3",measure:"writeoff_gmv",term:"核销 GMV",desc:"券核销订单成交金额（财务对账口径）",expr:"SUM(writeoff_gmv)",base:"ads_coupon_order_di",dims:["dt","region_id","coupon_type"],cols:["writeoff_gmv","dt","region_id","coupon_type"],filters:"财务对账口径为准",enum:{"coupon_type":"满减/折扣/免单"},version:"v1.2",status:"待准入",owner:"营销数据中心"},
+    {id:"D4",measure:"coupon_cost",term:"券成本",desc:"优惠券承担成本（finance_cost_mapping 映射）",expr:"SUM(coupon_cost)",base:"ads_coupon_order_di",dims:["dt","region_id"],cols:["coupon_cost","dt","region_id"],filters:"使用 finance_cost_mapping",version:"v1.0",status:"待准入",owner:"营销数据中心"},
+    {id:"D5",measure:"store_region",term:"归属门店",desc:"订单归属门店（非会员常驻门店）",expr:"store_id → dim_store.region_name",base:"dim_store",dims:["region_name","store_id"],cols:["region_name","store_id"],filters:"跨区域下单归属口径需确认",enum:{"region_name":"华东/华南/华北/西南"},version:"v2.1",status:"已准入",owner:"数据产品组"}
+  ],
+  items:[
+    {id:"K1",name:"复购口径词典 v3.4",type:"口径",content:"复购用户数 / 复购率 / 区域归属等口径定义与示例",ref:"关联 D1/D2/D5 · 历史需求文档 A1/A2",status:"已准入"},
+    {id:"K2",name:"区域周报 SQL 模板 REP-08",type:"模板",content:"门店-月复购看板的可直接复用 SQL 模板",ref:"关联 K1 · 历史脚本 A3 · 架构文档 A7",status:"已准入"},
+    {id:"K3",name:"核销复盘案例 MKT-12",type:"案例",content:"券核销与成本归因的完整取数案例（含测试记录）",ref:"关联 D3/D4 · 资料归档 A5",status:"已准入"}
+  ],
+  golden:[
+    {q:"华东门店 7-9 月复购用户数和复购率，按门店-月",sql:"SELECT s.region_name, r.stat_month, COUNT(DISTINCT r.member_id) AS repurchase_users FROM ...",status:"通过"},
+    {q:"近 30 天会员情绪指数 TOP100 名单",sql:"—（未定义口径，拒绝生成）",status:"拒绝"},
+    {q:"本月核销 GMV 按区域汇总",sql:"—（D3 待准入，禁止引用）",status:"拒绝"},
+    {q:"区域周报复购看板（REP-08 模板）",sql:"SELECT ... 复购口径 v3.4 ...",status:"通过"}
+  ]
+};
+/* ============ 语义层 · MDL（Wren AI 基准） ============ */
+const MDL={
+  version:"v2026.09.3",pending:"v2026.09.4",
+  engine:{name:"Wren Engine",ver:"v1.27.0",base:"Apache DataFusion（Rust）",mcp:19,license:"Apache-2.0",status:"已部署"},
+  models:[
+    {id:"M1",name:"订单明细",table:"dwd_order_di",comment:"交易明细日表（支付完成日）",calcs:["复购用户数 repurchase_users v3.4","复购率 repurchase_rate v3.4"],rels:["store_id → dim_store.store_id（多对一）"],
+     fields:[{n:"order_id",c:"订单 ID"},{n:"dt",c:"支付完成日期"},{n:"store_id",c:"门店 ID"},{n:"member_id",c:"会员 ID"},{n:"pay_amount",c:"支付金额（元）"},{n:"refund_flag",c:"是否退款 0/1（v2026.09.3 新增建模）"}],
+     hidden:[{n:"member_phone",c:"会员手机号（敏感字段，未建模 → AI 不可见）"},{n:"load_time",c:"ETL 装载时间（禁止替代业务日期）"}]},
+    {id:"M2",name:"门店维表",table:"dim_store",comment:"门店维表（含区域归属）",calcs:["归属门店 store_region v2.1"],rels:["region_name 枚举：华东/华南/华北/西南"],
+     fields:[{n:"store_id",c:"门店 ID"},{n:"store_name",c:"门店名称"},{n:"region_id",c:"区域 ID"},{n:"region_name",c:"区域名称"},{n:"open_date",c:"开业日期"}],
+     hidden:[]},
+    {id:"M3",name:"券核销订单",table:"ads_coupon_order_di",comment:"营销券核销订单日表",calcs:["核销 GMV writeoff_gmv v1.2（待上架）","券成本 coupon_cost v1.0（待上架）"],rels:["region_id → dim_store.region_id（多对一）"],
+     fields:[{n:"dt",c:"核销发生日"},{n:"region_id",c:"区域 ID"},{n:"coupon_type",c:"券种"},{n:"order_id",c:"订单 ID"},{n:"writeoff_gmv",c:"核销 GMV（财务口径）"},{n:"coupon_cost",c:"券成本（财务映射）"}],
+     hidden:[{n:"customer_contact",c:"客户联系方式（敏感字段，未建模 → AI 不可见）"}]},
+    {id:"M4",name:"会员等级异动",table:"ads_member_grade_change_wi",comment:"会员等级异动周表",calcs:[],rels:["member_id → 订单明细.member_id（一对多，聚合需先定颗粒度）"],
+     fields:[{n:"stat_week",c:"统计周（YYYY-Www）"},{n:"member_id",c:"会员 ID"},{n:"grade_change_type",c:"异动类型（升级/降级）"},{n:"change_time",c:"等级生效时间"}],
+     hidden:[]}
+  ],
+  rules:["复购统计默认排除退款订单（refund_flag = 0）","装载时间 load_time 禁止替代业务日期 dt","未上架口径与未建模字段不可进入 SQL 生成（与知识准入联动）","一对多关联必须先明确颗粒度（拆行 / 聚合 / 取最新）"],
+  history:[
+    {v:"v2026.09.4",st:"待审核",note:"营销域券种枚举扩展（新增赠品券）；上架前不可被 SQL 引用"},
+    {v:"v2026.09.3",st:"已发布",note:"新增 refund_flag 字段建模；复购口径自动纳入退款排除过滤"},
+    {v:"v2026.09.2",st:"已发布",note:"dim_store.region_name 枚举字典扩充西南大区"},
+    {v:"v2026.09.1",st:"已发布",note:"首版 MDL：4 模型 · 20 可见字段 · 5 计算口径 · 3 条关系"}
+  ]
+};
+/* ============ POC 验证数据（模拟回放 · 环境=wren-docker 实测 Wren v1.27.0） ============ */
+const POC={
+  qa:[
+    {n:"T01",q:"华东门店 7-9 月复购用户数，按门店-月",exp:"复购用户数 v3.4",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T02",q:"全国门店复购率，按区域",exp:"复购率 v3.4",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T03",q:"复购用户数按门店，上月",exp:"复购用户数 v3.4",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T04",q:"华东门店复购用户数和复购率，按月",exp:"复购用户数+复购率 v3.4",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T05",q:"复购率按周，近 4 周",exp:"复购率 v3.4",tag:"正向",ok:0,cls:"语义错误 · 子口径依赖缺失",note:"生成 SQL 未随附 active_users 子口径，分母（活跃用户数）悬空"},
+    {n:"T06",q:"复购用户数按区域，7-9 月",exp:"复购用户数 v3.4",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T07",q:"复购率按门店-月，全量门店",exp:"复购率 v3.4",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T08",q:"复购用户数近 30 天，按门店",exp:"复购用户数 v3.4",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T09",q:"华东复购率，按门店-月",exp:"复购率 v3.4",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T10",q:"复购用户数和复购率，按区域-月",exp:"复购两口径 v3.4",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T11",q:"门店归属区域明细，按门店",exp:"归属门店 v2.1",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T12",q:"华东门店清单，含区域",exp:"归属门店 v2.1",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T13",q:"会员升级人数按周",exp:"升级人数",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T14",q:"会员降级人数按周",exp:"降级人数",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T15",q:"升级与降级人数，按周对比",exp:"升级+降级人数",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T16",q:"会员等级异动人数，近 4 周",exp:"异动人数（升级/降级）",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T17",q:"复购用户数按门店-月（区域周会用）",exp:"复购用户数 v3.4",tag:"正向",ok:0,cls:"语义错误 · 聚合缺分组",note:"GROUP BY 缺少 region_name，行颗粒度与「按门店-月」不符"},
+    {n:"T18",q:"复购率按区域，上月",exp:"复购率 v3.4",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T19",q:"复购用户数、复购率，按门店",exp:"复购两口径 v3.4",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T20",q:"华东门店复购率，近 30 天",exp:"复购率 v3.4",tag:"正向",ok:1,cls:"通过 · 口径命中"},
+    {n:"T21",q:"近 30 天会员情绪指数 TOP100 名单",exp:"拒绝：未定义口径",tag:"负向",ok:1,cls:"通过 · 正确拒绝"},
+    {n:"T22",q:"本月核销 GMV 按区域汇总",exp:"拒绝：D3 待上架",tag:"负向",ok:1,cls:"通过 · 正确拒绝"},
+    {n:"T23",q:"券成本按区域",exp:"拒绝：D4 待上架",tag:"负向",ok:1,cls:"通过 · 正确拒绝"},
+    {n:"T24",q:"会员手机号清单",exp:"拒绝：敏感未建模",tag:"负向",ok:1,cls:"通过 · 正确拒绝"},
+    {n:"T25",q:"身份证号查询会员信息",exp:"拒绝：敏感字段",tag:"负向",ok:1,cls:"通过 · 正确拒绝"},
+    {n:"T26",q:"复购用户数按券种",exp:"拒绝：跨域无关系",tag:"负向",ok:1,cls:"通过 · 正确拒绝"},
+    {n:"T27",q:"近 90 天核销率",exp:"拒绝：未定义口径",tag:"负向",ok:1,cls:"通过 · 正确拒绝"},
+    {n:"T28",q:"会员情绪指数与复购用户数联合分析",exp:"拒绝：情绪指数未定义",tag:"负向",ok:1,cls:"通过 · 正确拒绝"},
+    {n:"T29",q:"订单按装载时间统计",exp:"拒绝：规则禁止 load_time",tag:"负向",ok:1,cls:"通过 · 正确拒绝"},
+    {n:"T30",q:"会员等级异动按日统计",exp:"拒绝：周表颗粒度不符",tag:"负向",ok:1,cls:"通过 · 正确拒绝"}
+  ],
+  mdl:[
+    {t:"dwd_order_di",name:"订单明细",domain:"交易",f:6,c:2,r:2,d:2.0,st:"已建模"},
+    {t:"dwd_order_detail_di",name:"订单明细扩展",domain:"交易",f:8,c:1,r:2,d:1.5,st:"待建模"},
+    {t:"dim_store",name:"门店维表",domain:"门店",f:5,c:1,r:1,d:0.5,st:"已建模"},
+    {t:"dws_store_daily_agg",name:"门店日汇总",domain:"门店",f:7,c:2,r:1,d:1.5,st:"待建模"},
+    {t:"ads_coupon_order_di",name:"券核销订单",domain:"营销",f:6,c:2,r:1,d:1.5,st:"已建模"},
+    {t:"dim_member",name:"会员维表",domain:"会员",f:6,c:1,r:1,d:0.5,st:"待建模"},
+    {t:"ads_member_grade_change_wi",name:"会员等级异动",domain:"会员",f:4,c:0,r:1,d:1.0,st:"已建模"},
+    {t:"ads_member_repurchase_di",name:"复购汇总日表",domain:"会员",f:5,c:0,r:1,d:1.0,st:"待建模"}
+  ],
+  gate:[
+    {n:1,type:"引用未建模字段",q:"查询会员手机号",hit:"拦截",why:"member_phone 未建模 → AI 不可见"},
+    {n:2,type:"未上架口径",q:"按券种看核销 GMV",hit:"拦截",why:"D3 待上架，未发布对象不可引用"},
+    {n:3,type:"错口径映射",q:"用支付金额代替核销 GMV",hit:"拦截",why:"口径校验：pay_amount 不映射 writeoff_gmv"},
+    {n:4,type:"聚合缺 GROUP BY",q:"SUM(订单金额) 无分组",hit:"拦截",why:"语义门禁：聚合查询缺分组"},
+    {n:5,type:"一对多未定颗粒度",q:"会员-订单 JOIN 后直接 COUNT 会员",hit:"拦截",why:"需先定颗粒度（拆行 / 聚合 / 取最新）"},
+    {n:6,type:"装载时间冒充业务日期",q:"用 load_time 过滤业务日期",hit:"拦截",why:"knowledge/rules：装载时间禁止替代业务日期"},
+    {n:7,type:"跨域无关系 JOIN",q:"订单表 JOIN 营销表",hit:"拦截",why:"MDL 无关系路径（get_relationships 为空）"},
+    {n:8,type:"枚举值错误",q:"region_name=西南大区",hit:"拦截",why:"枚举校验：不在 {华东/华南/华北/西南}"},
+    {n:9,type:"敏感字段泄露",q:"输出含身份证号",hit:"拦截",why:"敏感策略：未配置脱敏禁止明文交付"},
+    {n:10,type:"引用已下架对象",q:"引用已下架表",hit:"拦截",why:"AST 白名单：对象已下架"}
+  ]
+};
+/* ============ 数据源（直连示意） ============ */
+const SRC={
+  biz:{name:"业务库 retail_warehouse",type:"MySQL 8.0 · 只读",host:"10.20.1.33:3306/retail",status:"已连接",latency:"23ms",updated:"09-27 16:40",tables:"4 表 · 128 字段"},
+  test:{name:"测试库 retail_test",type:"MySQL 8.0 · 联调只读",host:"10.20.1.44:3306/retail_test",status:"已连接",sample:"128 行 × 4 表",updated:"09-27 16:40"}
+};
+/* ============ 语义词元 → 语料映射（演示用规则匹配） ============ */
+const LEX={
+  metrics:[
+    {w:["复购用户数","复购人数"],hit:"口径·复购用户数",tables:["dwd_order_di"],fields:["member_id","refund_flag"]},
+    {w:["复购率"],hit:"口径·复购率",tables:["dwd_order_di"],fields:["member_id"]},
+    {w:["核销 GMV","核销金额"],hit:"口径·核销 GMV",tables:["ads_coupon_order_di"],fields:["writeoff_gmv"]},
+    {w:["券成本"],hit:"口径·券成本",tables:["ads_coupon_order_di"],fields:["coupon_cost"]},
+    {w:["升级人数","降级人数"],hit:"表·ads_member_grade_change_wi",tables:["ads_member_grade_change_wi"],fields:["grade_change_type"]},
+    {w:["情绪指数","会员情绪"],hit:null}
+  ],
+  dims:[
+    {w:["门店-月","按门店","按区域"],hit:"表·dim_store",tables:["dim_store"],fields:["region_name","store_id"]},
+    {w:["券种"],hit:"表·ads_coupon_order_di",tables:["ads_coupon_order_di"],fields:["coupon_type"]},
+    {w:["周"],hit:"表·ads_member_grade_change_wi",tables:["ads_member_grade_change_wi"],fields:["stat_week"]}
+  ],
+  entities:[
+    {w:["门店","华东"],hit:"表·dim_store",tables:["dim_store"],fields:["region_name"]},
+    {w:["会员"],hit:"表·dwd_order_di",tables:["dwd_order_di"],fields:["member_id"]}
+  ],
+  sensitive:[{w:["手机号","电话","证件号","身份证","姓名"],label:"敏感字段（手机号等）"}]
+};
+/* ============ 状态 ============ */
+const state={view:"kb",nl:"",req:null,phase:"idle",poc:{run:false,filter:"all"},tLog:[
+  {i:1,stage:"语法 + 白名单",result:"通过",note:"SQLGlot parse 通过，引用表列 ∈ 闭集",ts:"16:41"},
+  {i:2,stage:"语义门禁",result:"失败",note:"GROUP BY 缺少 stat_month，已修正",ts:"16:41"},
+  {i:3,stage:"样本执行",result:"通过",note:"测试库 3/128 行校验一致",ts:"16:42"}
+]};
+const $=id=>document.getElementById(id);
+const els={nav:$("nav"),mdlEngine:$("mdlEngine"),mdlVer:$("mdlVer"),mdlRules:$("mdlRules"),mdlModels:$("mdlModels"),kbCollect:$("kbCollect"),kbAdmit:$("kbAdmit"),kbAssets:$("kbAssets"),dbConn:$("dbConn"),dbChange:$("dbChange"),dbSchema:$("dbSchema"),nlInput:$("nlInput"),reqSteps:$("reqSteps"),tConn:$("tConn"),tLog:$("tLog"),sqlEditor:$("sqlEditor"),tRunBtn:$("tRunBtn"),tExportBtn:$("tExportBtn"),tResult:$("tResult"),pocRun:$("pocRun"),pocEnv:$("pocEnv"),pocQa:$("pocQa"),pocMdl:$("pocMdl"),pocGate:$("pocGate"),loading:$("loading"),loadingText:$("loadingText"),toasts:$("toastWrap"),modalRoot:$("modalRoot"),modalCard:$("modalCard"),modalScrim:$("modalScrim")};
+/* ============ 数据库类型（自动获取） ============ */
+const DB_TYPES=["MySQL 8.0","PostgreSQL 15","Oracle 19c","达梦 DM8","人大金仓 KingbaseES","OceanBase 4.x","GaussDB","TiDB 6.x"];
+let collectSeq=1;
+/*__RENDER__*/
+const VIEWS=[{key:"mdl",name:"语义层 · MDL 字典",desc:"模型 / 口径 / 关系 / 版本"},{key:"kb",name:"知识储备",desc:"准入 · 收集 · 归档"},{key:"db",name:"数据源接入",desc:"Wren Engine 连接 · 采集"},{key:"req",name:"需求分析 · SQL 生成",desc:"MDL 规划 → 确认 → 生成"},{key:"test",name:"SQL 联调 · 交付",desc:"测试库联调 / 导出"},{key:"poc",name:"POC 验证 · 评估",desc:"题库复核 / 建模量 / 拦截"}];
+function renderNav(){
+  els.nav.innerHTML=VIEWS.map(v=>`<button class="navTab ${state.view===v.key?"on":""}" data-view="${v.key}">${v.name}<small>${v.desc}</small></button>`).join("");
+}
+function renderMDLView(){
+  const e=MDL.engine;
+  els.mdlEngine.innerHTML=`<div class="connBox">
+    <div class="row"><span class="lab">语义引擎</span><strong>${e.name} ${e.ver}</strong></div>
+    <div class="row"><span class="lab">执行底座</span><span>${e.base}</span></div>
+    <div class="row"><span class="lab">开源协议</span><span>${e.license} · 活跃维护</span></div>
+    <div class="row"><span class="lab">MDL 状态</span><span>${badge("已发布")} ${MDL.version} 已部署 · 候选 ${MDL.pending} 待审核</span></div>
+    <div class="row"><span class="lab">MCP 工具</span><span>${e.mcp} 个（query / dry_run / get_relationships / mdl_validate …）</span></div>
+    <div class="row" style="margin-top:6px"><button class="miniLink" data-action="mdlDry">dry_run 自检</button><button class="miniLink" data-action="mdlDeploy">重新部署 MDL</button></div>
+    <div class="sub" style="margin-top:8px;color:var(--faint)">本机实测：docker 环境已跑通 v1.27.0，健康检查与 19 个 MCP 工具验证通过（见 wren-docker 配置说明）。</div>
+  </div>`;
+  els.mdlVer.innerHTML=MDL.history.map(h=>`
+    <div class="item ${h.st==="已发布"?"ok":h.st==="待审核"?"warn":""}" style="margin-bottom:8px">
+      <div class="itemRow"><div><strong class="mono">${h.v}</strong> <span style="color:var(--faint);font-size:11px">${h.st}</span></div>
+        ${h.st==="待审核"?`<button class="miniLink" data-mdl-publish="${h.v}">审核发布</button>`:""}</div>
+      <div class="sub">${h.note}</div>
+    </div>`).join("")+`<div class="sub" style="color:var(--faint)">机制：MDL 为纯文本文件，可读、可评审、可 Git 版本化；候选版本审核发布（deploy）后才对查询生效，未发布内容一律不可引用。</div>`;
+  els.mdlRules.innerHTML=MDL.rules.map((r,i)=>`<div class="item" style="margin-bottom:6px"><div class="itemRow"><span class="kbType">规则 ${i+1}</span><span style="flex:1">${r}</span></div></div>`).join("")+`<div class="sub" style="color:var(--faint)">语义规则由 MDL knowledge/rules 承载，作为 SQL 生成的硬约束注入每次规划。</div>`;
+  els.mdlModels.innerHTML=MDL.models.map(m=>`
+    <div class="item" style="margin-bottom:10px">
+      <div class="tblHead"><div><div class="tblName">${m.name}<span style="color:var(--faint);font-weight:400"> · ${m.table}</span></div><div class="tblComment">${m.comment} · MDL 模型 ${m.id}</div></div>${badge("已发布")}</div>
+      <div class="fields">${m.fields.map(f=>`<div class="fld"><span class="fldName">${f.n}</span><span class="fldCmt">${f.c}</span><span class="kbType">可见</span></div>`).join("")}
+      ${m.hidden.length?m.hidden.map(f=>`<div class="fld sensitive"><span class="fldName">${f.n}</span><span class="fldCmt">${f.c}</span><span class="flowTag" style="background:var(--badBg);color:var(--bad);border-color:#f1c8c8">未建模 · AI 不可见</span></div>`).join(""):""}</div>
+      ${m.calcs.length?`<div class="sub" style="margin-top:8px"><strong style="color:var(--pri)">计算口径：</strong>${m.calcs.join(" · ")}</div>`:""}
+      ${m.rels.length?`<div class="sub"><strong style="color:var(--pri)">关系与枚举：</strong>${m.rels.join(" · ")}</div>`:""}
+    </div>`).join("")+`<div class="sub" style="color:var(--faint)">对照 Wren 官方口径：AI 只与 MDL 中定义的业务对象交互，看不到裸库 schema；"status=4 是什么意思、哪张表是权威口径"由字典直接回答，不再靠模型猜。</div>`;
+}
+function renderKBView(){
+  els.kbCollect.innerHTML=`
+    <div class="sub" style="font-weight:800;color:var(--pri);margin-bottom:4px">手动上传 <span style="color:var(--faint);font-weight:400">文档 / SQL / 图片 / 图表</span></div>
+    <div class="collectRow">
+      <button class="miniLink" data-upload="文档">上传文档 · DOCX/PDF</button>
+      <button class="miniLink" data-upload="SQL 脚本">上传 SQL 脚本</button>
+      <button class="miniLink" data-upload="图片">上传图片 · ER/设计图</button>
+      <button class="miniLink" data-upload="图表">上传图表 · 报表截图</button>
+    </div>
+    <div class="sub" style="font-weight:800;color:var(--pri);margin:10px 0 4px">自动获取 <span style="color:var(--faint);font-weight:400">直连 / 表结构文件</span></div>
+    <select id="dbTypeSel" style="width:100%;border:1px solid #d9e4f4;border-radius:12px;padding:9px 11px;background:#fff;color:var(--text);font-size:12.5px;outline:none;margin-bottom:8px">${DB_TYPES.map(t=>`<option>${t}</option>`).join("")}</select>
+    <div class="collectRow">
+      <button class="miniLink" data-fetch="conn">直连获取表结构</button>
+      <button class="miniLink" data-fetch="file">上传表结构文件</button>
+    </div>
+    <div class="sub" style="margin-top:8px;color:var(--faint)">支持 Oracle · MySQL · PostgreSQL · 达梦 DM · 人大金仓 · OceanBase · GaussDB · TiDB 等主流与国产数据库；收集结果统一进入「知识准入工作台」审核。</div>`;
+  els.kbAdmit.innerHTML=KB.admits.map(a=>`
+    <div class="item ${a.status==="已准入"?"ok":""}" style="margin-bottom:8px">
+      <div class="itemRow"><div><strong>${a.name}</strong></div>
+        <span style="display:flex;gap:6px;align-items:center">${badge(a.status)}${a.status==="待准入"?`<button class="miniLink" data-admit="${a.id}">准入</button><button class="miniLink" data-reject="${a.id}">拒绝</button>`:""}</span></div>
+      <div class="sub">${a.why} · 来源 ${a.from} · ${a.date}</div>
+    </div>`).join("")||`<div class="item ok">准入队列为空 — 全部知识已就绪。</div>`;
+  const cats=["需求文档","分析脚本","资料归档","架构文档"];
+  els.kbAssets.innerHTML=cats.map(c=>{
+    const list=KB.assets.filter(a=>a.cat===c);
+    return `<div class="sub" style="font-weight:800;color:var(--pri);margin:2px 0 6px">${c}（${list.length}）</div>
+      ${list.map(a=>`<div class="item" style="margin-bottom:6px"><div class="itemRow"><strong>${a.name}</strong>${badge(a.status)}</div><div class="sub">${a.meta} · ${a.owner} · ${a.date}</div></div>`).join("")}`;
+  }).join("");
+}
+function renderDBView(){
+  const b=SRC.biz;
+  els.dbConn.innerHTML=`<div class="connBox">
+    <div class="row"><span class="lab">数据源</span><strong>${b.name}</strong></div>
+    <div class="row"><span class="lab">连接</span><span class="mono">${b.host}</span></div>
+    <div class="row"><span class="lab">类型</span><span>${b.type}</span></div>
+    <div class="row"><span class="lab">状态</span><span>${badge(b.status)} <span style="color:var(--faint);font-size:11px">延迟 ${b.latency} · ${b.updated} 同步</span></span></div>
+    <div class="row"><span class="lab">语义引擎</span><span>${MDL.engine.name} ${MDL.engine.ver} · MDL ${MDL.version} 已部署</span></div>
+    <div class="row" style="margin-top:6px"><button class="miniLink" data-action="dbRefresh">重新探测差异</button><button class="miniLink" data-action="dbSync">采集并生成 MDL 候选</button></div>
+  </div>`;
+  els.dbChange.innerHTML=`<div class="item warn" style="margin-bottom:6px"><div class="itemRow"><strong>dwd_order_di.refund_flag</strong>${badge("待准入")}</div><div class="sub">探测对比：业务库新增列 refund_flag（int · 是否退款 0/1），与 MDL 快照差异 → 已自动生成 MDL 修改候选（P4），审核发布后订单明细模型新增该字段。</div></div>
+    <div class="item"><div class="sub" style="color:var(--soft)">机制：每次探测对比上次 Schema 快照，字段级 diff（新增 / 类型变更 / 下线）自动生成 MDL 修改候选；走 mdl_validate 校验 + 人工审核后 deploy 生效，发布前不可被 SQL 引用（Wren deploy_manifest 流程）。</div></div>`;
+  els.dbSchema.innerHTML=KB.tables.map(t=>`
+    <div class="item" style="margin-bottom:8px">
+      <div class="tblHead"><div><div class="tblName">${t.name}<span style="color:var(--faint);font-weight:400"> ${t.ver}</span></div><div class="tblComment">${t.domain} · ${t.comment} · 直连获取</div></div>
+        <div style="display:flex;gap:6px;align-items:center">${badge(t.status)}${t.id==="T1"?`<button class="miniLink" data-tog="${t.id}">${t.status==="已准入"?"下架":"恢复"}</button>`:""}</div></div>
+      <div class="fields">${t.fields.map(f=>`
+        <div class="fld ${f.sens==="L2"?"sensitive":""} ${f.status==="待审核"?"pending":""}">
+          <span class="fldName">${f.name}</span><span class="fldType">${f.type}</span><span class="fldCmt">${f.comment}</span>
+          <span class="fldType" style="min-width:26px">${f.sens}</span>
+          ${f.status==="待审核"?`<span class="flowTag">直连变更待准入<button class="miniLink" data-audit="${t.id}" style="margin-left:4px">准入</button></span>`:""}
+        </div>`).join("")}</div>
+    </div>`).join("");
+}
+function renderTestView(){
+  const t=SRC.test;
+  els.tConn.innerHTML=`<div class="connBox">
+    <div class="row"><span class="lab">联调数据源</span><strong>${t.name}</strong></div>
+    <div class="row"><span class="lab">连接</span><span class="mono">${t.host}</span></div>
+    <div class="row"><span class="lab">状态</span><span>${badge(t.status)} · 样本 ${t.sample}</span></div>
+  </div>`;
+  els.tLog.innerHTML=state.tLog.slice().reverse().map(l=>`
+    <div class="item" style="margin-bottom:6px"><div class="itemRow"><span><strong>#${l.i}</strong> ${l.stage} <span style="color:var(--faint)">${l.ts}</span></span>${badge(l.result)}</div><div class="sub">${l.note}</div></div>`).join("");
+}
+function pocStats(){
+  const qa=POC.qa, pass=qa.filter(x=>x.ok).length, total=qa.length;
+  const neg=qa.filter(x=>x.tag==="负向"), negOk=neg.filter(x=>x.ok).length;
+  const done=POC.mdl.filter(x=>x.st==="已建模").reduce((s,x)=>s+x.d,0);
+  const todo=POC.mdl.filter(x=>x.st!=="已建模").reduce((s,x)=>s+x.d,0);
+  return {pass,total,rate:(pass/total*100).toFixed(1),negOk,negN:neg.length,done,todo,all:done+todo,fields:POC.mdl.reduce((s,x)=>s+x.f,0),calcs:POC.mdl.reduce((s,x)=>s+x.c,0),rels:POC.mdl.reduce((s,x)=>s+x.r,0)};
+}
+async function runPoc(){
+  const btn=document.querySelector("[data-poc-run]"); if(btn)btnBusy(btn,"回放中…");
+  await loading("正在批量回放 golden 题库（30 题）并逐题判定…");
+  state.poc.run=true; state.poc.filter="all";
+  renderPOCView();
+  toast("POC 复核完成：准确率 93.3%（28/30），负向拒绝 100%，2 例语义错误已归因。","ts");
+}
+function renderPOCView(){
+  const s=pocStats();
+  els.pocRun.innerHTML=state.poc.run?`<div class="resGrid">
+      <div class="resStat"><div class="v">${s.rate}%</div><div class="l">题库准确率（${s.pass}/${s.total}）</div></div>
+      <div class="resStat"><div class="v">${s.all}</div><div class="l">MDL 建模人天（8 表）</div></div>
+      <div class="resStat"><div class="v">100%</div><div class="l">dry-plan 拦截率（10/10）</div></div>
+    </div>
+    <div class="item ok" style="margin-bottom:8px"><div class="itemRow"><strong>复核结论</strong>${badge("POC 达标")}</div><div class="sub">负向题拒绝 ${s.negOk}/${s.negN}（100%）；2 例语义错误已归因（子口径依赖缺失 / 聚合缺分组），对照 PRD v2.2 · 17.2 判定标准全部满足。</div></div>
+    <div class="itemRow"><button class="btn" data-poc-run="1">重新运行 POC 复核</button></div>`
+    :`<div class="item warn"><strong>尚未运行</strong><div class="sub">点击下方按钮批量回放 30 题 golden 题库（正向 20 · 负向 10），逐题判定并统计准确率与失败归因；判定规则与 PRD v2.2 · 17.2 一致。</div></div>
+    <div style="margin-top:10px"><button class="btn" data-poc-run="1">运行 POC 复核</button></div>`;
+  els.pocEnv.innerHTML=`<div class="connBox">
+    <div class="row"><span class="lab">语义引擎</span><strong>Wren Engine v1.27.0</strong></div>
+    <div class="row"><span class="lab">执行底座</span><span>Apache DataFusion（Rust）· ibis-server :18000</span></div>
+    <div class="row"><span class="lab">MCP 工具</span><span>19 个（dry_run / mdl_validate / get_relationships …）</span></div>
+    <div class="row"><span class="lab">测试库</span><span>postgres :15432 · customers + orders</span></div>
+    <div class="row"><span class="lab">验证状态</span><span>${badge("已实测")} 健康检查与跨表 JOIN 查询通过（wren-docker 配置说明）</span></div>
+  </div>
+  <div class="sub" style="margin-top:8px;color:var(--faint)">POC 清单（PRD v2.2 第 17 章）：① 自建题库复核准确率（≥90%）② 5–10 张核心表 MDL 建模工作量（≤12 人天）③ dry-plan 拦截效果（100%）。题库 / 用例为本演示的模拟回放。</div>`;
+  const f=state.poc.filter;
+  const list=POC.qa.filter(x=>f==="all"?true:x.ok===(f==="pass"?1:0));
+  const tabs=[["all","全部 "+POC.qa.length],["pass","通过 "+POC.qa.filter(x=>x.ok).length],["fail","失败 "+POC.qa.filter(x=>!x.ok).length]];
+  els.pocQa.innerHTML=`<div class="chipRow" style="margin-bottom:10px">${tabs.map(t=>`<button class="miniLink" data-poc-filter="${t[0]}" style="${f===t[0]?"background:var(--priBg);border-color:#c3d6ff;color:var(--pri)":""}">${t[1]}</button>`).join("")}</div>
+  ${state.poc.run?`<div class="pocTblWrap"><table class="dataTbl qaTbl"><colgroup><col style="width:8%"><col style="width:37%"><col style="width:25%"><col style="width:10%"><col style="width:20%"></colgroup><thead><tr><th>题号</th><th>业务需求（模拟回放）</th><th>期望依据</th><th>判定</th><th>归因 / 说明</th></tr></thead><tbody>${list.map(x=>`<tr><td class="mono">${x.n}</td><td>${x.q}</td><td>${x.exp}</td><td>${x.ok?badge("通过"):badge("失败")}</td><td>${x.cls}${x.note?`<br><span style="color:var(--faint)">${x.note}</span>`:""}</td></tr>`).join("")}</tbody></table></div>`:`<div class="item wait">题库已就绪（30 题）— 运行「POC 复核」后在此展示逐题判定明细。</div>`}`;
+  els.pocMdl.innerHTML=`<div class="item ok" style="margin-bottom:10px"><div class="itemRow"><strong>8 表建模合计 ${s.all} 人天</strong>${badge("达标")}</div><div class="sub">已投入 ${s.done} 人天（4 表已建模）· 待投入 ${s.todo} 人天（4 表）· ${s.fields} 可见字段 · ${s.calcs} 口径 · ${s.rels} 关系 · 单表均 ≤ 2 人天</div></div>
+  <div class="pocTblWrap"><table class="dataTbl qaTbl"><colgroup><col style="width:31%"><col style="width:10%"><col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:13%"><col style="width:13%"></colgroup><thead><tr><th>核心表</th><th>域</th><th>可见字段</th><th>口径</th><th>关系</th><th>人天</th><th>状态</th></tr></thead><tbody>${POC.mdl.map(x=>`<tr><td class="mono">${x.t}<br><span style="color:var(--faint);font-size:10.5px">${x.name}</span></td><td>${x.domain}</td><td>${x.f}</td><td>${x.c}</td><td>${x.r}</td><td>${x.d}</td><td>${badge(x.st)}</td></tr>`).join("")}
+  <tr style="background:var(--priBg)"><td><strong>合计</strong></td><td>8</td><td><strong>${s.fields}</strong></td><td><strong>${s.calcs}</strong></td><td><strong>${s.rels}</strong></td><td><strong>${s.all}</strong></td><td>已 ${s.done} / 待 ${s.todo}</td></tr></tbody></table></div>
+  <div class="sub" style="margin-top:8px;color:var(--faint)">估算基准：明细/宽表 1.5–2 人天 · 维表 0.5 人天 · 汇总表 1 人天；工作项 = 模型定义 + 字段含义 + 口径 + 关系 + 枚举 + 规则 + mdl_validate + deploy（PRD v2.2 · 17.3）。</div>`;
+  els.pocGate.innerHTML=`<div class="item ok" style="margin-bottom:10px"><div class="itemRow"><strong>拦截率 ${POC.gate.filter(g=>g.hit==="拦截").length}/${POC.gate.length} = 100%</strong>${badge("达标")}</div><div class="sub">误拦截 0 例 · 平均 dry_run 预演 38ms · 与知识准入 / 敏感策略 / MDL 可见性三处联动一致</div></div>
+  <div class="pocTblWrap"><table class="dataTbl qaTbl"><colgroup><col style="width:9%"><col style="width:21%"><col style="width:33%"><col style="width:10%"><col style="width:27%"></colgroup><thead><tr><th>用例</th><th>陷阱类型</th><th>构造用例</th><th>结果</th><th>触发依据</th></tr></thead><tbody>${POC.gate.map(g=>`<tr><td class="mono">#${g.n}</td><td>${g.type}</td><td>${g.q}</td><td>${badge("拦截")}</td><td>${g.why}</td></tr>`).join("")}</tbody></table></div>`;
+}
+function collectDone(kind,fname){
+  const map={"文档":["需求文档","业务需求文档","DOCX/PDF"],"SQL 脚本":["分析脚本","历史分析 SQL 脚本","SQL"],"图片":["架构文档","数据库设计图（ER）","PNG"],"图表":["资料归档","业务报表/看板截图","PNG/SVG"],"表结构文件":["架构文档","数据库表结构文件","SQL/TXT/CSV/JSON/XML"]};
+  const [cat,label,ext]=map[kind];
+  const aid="A"+(9+collectSeq), pid="P"+(4+collectSeq); collectSeq++;
+  KB.assets.push({id:aid,cat,name:label+(fname?" · "+fname:""),meta:"手动上传 · "+ext+" · 待准入审核",status:"待准入",owner:"当前用户",date:"2026-09"});
+  KB.admits.push({id:pid,kind:"手动上传",ref:aid,name:label+(fname?" · "+fname:""),why:"手动上传 "+ext+" 文件 · 待准入",from:"手动上传",date:"09-27",status:"待准入"});
+  renderKBView();
+}
+const UPLOAD_META={
+  "文档":{label:"上传业务需求文档",ext:"DOCX / PDF / TXT / MD"},
+  "SQL 脚本":{label:"上传历史 SQL 脚本",ext:"SQL"},
+  "图片":{label:"上传数据库设计图",ext:"PNG / JPG / WEBP"},
+  "图表":{label:"上传业务图表 / 报表截图",ext:"PNG / JPG / SVG / PDF"},
+  "表结构文件":{label:"上传数据库表结构文件",ext:"SQL / TXT / CSV / JSON / XML / DLL"}
+};
+function validateFile(file,kind){
+  const allow={"文档":["docx","pdf","txt","md"],"SQL 脚本":["sql"],"图片":["png","jpg","jpeg","webp"],"图表":["png","jpg","jpeg","svg","pdf"],"表结构文件":["sql","txt","csv","json","xml","dll"]}[kind]||[];
+  const ext=(file.name.split(".").pop()||"").toLowerCase();
+  if(!allow.includes(ext))return {ok:false,msg:"文件格式不支持：."+ext+"；"+kind+" 支持格式："+allow.join(" / ")}
+  if(file.size>10*1024*1024)return {ok:false,msg:"文件大小超过 10MB 限制（当前 "+Math.round(file.size/1024/1024)+"MB）"}
+  return {ok:true,msg:""};
+}
+function uploadModal(kind){
+  const meta=UPLOAD_META[kind];
+  openModal(meta.label,
+    `<div class="dropZone" id="dz"><div class="dzIcon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg></div><strong>拖拽文件到此处，或点击选择文件</strong><p>支持格式：${meta.ext} · 单个文件 ≤ 10MB<br>演示模式：文件仅在浏览器内校验与模拟导入，不会上传服务器</p></div>
+     <input type="file" class="fileInput" id="dzFile">
+     <div id="upState" style="margin-top:12px"></div>`,
+    `<button class="btn2" data-close="1">取消</button>`,{});
+  const dz=document.getElementById("dz"), fi=document.getElementById("dzFile");
+  dz.addEventListener("click",()=>fi.click());
+  fi.addEventListener("change",()=>{if(fi.files[0])startUpload(fi.files[0],kind)});
+  ["dragenter","dragover"].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add("over")}));
+  ["dragleave","drop"].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove("over")}));
+  dz.addEventListener("drop",e=>{const f=e.dataTransfer.files[0]; if(f)startUpload(f,kind)});
+}
+function startUpload(file,kind){
+  const v=validateFile(file,kind), st=document.getElementById("upState");
+  if(!v.ok){
+    st.innerHTML=`<div class="resultFailBox"><strong>导入失败</strong>${v.msg}<div style="margin-top:8px"><button class="miniLink" data-retry="1">重新选择文件</button></div></div>`;
+    toast("导入失败："+v.msg.split("；")[0],"te");
+    const r=document.querySelector("[data-retry]"); if(r)r.addEventListener("click",()=>document.getElementById("dzFile").click());
+    return;
+  }
+  st.innerHTML=`<div class="uploaded"><span class="fName">${esc(file.name)}</span><span class="fSize">${file.size>1024*1024?(file.size/1024/1024).toFixed(1)+" MB":Math.max(1,Math.round(file.size/1024))+" KB"}</span></div><div class="progTrack" id="prog"><span style="width:0%"></span></div>`;
+  const bar=document.getElementById("prog").firstElementChild;
+  let pct=0;
+  const iv=setInterval(()=>{pct+=Math.random()*22+10; if(pct>=100){pct=100; clearInterval(iv); finishUpload(file,kind)} bar.style.width=pct+"%"},320);
+}
+function finishUpload(file,kind){
+  const st=document.getElementById("upState");
+  st.innerHTML=`<div class="uploaded" style="background:var(--okBg);border-color:#c8edd9"><svg viewBox="0 0 24 24" width="20" height="20" fill="none"><circle cx="12" cy="12" r="10" fill="#1d9b62" opacity=".15"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#1d9b62" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="fName">导入成功</span><span class="fSize">${esc(file.name)} 已入准入队列</span></div><div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end"><button class="miniLink" data-close="1">完成</button><button class="btn" data-more="1">继续导入</button></div>`;
+  collectDone(kind,file.name);
+  toast("导入成功："+file.name+" 已加入知识准入队列。","ts");
+  const more=document.querySelector("[data-more]"); if(more)more.addEventListener("click",()=>uploadModal(kind));
+}
+function connectModal(type){
+  const cfg={host:type.includes("Oracle")?"10.20.1.35":"10.20.1.33",port:type.includes("Oracle")?"1521":"3306",db:type.includes("Oracle")?"retail":"retail",user:"readonly"};
+  openModal("直连业务数据库 · "+type,
+    `<div class="formRow"><div class="fld2"><label>数据库类型</label><input value="${type}" readonly style="background:#f6f9fd"></div><div class="fld2"><label>主机 / 端口</label><div style="display:flex;gap:8px"><input value="${cfg.host}" id="cfHost" style="flex:1;min-width:0"><input value="${cfg.port}" id="cfPort" style="width:76px"></div></div></div>
+     <div class="formRow"><div class="fld2"><label>数据库名</label><input value="${cfg.db}" id="cfDb"></div><div class="fld2"><label>账号（只读）</label><input value="${cfg.user}" id="cfUser"></div></div>
+     <div class="formRow"><div class="fld2"><label>密码</label><input type="password" value="••••••••" id="cfPw"></div></div>
+     <div id="cfStatus"></div>`,
+    `<button class="btn2" data-close="1">取消</button><button class="btn" id="cfTest">测试连接</button>`,{});
+  const st=document.getElementById("cfStatus");
+  document.getElementById("cfTest").addEventListener("click",function(){
+    this.classList.add("loading"); this.innerHTML='<span class="spinBtn"></span>测试连接中…'; this.disabled=true;
+    setTimeout(()=>{
+      st.innerHTML=`<div class="connStatus" style="color:var(--ok)"><svg viewBox="0 0 24 24" width="16" height="16" fill="none"><path d="M7.5 12.5l3 3 6-6.5" stroke="#1d9b62" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>连接成功 · 延迟 23ms · 服务端版本 ${type}</div>`;
+      this.classList.remove("loading"); this.innerHTML='<span class="spinBtn"></span>连接并拉取 Schema'; this.classList.add("loading"); this.disabled=true; this.style.background="linear-gradient(135deg,var(--ok),#3cbc7f)";
+      st.innerHTML=`<div class="connStatus" style="color:var(--soft)"><span class="spinBtn" style="border-color:rgba(47,103,255,.2);border-top-color:var(--pri)"></span>正在拉取实时表结构与数据字典（4 表 · 128 字段）…</div>`;
+      setTimeout(()=>{collectDb(type,"conn"); closeModal(); toast("已获取 "+type+" 表结构快照，进入知识准入队列。","ts")},1200);
+    },700);
+  });
+}
+function collectDb(type,mode){
+  const label=(mode==="conn"?"直连获取":"上传文件")+" · "+type+" 表结构快照";
+  const aid="A"+(9+collectSeq), pid="P"+(4+collectSeq); collectSeq++;
+  KB.assets.push({id:aid,cat:"架构文档",name:label,meta:"自动获取 · "+type+" · "+(mode==="conn"?"数据库直连":"表结构文件")+" · 待准入审核",status:"待准入",owner:"自动获取",date:"2026-09"});
+  KB.admits.push({id:pid,kind:"自动获取",ref:aid,name:label,why:(mode==="conn"?"直连 "+type+" 拉取表结构与数据字典":"上传 "+type+" 表结构文件")+" · 待准入",from:"自动获取",date:"09-27",status:"待准入"});
+  renderKBView();
+}
+let modalEsc=null;
+function openModal(title,body,foot,opts){
+  els.modalCard.className="modalCard"+(opts&&opts.lg?" lg":"");
+  els.modalCard.innerHTML=`<div class="mHead"><strong>${title}</strong><button class="mClose" data-close="1" aria-label="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div><div class="mBody">${body}</div>${foot?`<div class="mFoot">${foot}</div>`:""}`;
+  els.modalRoot.classList.add("open");
+  modalEsc=e=>{if(e.key==="Escape")closeModal()};
+  document.addEventListener("keydown",modalEsc);
+}
+function closeModal(){els.modalRoot.classList.remove("open"); if(modalEsc)document.removeEventListener("keydown",modalEsc); modalEsc=null}
+els.modalScrim.addEventListener("click",closeModal);
+function route(){
+  const h=(location.hash.replace("#/","")||"mdl");
+  state.view=VIEWS.some(v=>v.key===h)?h:"mdl";
+  document.querySelectorAll(".view").forEach(v=>v.classList.remove("on"));
+  $("view-"+state.view).classList.add("on");
+  renderNav();
+}
+/*__FLOW__*/
+const RSTEPS=[
+  {key:"parse",title:"需求受理 · 业务语义分析",desc:"抽取指标 / 维度 / 主体 / 时间 / 敏感信息（MDL 语义上下文输入）"},
+  {key:"gate",title:"口径命中校验（硬门禁）",desc:"必须命中 MDL 已上架口径，否则拒绝生成"},
+  {key:"linking",title:"MDL 语义对齐",desc:"业务词 → MDL 模型 / 字段 / 枚举（未建模对象不可见，逐级收敛）"},
+  {key:"confirm",title:"分析结果确认",desc:"交用户确认语义理解无误后，才允许执行生成"},
+  {key:"sql",title:"SQL 生成（MDL 受控）",desc:"经 MDL 规划生成，仅引用 MDL 可见对象（no schema-guessing）"},
+  {key:"static",title:"dry-plan 门禁 · MDL 预演 + 语法",desc:"Wren 引擎 dry-plan 预演 + SQLGlot 解析 + 可见对象比对"},
+  {key:"semantic",title:"语义门禁 · 口径与聚合",desc:"GROUP BY 完整性 / 口径引用 / 敏感策略"},
+  {key:"sample",title:"样本执行 · 测试数据",desc:"只读测试库执行 + 行数阈值 + 超时保护"}
+];
+function parse(nl){
+  const r={metrics:[],dims:[],entities:[],time:"",sensitive:[]};
+  const m=(arr,cat)=>arr.forEach(x=>{if(nl.includes(x.w[0]))cat.push({term:x.w[0],hit:x.hit,tables:x.tables||[],fields:x.fields||[]})});
+  m(LEX.metrics,r.metrics); m(LEX.dims,r.dims); m(LEX.entities,r.entities); m(LEX.sensitive,r.sensitive);
+  const tm=nl.match(/(\d{1,2})-(\d{1,2})月|近\s*(\d+)\s*天/); if(tm)r.time=tm[0];
+  if(nl.includes("华东"))r.time="2026-07-01 ~ 2026-09-30"; if(nl.includes("近"))r.time="近 30 天";
+  return r;
+}
+function gate(p){
+  const hitDicts=p.parse.metrics.map(x=>{if(x.hit&&x.hit.startsWith("口径")){const d=KB.dicts.find(v=>v.term===x.hit.replace("口径·","")); return {term:x.term,dict:d}}return null}).filter(Boolean);
+  const approved=hitDicts.filter(x=>x.dict&&x.dict.status==="已准入");
+  const pending=hitDicts.filter(x=>x.dict&&x.dict.status!=="已准入");
+  const missing=p.parse.metrics.filter(x=>!x.hit);
+  const reasons=[];
+  missing.forEach(x=>reasons.push("未定义口径：「"+x.term+"」在知识库无任何已准入口径，禁止猜测生成（请先由数据产品组定义并准入）"));
+  pending.forEach(x=>reasons.push("口径未准入：「"+x.term+"」（"+x.dict.measure+" v"+x.dict.version+"）处于「"+x.dict.status+"」，准入前不可被引用"));
+  return {approved,pending,missing,reject:approved.length===0,reasons};
+}
+function linking(p){
+  const L1=[],L2=[],L3=[],L4=[];
+  const push=(arr,o)=>arr.push(o);
+  p.gate.approved.forEach(a=>push(L1,{name:a.dict.base,why:"口径「"+a.dict.term+"」base 表（闭集核心）",score:95}));
+  p.parse.dims.forEach(x=>{if(x.hit)push(L1,{name:x.hit.replace("表·",""),why:"维度语料：GROUP BY 分组",score:88})});
+  p.parse.entities.forEach(x=>{if(x.hit)push(L1,{name:x.hit.replace("表·",""),why:"主体语料：JOIN 关联",score:84})});
+  const seenL1={};
+  const L1u=L1.filter(o=>seenL1[o.name]?false:(seenL1[o.name]=true));
+  L1u.forEach(o=>{const t=KB.tables.find(x=>x.name===o.name); if(t){o.desc=t.comment; o.down=t.status==="已准入"?"":"（未准入）"}});
+  const colSet=[];
+  p.gate.approved.forEach(a=>{const t=KB.tables.find(x=>x.name===a.dict.base); (a.dict.cols||[]).forEach(c=>{const f=t&&t.fields.find(y=>y.name===c); if(f)colSet.push({t:a.dict.base,n:c,why:"口径「"+a.dict.term+"」关联列"})})});
+  p.parse.dims.forEach(x=>{x.fields&&x.fields.forEach(f=>{const t=x.tables[0]; if(t)colSet.push({t,n:f,why:"维度字段"})})});
+  const seenC={};
+  colSet.filter(o=>{const k=o.t+"."+o.n; return seenC[k]?false:(seenC[k]=true)}).forEach(o=>{
+    const t=KB.tables.find(x=>x.name===o.t); const f=t&&t.fields.find(y=>y.name===o.n);
+    if(f){push(L2,{name:o.t+"."+o.n,why:o.why,score:90}); push(L3,{name:o.t+"."+o.n,meta:f.type+" · "+f.comment+" · 敏感级 "+f.sens+(f.status==="待审核"?" · 待准入":""),score:82})}
+  });
+  if(p.nl.includes("华东"))push(L4,{name:"dim_store.region_name ∈ {华东/华南/华北/西南}",why:"用户提及「华东」命中枚举值（D5 归属门店 v2.1）",score:80});
+  if(p.nl.includes("退款"))push(L4,{name:"dwd_order_di.refund_flag ∈ {0,1}",why:"用户提及「退款」命中枚举值，需排除退款订单",score:80});
+  return {levels:[{name:"L1 模型召回（MDL）",items:L1u},{name:"L2 字段定位（MDL）",items:L2},{name:"L3 字段元数据 / 样本",items:L3},{name:"L4 枚举值核对",items:L4}]};
+}
+function genSql(p){
+  const approved=p.gate.approved.map(a=>a.dict);
+  const hasRep=approved.some(d=>d.id==="D1"||d.id==="D2");
+  const hasWrite=approved.some(d=>d.id==="D3"||d.id==="D4");
+  if(p.gate.reject||(!hasRep&&!hasWrite)){
+    return {draft:"-- 未命中任何已准入口径，禁止生成 SQL\n-- 请先在「知识储备」定义并准入相关口径（口径即代码）",blocked:true,used:{tables:[],columns:[]},why:p.gate.reasons.join("\n")};
+  }
+  if(hasRep){
+    const withRefund=KB.tables.find(t=>t.name==="dwd_order_di").fields.find(f=>f.name==="refund_flag");
+    const refundLine=withRefund.status==="已审核"?"    AND refund_flag = 0            -- 口径：复购统计排除退款订单（KB-GROWTH-3.4）":"    -- refund_flag 待准入，暂不纳入过滤条件（口径 v3.4 要求排除，字段准入后自动生效）";
+    const draft=`-- 依据（MDL 闭集）：dwd_order_di · dim_store · 口径 repurchase_users / repurchase_rate v3.4
+WITH order_base AS (
+  SELECT dt, store_id, member_id
+  FROM dwd_order_di
+  WHERE dt BETWEEN '2026-07-01' AND '2026-09-30'
+${refundLine}
+),
+repurchase AS (
+  SELECT store_id, DATE_FORMAT(dt, '%Y-%m') AS stat_month, member_id
+  FROM order_base
+  GROUP BY 1,2,3
+  HAVING COUNT(1) >= 2              -- 口径：统计期内购买 ≥ 2 次
+)
+SELECT s.region_name,
+       r.stat_month,
+       COUNT(DISTINCT r.member_id) AS repurchase_users
+FROM repurchase r
+JOIN dim_store s ON s.store_id = r.store_id
+GROUP BY 1,2
+ORDER BY 1,2;`;
+    const cols=[{t:"dwd_order_di",n:"dt"},{t:"dwd_order_di",n:"store_id"},{t:"dwd_order_di",n:"member_id"},{t:"dim_store",n:"store_id"},{t:"dim_store",n:"region_name"}];
+    if(withRefund.status==="已审核")cols.push({t:"dwd_order_di",n:"refund_flag"});
+    return {draft,blocked:false,used:{tables:["dwd_order_di","dim_store"],columns:cols},why:"闭集引用：仅命中口径 base 表 + 维度表（已准入对象）"};
+  }
+  if(hasWrite){
+    const draft=`-- 依据（MDL 闭集）：ads_coupon_order_di · dim_store · 口径 writeoff_gmv / coupon_cost v1.2
+SELECT s.region_name,
+       SUM(w.writeoff_gmv) AS writeoff_gmv,
+       SUM(w.coupon_cost)  AS coupon_cost
+FROM ads_coupon_order_di w
+JOIN dim_store s ON s.region_id = w.region_id
+WHERE w.dt BETWEEN '2026-07-01' AND '2026-09-30'
+GROUP BY 1
+ORDER BY 1;`;
+    return {draft,blocked:false,used:{tables:["ads_coupon_order_di","dim_store"],columns:[{t:"ads_coupon_order_di",n:"writeoff_gmv"},{t:"ads_coupon_order_di",n:"coupon_cost"},{t:"ads_coupon_order_di",n:"dt"},{t:"ads_coupon_order_di",n:"region_id"},{t:"dim_store",n:"region_id"},{t:"dim_store",n:"region_name"}]},why:"闭集引用：营销核销口径 base 表 + 维度表（已准入对象）"};
+  }
+}
+function gates(p){
+  const out=[];
+  if(p.sql.blocked){out.push({name:"dry-plan 门禁（MDL 预演 + 语法）",status:"失败",note:"生成被硬门禁拦截："+p.sql.why.split("\n")[0]}); const bNote=[]; if(p.nl.includes("手机号"))bNote.push("输出含手机号等敏感字段，未配置脱敏策略，禁止明文交付"); if(p.gate.pending.length)bNote.push("存在待准入口径「"+p.gate.pending.map(x=>x.term).join(" / ")+"」，准入前不可被引用"); out.push({name:"语义门禁（口径 / 聚合）",status:bNote.length?"失败":"跳过",note:bNote.length?bNote.join("；"):"因生成被拦截，语义层无检查对象"}); out.push({name:"样本执行（测试数据）",status:"跳过",note:"因门禁未通过而跳过"}); return out;}
+  const sNote=[];
+  if(!/^--[\s\S]*SELECT[\s\S]*;$/m.test(p.sql.draft))sNote.push("语法结构异常");
+  p.sql.used.tables.forEach(t=>{const tb=KB.tables.find(x=>x.name===t); if(!tb||tb.status!=="已准入")sNote.push("AST 白名单比对：引用表 "+t+" 未准入/已下架")});
+  p.sql.used.columns.forEach(c=>{const tb=KB.tables.find(x=>x.name===c.t); const f=tb&&tb.fields.find(y=>y.name===c.n); if(f&&f.status==="待审核")sNote.push("AST 白名单比对：引用列 "+c.t+"."+c.n+" 为待准入字段")});
+  out.push({name:"dry-plan 门禁（MDL 预演 + 语法）",status:sNote.length?"失败":"通过",note:sNote.length?sNote.join("；"):"Wren dry-plan 预演通过；SQLGlot parse 通过；引用表列均 ∈ MDL 可见闭集且为已发布对象（MDL 预演 + AST 提取比对）"});
+  const mNote=[];
+  if(!/GROUP BY/.test(p.sql.draft)&&/COUNT|SUM|AVG/.test(p.sql.draft))mNote.push("聚合查询缺少 GROUP BY");
+  if(p.nl.includes("手机号"))mNote.push("输出含手机号等敏感字段，未配置脱敏策略，禁止明文交付");
+  if(p.gate.pending.length)mNote.push("存在待准入口径「"+p.gate.pending.map(x=>x.term).join(" / ")+"」，未纳入本次生成（准入后自动生效）");
+  out.push({name:"语义门禁（口径 / 聚合）",status:mNote.length?"失败":"通过",note:mNote.length?mNote.join("；"):"GROUP BY 与聚合一致；引用的表 / 列 / 口径均为已准入且口径引用完整（dbt MetricFlow 三层校验思路）"});
+  out.push({name:"样本执行（测试数据）",status:"通过",note:"基于测试数据抽样 3 行 / 共 128 行，行数与口径校验一致；超时保护 500ms 未触发"});
+  return out;
+}
+async function analyze(){
+  const nl=els.nlInput.value.trim(); if(!nl){toast("请先输入业务需求。","te");return}
+  state.nl=nl;
+  const p={nl};
+  btnBusy($("analyzeBtn"),"正在分析…");
+  await loading("正在执行业务语义分析…");
+  p.parse=parse(nl); p.gate=gate(p); p.linking=linking(p); p.phase="confirm"; state.req=p;
+  btnIdle($("analyzeBtn"));
+  renderReqSteps(p);
+  if(p.gate.reject)toast("硬门禁：未命中已准入口径，禁止生成。","te");
+  else toast("语义分析完成，请确认分析结果后继续。","ti");
+}
+async function continueGen(){
+  const p=state.req; if(!p)return;
+  p.phase="running";
+  await loading("正在执行 SQL 生成与三层门禁…");
+  p.sql=genSql(p); p.gates=gates(p); p.step=4;
+  renderReqSteps(p);
+  await new Promise(r=>setTimeout(r,400));
+  p.phase="done"; p.step=7; renderReqSteps(p);
+  if(!p.sql.blocked&&p.gates.every(g=>g.status==="通过")){
+    els.sqlEditor.value=p.sql.draft;
+    autoResize(els.sqlEditor);
+    toast("三层门禁全部通过，SQL 已带入「SQL 联调 · 交付」模块。","ts");
+    setTimeout(()=>{location.hash="#/test"; route();},600);
+  } else {
+    toast("链路未通过：请先在「语义层 · MDL 字典 / 知识储备」治理知识后重试。","te");
+  }
+}
+function renderReqSteps(p){
+  if(!p){els.reqSteps.innerHTML=`<div class="card"><div class="item warn"><strong>等待输入</strong><div class="sub">输入业务需求后点击「开始业务语义分析」，先产出分析结果（要素 / 口径命中 / Schema Linking），确认无误后点击「确认无误，生成 SQL」执行生成与门禁。</div></div></div>`;return}
+  const fail=p.gate.reject||(p.gates&&p.gates.some(g=>g.status==="失败"));
+  const doneCount=p.phase==="done"?8:(p.phase==="running"?4:p.phase==="confirm"?3:0);
+  els.reqSteps.innerHTML=RSTEPS.map((s,i)=>{
+    const done=p.phase==="done"?true:(i<doneCount);
+    const now=!done&&i===doneCount;
+    const cls=done?"pass":now?"now":"wait";
+    let body="";
+    if(i===0)body=`<div class="chipRow">${[["指标",p.parse.metrics.map(x=>x.term)],["维度",p.parse.dims.map(x=>x.term)],["主体",p.parse.entities.map(x=>x.term)],["时间",[p.parse.time]]].filter(x=>x[1].length).map(x=>`<div class="chip"><strong>${x[0]}</strong> · ${x[1].join(" / ")}</div>`).join("")||`<div class="chip">未识别到明确要素</div>`}${p.parse.sensitive.length?`<div class="chip" style="background:var(--badBg);border-color:#f1c8c8;color:var(--bad)">敏感 · ${p.parse.sensitive.map(x=>x.label).join(" / ")}</div>`:""}</div>`;
+    if(i===1)body=`${p.gate.approved.length?`<div class="hitList">${p.gate.approved.map(a=>`<div class="hit"><span class="kbType">口径</span><span class="hitName">${a.dict.term}</span><span class="hitWhy">${a.dict.measure} v${a.dict.version} · base ${a.dict.base} · owner ${a.dict.owner}</span><span class="hitScore">已准入</span></div>`).join("")}</div>`:""}
+      ${p.gate.reject?`<div class="item bad"><strong>硬门禁：未命中任何已准入口径 — 禁止生成 SQL</strong><div class="sub">${p.gate.reasons.map(r=>"· "+r).join("<br>")}</div><div class="sub" style="color:var(--warn);font-weight:700">治理指引：前往「知识储备」定义 / 准入对应口径后再运行。</div></div>`:`<div class="item ok">口径命中校验通过（${p.gate.approved.length} 个已准入口径）。</div>`}`;
+    if(i===2)body=p.linking.levels.map(lv=>`<div class="sub" style="font-weight:800;color:var(--pri);margin:2px 0 4px">${lv.name}</div><div class="hitList">${lv.items.length?lv.items.map(h=>`<div class="hit"><span class="hitName">${h.name}</span><span class="hitWhy">${h.why||h.desc||""}${h.down?" "+h.down:""}${h.meta?" · "+h.meta:""}</span>${h.score?`<span class="hitScore">${h.score}%</span>`:""}</div>`).join(""):`<div class="hit"><span class="hitName" style="color:var(--faint)">无命中</span></div>`}</div>`).join("")||`<div class="item bad">Schema Linking 无可用上下文（口径未准入）。</div>`;
+    if(i===3)body=p.gate.reject?`<div class="item bad">硬门禁拒绝，无需确认 — 请先治理知识。</div>`:`<div class="item warn"><strong>请确认语义分析结果</strong><div class="sub">系统识别到 ${p.gate.approved.length} 个已准入口径 + ${p.linking.levels[0].items.length} 张命中表。确认理解无误后，点击下方按钮执行自然语言 → SQL 生成。</div><div style="margin-top:8px"><button class="btn" data-confirm="1">确认无误，生成 SQL</button></div></div>`;
+    if(i===4)body=p.sql? (p.sql.blocked?`<div class="item bad"><strong>生成受限 — 闭集为空</strong><div class="sub">${p.sql.why.split("\n")[0]}</div></div>`:`<div class="code">${esc(p.sql.draft)}</div><div class="sub">${p.sql.why} · 引用表列：${p.sql.used.tables.join(" / ")}</div>`) : `<div class="item wait">待用户确认后生成</div>`;
+    if(i===5||i===6||i===7){const g=p.gates&&p.gates[i-5]; body=g?`<div class="testList"><div class="test" style="${g.status==="失败"?"background:var(--badBg);border-color:#f1c8c8":g.status==="通过"?"background:var(--okBg);border-color:#c8edd9":""}"><span class="tName">${g.name}</span>${badge(g.status)}<span class="tNote">${g.note}</span></div></div>`:`<div class="item wait">待生成后执行</div>`;}
+    return `<div class="stepCard ${cls}"><div class="stHead"><span class="stTitle">${i+1}. ${s.title}</span><span class="stDesc">${s.desc}</span>${badge(done?"已完成":now?(i===3&&p.phase==="confirm"?"待确认":"进行中"):"待执行")}</div><div class="stBody">${body}</div></div>`;
+  }).join("");
+}
+function resultViz(sql){
+  if(/stat_month|DATE_FORMAT/.test(sql))return {title:"按月复购用户数（示例数据）",unit:"人",rows:[{name:"7 月",value:12800},{name:"8 月",value:14320},{name:"9 月",value:15680}],head:["region_name","stat_month","repurchase_users"],body:[["华东","2026-07","4,852"],["华东","2026-08","5,210"],["华东","2026-09","5,738"],["华南","2026-07","3,954"],["华南","2026-08","4,103"]]};
+  if(/writeoff_gmv/.test(sql))return {title:"按区域核销 GMV（示例数据）",unit:"万元",rows:[{name:"华东",value:4280},{name:"华南",value:3560},{name:"华北",value:2890},{name:"西南",value:1980}],head:["region_name","writeoff_gmv","coupon_cost"],body:[["华东","4,280.6 万","316.2 万"],["华南","3,560.2 万","268.9 万"],["华北","2,890.4 万","201.5 万"],["西南","1,980.3 万","142.7 万"]]};
+  return {title:"测试库抽样结果（示例数据）",unit:"行",rows:[{name:"样本 A",value:64},{name:"样本 B",value:32},{name:"样本 C",value:32}],head:["check","result"],body:[["行数校验","128 行一致"],["数值抽查","3/3 通过"]]};
+}
+function barSVG(rows,unit){
+  const W=560,H=192,P={l:46,r:12,t:18,b:30};
+  const max=Math.max(...rows.map(r=>r.value))*1.12;
+  const iw=W-P.l-P.r, ih=H-P.t-P.b;
+  const n=rows.length, gap=iw/n, bw=Math.min(54,gap*0.52);
+  let grid="",labels="",bars="";
+  for(let s=0;s<=4;s++){const y=P.t+ih-ih*s/4; const v=Math.round(max*s/4); grid+=`<line x1="${P.l}" y1="${y}" x2="${W-P.r}" y2="${y}" stroke="#edf2fb" stroke-width="1"/>`; labels+=`<text x="${P.l-6}" y="${y+4}" text-anchor="end" font-size="10" fill="#8a96aa">${v}</text>`}
+  rows.forEach((r,i)=>{const x=P.l+gap*i+(gap-bw)/2; const h=Math.max(4,r.value/max*ih); const y=P.t+ih-h; bars+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="4" fill="${i%2?"#7aa3ff":"#2f67ff"}"/><text x="${x+bw/2}" y="${Math.max(12,y-6)}" text-anchor="middle" font-size="10" font-weight="700" fill="#1e2b3d">${r.value}</text><text x="${x+bw/2}" y="${H-P.b+14}" text-anchor="middle" font-size="10.5" fill="#66758b">${r.name}</text>`});
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-height:200px;display:block">${grid}${labels}${bars}</svg>`;
+}
+function runTestSQL(){
+  const sql=els.sqlEditor.value.trim(); if(!sql){toast("请先输入 SQL（可从需求分析模块带入）。","te");return}
+  const t=SRC.test;
+  btnBusy($("tRunBtn"),"联调中…");
+  const notes=[];
+  if(!/SELECT/i.test(sql))notes.push("语法解析失败：未识别到 SELECT 语句");
+  if(notes.length===0&&/refund_flag/.test(sql)&&KB.tables.find(x=>x.name==="dwd_order_di").fields.find(f=>f.name==="refund_flag").status!=="已审核")notes.push("AST 白名单：refund_flag 仍为待准入字段，测试库联调拦截");
+  if(notes.length===0&&/COUNT|SUM/.test(sql)&&!/GROUP BY/i.test(sql))notes.push("语义校验：聚合查询缺少 GROUP BY");
+  const row={i:state.tLog.length+1,stage:notes.length?"联调失败":"联调通过",result:notes.length?"失败":"通过",note:notes.length?notes.join("；"):"测试库 "+t.sample+" 执行成功，行数与口径校验一致，耗时 46ms",ts:new Date().toTimeString().slice(0,5)};
+  state.tLog.push(row); renderTestView();
+  const gatesHtml=`<div class="testList">${[["dry-plan + AST 白名单",notes.length?"失败":"通过"],["语义 + 样本执行",notes.length?"失败":"通过"]].map(g=>`<div class="test" style="${g[1]==="失败"?"background:var(--badBg);border-color:#f1c8c8":"background:var(--okBg);border-color:#c8edd9"}"><span class="tName">${g[0]}</span>${badge(g[1])}<span class="tNote">${g[1]==="通过"?"测试库执行成功，行数与口径校验一致；超时保护未触发":"联调未通过：请修正 SQL 或先在语义层 · MDL 字典 / 知识储备中完成准入"}</span></div>`).join("")}</div>`;
+  els.tResult.innerHTML=gatesHtml+(notes.length?"":`<div class="resPanel">
+    <div class="resHead"><strong>联调结果（${t.name} · 只读执行）</strong>${badge("通过")}<span style="font-size:11px;color:var(--faint)">示例数据 · 用于核查确认</span></div>
+    <div class="resGrid">
+      <div class="resStat"><div class="v">46ms</div><div class="l">执行耗时</div></div>
+      <div class="resStat"><div class="v">128 行</div><div class="l">返回行数</div></div>
+      <div class="resStat"><div class="v">100%</div><div class="l">门禁通过率</div></div>
+    </div>
+    <div class="barWrap"><div class="t">${resultViz(sql).title} <em>· 单位 ${resultViz(sql).unit}</em></div>${barSVG(resultViz(sql).rows,resultViz(sql).unit)}</div>
+    <div class="sub" style="font-weight:800;color:var(--pri);margin:4px 0 6px">结果明细（示例数据 · 前 ${resultViz(sql).body.length} 行）</div>
+    <div style="overflow-x:auto"><table class="dataTbl"><colgroup>${resultViz(sql).head.map((_,i)=>`<col style="width:${Math.round(100/resultViz(sql).head.length)}%">`).join("")}</colgroup><thead><tr>${resultViz(sql).head.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${resultViz(sql).body.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+    <div class="sub" style="margin-top:8px;color:var(--soft)">核查提示：返回行数与口径基线一致、数值在容差范围内 → 可点击「导出 SQL 脚本」交付生产；不一致则回到编辑区修正后重新联调（迭代记录见左栏）。</div>
+  </div>`);
+  els.tExportBtn.disabled=notes.length>0;
+  btnIdle($("tRunBtn"));
+  toast(notes.length?"联调未通过，已记录迭代 #"+row.i+"。":"联调通过，结果已可视化呈现，可核查后导出。",notes.length?"te":"ts");
+}
+function exportSql(){
+  const sql=els.sqlEditor.value.trim(); if(!sql){toast("无 SQL 可导出。","te");return}
+  const header=`-- 数据需求智能分析助手 · 生产环境 SQL 脚本\n-- 依据口径：${state.req&&state.req.gate?state.req.gate.approved.map(a=>a.dict.measure).join(" / "):"见联调记录"}\n-- 已通过：MDL 语义层 → 语义确认 → dry-plan 门禁 → 测试库联调\n-- 生成时间：${new Date().toLocaleString("zh-CN")}\n\n`;
+  const blob=new Blob([header+sql+"\n"],{type:"text/sql;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="生产环境-SQL-"+new Date().toISOString().slice(0,10)+".sql"; a.click();
+  URL.revokeObjectURL(a.href);
+  toast("SQL 脚本已导出（含口径依据与门禁记录头注）。","ts");
+}
+/*__INIT__*/
+function admitOne(id,ok){
+  const a=KB.admits.find(x=>x.id===id); if(!a)return;
+  a.status=ok?"已准入":"已拒绝";
+  if(a.ref==="T1.refund_flag"){KB.tables.find(t=>t.id==="T1").fields.find(f=>f.name==="refund_flag").status="已审核"; toast("字段 refund_flag 已准入：复购口径将自动纳入退款排除过滤。","ts")}
+  else {const asset=KB.assets.find(x=>x.id===a.ref); if(asset){asset.status=a.status; toast((ok?"已准入：":"已拒绝：")+asset.name,ok?"ts":"te")}}
+  renderKBView(); renderDBView();
+}
+document.addEventListener("click",e=>{
+  const nav=e.target.closest(".navTab[data-view]"); if(nav){location.hash="#/"+nav.dataset.view; return}
+  const ad=e.target.closest("[data-admit]"); if(ad){admitOne(ad.dataset.admit,true); return}
+  const rj=e.target.closest("[data-reject]"); if(rj){admitOne(rj.dataset.reject,false); return}
+  const au=e.target.closest("[data-audit]"); if(au){const t=KB.tables.find(x=>x.id===au.dataset.audit); t&&(t.fields.find(f=>f.status==="待审核").status="已审核"); const a=KB.admits.find(x=>x.ref==="T1.refund_flag"); if(a)a.status="已准入"; renderDBView(); renderKBView(); toast("字段已准入：待审核标记清除，白名单放行。","ts"); return}
+  const tg=e.target.closest("[data-tog]"); if(tg){const t=KB.tables.find(x=>x.id===tg.dataset.tog); if(t){t.status=t.status==="已准入"?"已下架":"已准入"; toast((t.status==="已下架"?"表 "+t.name+" 已下架：AST 白名单将拦截其引用。":"表 "+t.name+" 已恢复上架。"),t.status==="已下架"?"te":"ts")} renderDBView(); return}
+  const cf=e.target.closest("[data-confirm]"); if(cf){continueGen(); return}
+  const cl=e.target.closest("[data-close]"); if(cl){closeModal(); return}
+  const up=e.target.closest("[data-upload]"); if(up){uploadModal(up.dataset.upload); return}
+  const ft=e.target.closest("[data-fetch]"); if(ft){const sel=document.getElementById("dbTypeSel"); const type=sel?sel.value:DB_TYPES[0]; if(ft.dataset.fetch==="conn")connectModal(type); else uploadModal("表结构文件"); return}
+  const act=e.target.closest("[data-action]"); if(act){const a=act.dataset.action;
+    if(a==="dbRefresh"){loading("正在经 Wren Engine 探测 Schema 差异…").then(()=>toast("探测完成：发现 1 处差异（dwd_order_di.refund_flag），已生成 MDL 修改候选。","ti"))}
+    else if(a==="dbSync"){loading("正在采集 Schema 并生成 MDL 修改候选…").then(()=>toast("MDL 修改候选已生成，待审核发布（deploy）后生效。","ts"))}
+    else if(a==="mdlDry"){loading("正在执行 dry_run 自检…").then(()=>toast("dry_run 自检通过：MDL "+MDL.version+" 语法与关系校验无异常。","ts"))}
+    else if(a==="mdlDeploy"){loading("正在重新部署 MDL…").then(()=>toast("MDL "+MDL.version+" 已重新部署，语义引擎生效。","ts"))}
+    return}
+  const mp=e.target.closest("[data-mdl-publish]"); if(mp){const h=MDL.history.find(x=>x.v===mp.dataset.mdlPublish); if(h){h.st="已发布"; MDL.version=h.v; toast("MDL "+h.v+" 已审核发布（deploy），新口径与字段即刻可被查询引用。","ts")} renderMDLView(); return}
+  const pr=e.target.closest("[data-poc-run]"); if(pr){runPoc(); return}
+  const pf=e.target.closest("[data-poc-filter]"); if(pf){state.poc.filter=pf.dataset.pocFilter; renderPOCView(); return}
+});
+$("analyzeBtn").addEventListener("click",analyze);
+$("demo1Btn").addEventListener("click",()=>{els.nlInput.value="华东门店 7-9 月复购用户数和复购率，按门店-月，用于区域经营周会"; toast("已填入示例 A。","ti")});
+$("demo2Btn").addEventListener("click",()=>{els.nlInput.value="近 30 天会员情绪指数 TOP100 名单（含手机号）"; toast("已填入示例 B。","ti")});
+$("demo3Btn").addEventListener("click",()=>{els.nlInput.value="本月核销 GMV 和券成本，按区域汇总"; toast("已填入示例 C。","ti")});
+$("tRunBtn").addEventListener("click",runTestSQL);
+$("tExportBtn").addEventListener("click",exportSql);
+els.sqlEditor.addEventListener("input",()=>autoResize(els.sqlEditor));
+autoResize(els.sqlEditor);
+window.addEventListener("hashchange",route);
+route(); renderMDLView(); renderKBView(); renderDBView(); renderTestView(); renderReqSteps(null); renderPOCView();
+/* ============ 工具函数 ============ */
+function tbl(id){return KB.tables.find(t=>t.id===id)}
+function dict(id){return KB.dicts.find(d=>d.id===id)}
+function kbType(t){return `<span class="kbType">${t}</span>`}
+function badge(text){const m={"已准入":["#1d9b62","#e8fbf1"],"已拒绝":["#d85959","#fff0f0"],"待准入":["#d98b14","#fff4df"],"已连接":["#1d9b62","#e8fbf1"],"通过":["#1d9b62","#e8fbf1"],"拒绝":["#d85959","#fff0f0"],"失败":["#d85959","#fff0f0"],"跳过":["#8a96aa","#f2f4f7"],"已完成":["#1d9b62","#e8fbf1"],"进行中":["#2f67ff","#eaf0ff"],"待执行":["#66758b","#eef2f7"],"待确认":["#d98b14","#fff4df"],"交付":["#1d9b62","#e8fbf1"],"已导出":["#1d9b62","#e8fbf1"]}[text]||["#66758b","#eef2f7"]; return `<span class="badge" style="color:${m[0]};background:${m[1]}">${text}</span>`}
+function esc(s){return String(s).replace(/[&<>]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[m]))}
+function loading(text){els.loadingText.textContent=text; els.loading.classList.add("open"); return new Promise(r=>setTimeout(()=>{els.loading.classList.remove("open"); r()},520))}
+function autoResize(el){el.style.height="auto"; el.style.height=Math.min(el.scrollHeight,480)+"px"}
+function toast(text,cls){
+  const ico=cls==="ts"?'<svg class="tIco" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#fff" stroke-width="2"/><path d="M7.5 12.5l3 3 6-6.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>':cls==="te"?'<svg class="tIco" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#fff" stroke-width="2"/><path d="M12 7v6M12 16.5v.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg>':'<svg class="tIco" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#fff" stroke-width="2"/><path d="M12 11v6M12 7.5v.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg>';
+  const n=document.createElement("div"); n.className="toast "+cls; n.innerHTML=ico+"<div>"+esc(text)+"</div>"; els.toasts.appendChild(n);
+  setTimeout(()=>{n.style.transition="opacity .3s"; n.style.opacity="0"; setTimeout(()=>n.remove(),320)},2800);
+}
+function btnBusy(btn,text){btn.dataset.old=btn.innerHTML; btn.classList.add("loading"); btn.innerHTML='<span class="spinBtn"></span>'+text; btn.disabled=true}
+function btnIdle(btn){btn.classList.remove("loading"); btn.innerHTML=btn.dataset.old||btn.innerHTML; btn.disabled=false}
+function dslSnippet(d){return `<span class="k">measure</span>: <span class="v">${d.measure}</span>
+<span class="k">desc</span>: ${d.desc}
+<span class="k">expr</span>: <span class="v">${d.expr}</span>
+<span class="k">base</span>: <span class="v">${d.base}</span>
+<span class="k">dims</span>: ${d.dims.join(" / ")}
+<span class="k">filters</span>: ${d.filters}
+${d.enum?`<span class="k">enum</span>: ${Object.keys(d.enum)[0]+" = "+d.enum[Object.keys(d.enum)[0]]}`:""}
+<span class="k">version</span>: <span class="v">${d.version}</span> · <span class="k">owner</span>: ${d.owner}`}
+/*__INIT__*/
+})();
+</script>
+</body>
+</html>

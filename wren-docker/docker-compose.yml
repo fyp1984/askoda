@@ -1,0 +1,54 @@
+services:
+  wren-postgres:
+    image: postgres:15-alpine
+    container_name: wren-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: test
+    ports:
+      # 宿主机用 15432，避开常用端口；容器内仍是 5432
+      - "15432:5432"
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - wren-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  wren-mcp:
+    image: ghcr.io/canner/wren-engine-ibis:latest
+    container_name: wren-mcp
+    restart: unless-stopped
+    depends_on:
+      wren-postgres:
+        condition: service_healthy
+    environment:
+      # 容器内同时跑 ibis-server 和 MCP server
+      ENABLE_MCP_SERVER: "true"
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "9000"
+      # MCP server 调 ibis-server（同容器内）
+      WREN_URL: localhost:8000
+      # 镜像 latest 的 Web UI 模块存在 import 冲突导致 MCP 启动崩溃，先禁用
+      WEB_UI_ENABLED: "false"
+      # 连接信息持久化文件（指向挂载目录，重启不丢）
+      CONNECTION_INFO_FILE: /workspace/connection_info.json
+      MDL_PATH: /workspace/mdl.json
+      MDL_WORKSPACE: /workspace
+    ports:
+      # MCP streamable-http 端点（WorkBuddy 接这里）
+      - "9000:9000"
+      # MCP 配置 Web UI（连接信息 / MDL 编辑器 / 只读模式）
+      - "9001:9001"
+      # ibis-server REST API；宿主机 8000 已被占用，改映射到 18000
+      - "18000:8000"
+    volumes:
+      - ./workspace:/workspace
+
+volumes:
+  wren-pgdata:

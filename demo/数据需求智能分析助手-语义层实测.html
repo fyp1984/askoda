@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>数据需求智能分析助手 · 语义层实测</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232f67ff'/%3E%3Ctext x='32' y='42' font-size='26' font-weight='800' font-family='Arial' fill='%23fff' text-anchor='middle'%3EC%3C/text%3E%3Ccircle cx='46' cy='20' r='6' fill='%23fff' opacity='.9'/%3E%3C/svg%3E">
+<style>
+:root{--bg:#f3f7fc;--panel:#ffffffee;--line:#dce6f3;--text:#1e2b3d;--soft:#66758b;--faint:#8a96aa;--pri:#2f67ff;--pri2:#6f6ee8;--priBg:#eaf0ff;--ok:#1d9b62;--okBg:#e8fbf1;--warn:#d98b14;--warnBg:#fff5e3;--bad:#d85959;--badBg:#fff0f0;--r:22px;--shadow:0 14px 34px rgba(24,49,95,.10)}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif;background:radial-gradient(circle at top right,rgba(47,103,255,.08),transparent 24%),radial-gradient(circle at top left,rgba(111,110,232,.07),transparent 20%),linear-gradient(180deg,#f8fbff,#eef4fb);color:var(--text)}
+button,input,textarea{font:inherit}button{cursor:pointer;border:none;transition:.18s ease}button:hover:not(:disabled){transform:translateY(-1px)}button:disabled{opacity:.42;cursor:not-allowed}
+.app{max-width:1380px;margin:0 auto;padding:16px;min-height:100vh}
+.header{position:sticky;top:12px;z-index:20;background:linear-gradient(180deg,#fffdfefe,#f8fafff3);border:1px solid #d9e4f2;border-radius:26px;box-shadow:var(--shadow);backdrop-filter:blur(12px);padding:14px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:space-between}
+.brand{display:flex;align-items:center;gap:14px;min-width:0}
+.logoWrap{width:50px;height:50px;border-radius:12px;overflow:hidden;flex:0 0 50px;display:flex;align-items:center;justify-content:center;background:#fff;border:1px solid #d4e0f3}
+.logo{width:100%;height:100%;object-fit:contain;padding:5px}
+.brandName{min-width:0}.brandName h1{margin:0;font-size:18px;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.brandName p{margin:2px 0 0;font-size:11.5px;color:var(--faint);letter-spacing:.03em}
+.nav{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.navTab{padding:9px 14px;border-radius:12px;background:#f3f7ff;border:1px solid #dce7f8;font-size:12.5px;font-weight:800;color:var(--soft)}
+.navTab.on{background:linear-gradient(135deg,#edf2ff,#f4f0ff);border-color:#bfd0ff;color:var(--pri);box-shadow:0 6px 14px rgba(47,103,255,.10)}
+.navTab small{display:block;font-size:10px;font-weight:500;color:var(--faint);margin-top:1px}
+.view{display:none}.view.on{display:block;margin-top:16px}
+.grid{display:grid;grid-template-columns:380px minmax(0,1fr);gap:16px;align-items:start}
+.gridL{display:flex;flex-direction:column;gap:14px;position:sticky;top:150px}
+.card{background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:var(--r);padding:16px;backdrop-filter:blur(10px)}
+.card h3{margin:0 0 12px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.card h3 small{text-transform:none;font-weight:400;color:var(--soft);letter-spacing:0}
+.item{background:#fbfdff;border:1px solid #e2eaf6;border-radius:14px;padding:10px 12px;font-size:12.5px;line-height:1.6}
+.item.ok{background:var(--okBg);border-color:#c8edd9}
+.item.warn{background:var(--warnBg);border-color:#f0dab0}
+.item.bad{background:var(--badBg);border-color:#f1c8c8}
+.itemRow{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.sub{color:var(--soft);font-size:12px;line-height:1.65;margin-top:4px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.tblHead{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.tblName{font-size:13.5px;font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.tblComment{font-size:11px;color:var(--faint);margin-top:2px}
+.fields{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.fld{display:flex;align-items:center;gap:8px;font-size:12px;line-height:1.4;flex-wrap:wrap}
+.fldName{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;min-width:92px}
+.fldType{color:var(--faint);font-size:11px;min-width:44px}
+.fldCmt{color:var(--soft);flex:1;min-width:110px}
+.code{background:#101a2d;border:1px solid #16223a;color:#d8e4ff;border-radius:14px;padding:12px;white-space:pre-wrap;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.65;max-height:320px}
+.code .k{color:#7fb3ff}.code .cm{color:#6b7a95;font-style:italic}
+.connBox{background:linear-gradient(135deg,#f6faff,#f2f7ff);border:1px solid #cfddf3;border-radius:16px;padding:12px 14px;font-size:12.5px}
+.connBox .row{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;padding:3px 0}
+.connBox .lab{color:var(--faint);font-size:11px}
+.badge{display:inline-flex;align-items:center;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:800;white-space:nowrap}
+.kbType{font-size:10.5px;padding:2px 8px;border-radius:999px;background:var(--priBg);color:var(--pri);font-weight:700}
+.flowTag{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;padding:2px 7px;border-radius:999px;background:var(--warnBg);color:var(--warn);border:1px solid #f0dab0;font-weight:700}
+.chip{padding:6px 10px;border-radius:10px;background:#f4f8ff;border:1px solid #dee8f7;font-size:12px;color:var(--soft)}
+.chipRow{display:flex;flex-wrap:wrap;gap:8px}
+.btn{padding:9px 14px;border-radius:12px;font-size:12.5px;font-weight:800;background:linear-gradient(135deg,var(--pri),#5a88ff);color:#fff;box-shadow:0 10px 20px rgba(47,103,255,.18)}
+.btn2{background:#fff;border:1px solid #dce6f4;color:var(--soft);padding:9px 14px;border-radius:12px;font-size:12.5px;font-weight:800}
+.miniLink{padding:6px 10px;border-radius:10px;background:#f5f8fd;border:1px solid #dfe7f7;color:var(--pri);font-size:11.5px;font-weight:700}
+textarea{width:100%;min-height:72px;border:1px solid #d9e4f4;border-radius:14px;padding:11px 13px;outline:none;background:#fff;font-size:14px;line-height:1.7;resize:vertical}
+#sqlEditor{min-height:170px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;line-height:1.7;resize:vertical;overflow:hidden}
+.dataTbl{width:100%;border-collapse:collapse;font-size:11.5px;background:#fff;border:1px solid #e2eaf6;border-radius:12px;overflow:hidden}
+.dataTbl th{background:#f2f6fc;color:var(--soft);font-weight:800;text-align:left;padding:7px 10px;border-bottom:1px solid #dce6f4}
+.dataTbl td{padding:6px 10px;border-bottom:1px solid #eef3fa;color:var(--text)}
+.dataTbl tr:last-child td{border-bottom:none}
+.resPanel{margin-top:12px;border:1px solid #d9e7f6;border-radius:16px;padding:14px;background:linear-gradient(180deg,#fbfdff,#f6faff)}
+.resHead{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.resGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}
+.resStat{background:#fff;border:1px solid #e2eaf6;border-radius:12px;padding:9px 11px;text-align:center}
+.resStat .v{font-size:18px;font-weight:800;color:var(--pri)}
+.resStat .l{font-size:11px;color:var(--faint);margin-top:2px}
+.barWrap{background:#fff;border:1px solid #e2eaf6;border-radius:12px;padding:10px;margin-bottom:12px}
+.barWrap .t{font-size:11.5px;color:var(--soft);margin:0 0 6px 4px;font-weight:700}
+.barWrap .t em{font-style:normal;color:var(--faint);font-weight:400}
+.steps{display:flex;flex-direction:column;gap:10px}
+.stepCard{background:#fff;border:1px solid #e2eaf6;border-radius:18px;padding:13px 15px;position:relative;overflow:hidden}
+.stepCard:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:#dde6f4}
+.stepCard.now{background:linear-gradient(180deg,#f4f8ff,#fbfdff);border-color:#bfd0ff;box-shadow:0 12px 26px rgba(47,103,255,.09)}.stepCard.now:before{background:var(--pri)}
+.stepCard.pass{background:#fbfefc;border-color:#d5eadf}.stepCard.pass:before{background:var(--ok)}
+.stepCard.fail{background:#fffafa;border-color:#f0cdcd}.stepCard.fail:before{background:var(--bad)}
+.stepCard.wait{opacity:.62}
+.stHead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.stTitle{font-size:13.5px;font-weight:800}
+.stDesc{font-size:11px;color:var(--faint);letter-spacing:.03em;margin-top:2px}
+.stBody{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.viewHead{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.viewHead h2{margin:0;font-size:17.5px;letter-spacing:-.01em;font-weight:800;color:var(--text)}
+.viewHead .vhSub{margin:4px 0 0;font-size:12px;color:var(--faint);line-height:1.6}
+.vhSteps{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.vhStep{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:5px 10px;border-radius:999px;background:#fff;border:1px solid #dce6f4;color:var(--soft)}
+.vhStep.on{background:var(--priBg);border-color:#c3d6ff;color:var(--pri);font-weight:700}
+.liveTag{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;color:var(--ok);background:var(--okBg);border:1px solid #c8edd9;padding:5px 11px;border-radius:999px}
+.liveTag .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.objChip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:5px 9px;border-radius:10px;background:#f4f8ff;border:1px solid #dee8f7;margin:3px}
+.objChip .ot{font-size:10px;font-weight:800;padding:1px 6px;border-radius:6px;background:var(--priBg);color:var(--pri)}
+.objChip.enum{background:#fff5e3;border-color:#f0dab0}.objChip.enum .ot{background:#fff0d6;color:var(--warn)}
+.objChip.rule{background:#fbf0ff;border-color:#e3d4f5}.objChip.rule .ot{background:#f3e9fe;color:#7a4ec0}
+.gate{display:flex;align-items:center;gap:10px;background:#fbfdff;border:1px solid #e2eaf6;border-radius:12px;padding:9px 12px;font-size:12.5px;flex-wrap:wrap;margin-top:10px}
+.gate .gName{font-weight:800}
+.archWrap{background:#fff;border:1px solid #e2eaf6;border-radius:16px;padding:8px;overflow-x:auto}
+.archWrap svg{display:block;min-width:920px;width:100%}
+.ovCard{border:1px solid #e2eaf6;border-radius:14px;padding:11px 13px;background:#fbfdff}
+.ovCard h4{margin:0 0 4px;font-size:13px;color:var(--pri)}
+.ovCard p{margin:0;font-size:11.5px;color:var(--soft);line-height:1.6}
+.ovCard .tg{font-size:10px;font-weight:800;padding:2px 7px;border-radius:999px;margin-left:6px}
+.tagUsed{background:var(--okBg);color:var(--ok);border:1px solid #c8edd9}
+.tagOpt{background:var(--warnBg);color:var(--warn);border:1px solid #f0dab0}
+.loading{position:fixed;inset:0;z-index:30;display:none}
+.loading.open{display:block}
+.scrim{position:absolute;inset:0;background:rgba(16,30,55,.35);backdrop-filter:blur(3px)}
+.loadingBox{position:absolute;inset:0;display:grid;place-items:center}
+.loadingInner{min-width:300px;padding:22px 26px;border-radius:24px;background:#fff;border:1px solid #d9e4f2;box-shadow:0 22px 60px rgba(22,41,80,.22);text-align:center}
+.spin{width:36px;height:36px;border:3px solid rgba(47,103,255,.15);border-top-color:var(--pri);border-radius:50%;margin:0 auto 14px;animation:s .8s linear infinite}@keyframes s{to{transform:rotate(360deg)}}
+.toastWrap{position:fixed;right:18px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:40}
+.toast{min-width:230px;max-width:360px;padding:12px 14px;border-radius:14px;color:#fff;box-shadow:0 14px 34px rgba(20,35,60,.16);font-size:12.5px;line-height:1.6;display:flex;gap:10px;align-items:flex-start;animation:tIn .3s cubic-bezier(.22,1,.36,1)}
+.ti{background:linear-gradient(135deg,var(--pri),#628cff)}.ts{background:linear-gradient(135deg,var(--ok),#3cbc7f)}.te{background:linear-gradient(135deg,var(--bad),#ea7b7b)}
+@keyframes tIn{from{opacity:0;transform:translateX(22px)}to{opacity:1;transform:none}}
+.view.on{animation:vFade .35s ease}@keyframes vFade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (max-width:1120px){.grid{grid-template-columns:1fr}.gridL{position:static}}
+@media (max-width:680px){.app{padding:10px}.header{flex-direction:column;align-items:flex-start}.brandName h1{white-space:normal}.nav{width:100%}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="header">
+    <div class="brand">
+      <div class="logoWrap"><img class="logo" src="CheersAI-Logo.png" alt="CheersAI" onerror="this.style.display='none'"></div>
+      <div class="brandName"><h1>数据需求智能分析助手</h1><p>Wren 语义层实测 · MDL 口径字典 · 受控 NL→SQL · 真实测试库执行</p></div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+  </header>
+
+  <div class="viewHead" style="margin-top:16px"><div><h2 style="font-size:14px">实时状态</h2>
+    <div class="vhSub" id="topStatus">正在连接本地 Wren MCP（127.0.0.1:9000）与测试库（wren-postgres :15432）…</div></div>
+    <div><span class="liveTag" id="liveTag"><span class="dot"></span> 实测环境</span></div></div>
+
+  <!-- 视图 1：语义层 · MDL 字典 -->
+  <section class="view" id="view-mdl">
+    <div class="viewHead"><div><h2>语义层 · MDL 字典 <span class="liveTag"><span class="dot"></span> 真实拉取</span></h2>
+      <div class="vhSub">以 Wren AI MDL 为基准：表、字段含义、业务口径（枚举）、表间关系写成 AI 可读的字典；未建模字段对 AI 不可见。本页数据由本地 Wren 引擎 get_manifest 实时返回。</div></div>
+      <div class="vhSteps"><span class="vhStep on">1 建模</span><span class="vhStep on">2 校验</span><span class="vhStep on">3 被查询引用</span></div></div>
+    <div class="grid">
+      <div class="gridL">
+        <div class="card"><h3>语义引擎状态 <small>Wren Engine · MCP · dry-plan</small></h3><div id="mdlEngine"></div></div>
+        <div class="card"><h3>语义规则 <small>knowledge/rules · 生成硬约束</small></h3><div id="mdlRules"></div></div>
+        <div class="card"><h3>关系与枚举 <small>表间关系 + 状态码值口径</small></h3><div id="mdlRels"></div></div>
+      </div>
+      <div class="card"><h3>MDL 模型资产 <small>模型 / 字段可见性 / 计算口径 / 关系</small></h3><div id="mdlModels"></div></div>
+    </div>
+  </section>
+
+  <!-- 视图 2：数据源接入 -->
+  <section class="view" id="view-db">
+    <div class="viewHead"><div><h2>数据源接入 <span class="liveTag"><span class="dot"></span> 真实表与行数</span></h2>
+      <div class="vhSub">业务数据库经 Wren Engine（ibis / Apache DataFusion）接入，22+ 数据源统一方言。下方为本环境真实测试库已建模的 6 张表及其真实行数（由本地库 COUNT 实时统计）。</div></div>
+      <div class="vhSteps"><span class="vhStep on">1 连接</span><span class="vhStep on">2 采集</span><span class="vhStep on">3 已建模可见</span></div></div>
+    <div class="grid">
+      <div class="gridL">
+        <div class="card"><h3>业务数据库接入 <small>Wren Engine 只读探测</small></h3><div id="dbConn"></div></div>
+      </div>
+      <div class="card"><h3>接入的表结构与数据字典 <small>真实行数 · 字段级含义</small></h3><div id="dbSchema"></div></div>
+    </div>
+  </section>
+
+  <!-- 视图 3：需求分析 · SQL 生成（核心） -->
+  <section class="view" id="view-req">
+    <div class="viewHead"><div><h2>业务需求分析 · SQL 生成 <span class="liveTag"><span class="dot"></span> 真实执行</span></h2>
+      <div class="vhSub">输入自然语言 → 业务语义分析 → MDL 语义对齐（引用可见对象）→ 确认 → 经 MDL dry-run 门禁 → Wren query 真实执行（落本地测试库）。当前 NL→SQL 规划器基于 MDL 确定性映射，所有 SQL 真实跑库。</div></div>
+      <div class="vhSteps"><span class="vhStep on">1 语义分析</span><span class="vhStep on">2 MDL 对齐</span><span class="vhStep on">3 确认</span><span class="vhStep on">4 dry-plan 门禁</span><span class="vhStep on">5 真实执行</span></div></div>
+    <div class="card" style="margin-bottom:12px">
+      <h3>业务需求分析输入</h3>
+      <textarea id="nlInput" placeholder="用自然语言描述业务取数需求，例如：各品类的销售额分别是多少，按销售额降序"></textarea>
+      <div class="itemRow" style="margin-top:10px">
+        <div class="chipRow" id="demoBtns"></div>
+        <button class="btn" id="analyzeBtn">开始业务语义分析</button>
+      </div>
+    </div>
+    <div class="steps" id="reqSteps"></div>
+  </section>
+
+  <!-- 视图 4：SQL 联调 · 交付 -->
+  <section class="view" id="view-test">
+    <div class="viewHead"><div><h2>SQL 联调 · 交付 <span class="liveTag"><span class="dot"></span> 真实只读执行</span></h2>
+      <div class="vhSub">直连测试库反复联调，结果可视化核查确认，通过后导出生产环境 SQL 脚本。所有 SQL 经 Wren 语义层规划 + 只读保护后真实执行（仅允许 SELECT / WITH）。</div></div>
+      <div class="vhSteps"><span class="vhStep on">1 编写 SQL</span><span class="vhStep on">2 语义门禁</span><span class="vhStep on">3 真实执行</span><span class="vhStep on">4 导出交付</span></div></div>
+    <div class="grid">
+      <div class="gridL">
+        <div class="card"><h3>测试数据库直连 <small>联调专用 · 只读</small></h3><div id="tConn"></div></div>
+        <div class="card"><h3>已支持的语义层对象 <small>可直接用于 SQL</small></h3><div id="tHints"></div></div>
+      </div>
+      <div class="card">
+        <h3>SQL 联调与导出</h3>
+        <textarea id="sqlEditor" placeholder="在此编写 SQL（使用 MDL 模型名，如 orders / products / order_items）；也可从「需求分析」带入初稿"></textarea>
+        <div class="itemRow" style="margin-top:10px">
+          <button class="btn2" id="tRunBtn">执行联调（只读 · 经语义层）</button>
+          <button class="btn" id="tExportBtn" disabled>导出 SQL 脚本</button>
+        </div>
+        <div id="tResult" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 视图 5：开源选型 · 扩展性 -->
+  <section class="view" id="view-oss">
+    <div class="viewHead"><div><h2>开源组件选型 · 扩展性架构</h2>
+      <div class="vhSub">本链路以 Wren AI 语义层为基准，其余环节参考成熟开源组件做"可插拔"设计：Text2SQL 引擎、SQL 审查、元数据采集、文档知识、执行引擎均可按场景替换或互补。</div></div></div>
+    <div class="card" style="margin-bottom:14px"><h3>可插拔架构总览 <small>每一层都标注「已用 / 可选替换」</small></h3>
+      <div class="archWrap" id="archSvg"></div>
+      <div class="sub" style="margin-top:8px;color:var(--faint)">说明：实线框为当前实测已落地组件；虚线框为可选替换 / 互补组件。语义层（MDL）是中枢——所有 SQL 生成与执行都围绕它做受控规划。</div>
+    </div>
+    <div class="grid">
+      <div class="gridL" id="ossList"></div>
+      <div class="card"><h3>替换 / 互补关系速查</h3><div id="ossTable"></div></div>
+    </div>
+  </section>
+</div>
+
+<div class="loading" id="loading"><div class="scrim"></div><div class="loadingBox"><div class="loadingInner"><div class="spin"></div><strong id="loadingText">处理中…</strong><p style="margin:8px 0 0;font-size:12px;color:var(--soft)">正在与本地 Wren 引擎交互</p></div></div></div>
+<div class="toastWrap" id="toastWrap"></div>
+
+<script>
+(() => {
+const $=id=>document.getElementById(id);
+const VIEW_KEYS=["mdl","db","req","test","oss"];
+const VIEWS=[{key:"mdl",name:"语义层 · MDL",desc:"模型/字段/枚举/关系"},{key:"db",name:"数据源接入",desc:"真实表与行数"},{key:"req",name:"需求 · SQL 生成",desc:"MDL对齐→执行"},{key:"test",name:"SQL 联调 · 交付",desc:"只读执行/导出"},{key:"oss",name:"开源选型 · 扩展",desc:"可插拔架构"}];
+let MDL=null, SCHEMA=null, EXAMPLES=[];
+/* ---------- 工具 ---------- */
+function badge(t){const m={"已建模":["#1d9b62","#e8fbf1"],"可见":["#1d9b62","#e8fbf1"],"已连接":["#1d9b62","#e8fbf1"],"通过":["#1d9b62","#e8fbf1"],"拒绝":["#d85959","#fff0f0"],"失败":["#d85959","#fff0f0"],"拦截":["#d85959","#fff0f0"],"待审核":["#d98b14","#fff4df"],"进行中":["#2f67ff","#eaf0ff"],"待执行":["#66758b","#eef2f7"],"已发布":["#1d9b62","#e8fbf1"],"可选替换":["#d98b14","#fff4df"],"已用":["#1d9b62","#e8fbf1"]}[t]||["#66758b","#eef2f7"];return `<span class="badge" style="color:${m[0]};background:${m[1]}">${t}</span>`}
+function esc(s){return String(s).replace(/[&<>]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[m]))}
+async function api(path, body){const r=await fetch(path,{method:body?"POST":"GET",headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):undefined});return await r.json();}
+function loading(text){$("loadingText").textContent=text;$("loading").classList.add("open");return new Promise(r=>setTimeout(()=>{$("loading").classList.remove("open");r()},420));}
+function toast(t,cls){const ico=cls==="ts"?'✓':cls==="te"?'!':'•';const n=document.createElement("div");n.className="toast "+(cls||"ti");n.innerHTML='<div>'+ico+'</div><div>'+esc(t)+'</div>';$("toastWrap").appendChild(n);setTimeout(()=>{n.style.opacity="0";setTimeout(()=>n.remove(),320)},2800);}
+function btnBusy(b,t){b.dataset.o=b.innerHTML;b.classList.add("loading");b.innerHTML='<span class="spin" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:-2px;margin-right:6px"></span>'+t;b.disabled=true}
+function btnIdle(b){b.innerHTML=b.dataset.o||b.innerHTML;b.disabled=false}
+/* ---------- 导航 ---------- */
+function renderNav(){const cur=state.view;$("nav").innerHTML=VIEWS.map(v=>`<button class="navTab ${cur===v.key?"on":""}" data-view="${v.key}">${v.name}<small>${v.desc}</small></button>`).join("");}
+function route(){const h=(location.hash.replace("#/","")||"mdl");state.view=VIEW_KEYS.includes(h)?h:"mdl";document.querySelectorAll(".view").forEach(v=>v.classList.remove("on"));$("view-"+state.view).classList.add("on");renderNav();}
+/* ---------- 顶部状态 ---------- */
+async function loadTop(){try{const h=await api("/api/health");const w=h.wren||"";$("topStatus").innerHTML=`<span style="color:var(--ok);font-weight:700">● 已连接</span> · ${esc(w)} · 测试库 6 表真实数据`;}catch(e){$("topStatus").innerHTML=`<span style="color:var(--bad);font-weight:700">● 连接失败</span> · ${esc(String(e))} · 请确认 demo-server.py 与 Wren MCP 在运行`;}}
+/* ---------- 语义层视图 ---------- */
+function renderMDL(){if(!MDL)return;const m=MDL.models||[];const rels=MDL.relationships||[];const eng=MDL.engine||"";
+  $("mdlEngine").innerHTML=`<div class="connBox">
+    <div class="row"><span class="lab">语义引擎</span><strong>${esc(eng)}</strong></div>
+    <div class="row"><span class="lab">MCP 工具</span><span>19 个（query / dry_run / get_manifest / get_relationships …）</span></div>
+    <div class="row"><span class="lab">MDL 模型</span><span>${badge("已建模")} ${m.length} 个模型 · ${rels.length} 条关系</span></div>
+    <div class="row"><span class="lab">可见性</span><span>未建模字段对 AI <strong style="color:var(--bad)">不可见</strong></span></div>
+  </div>
+  <div class="sub" style="margin-top:8px;color:var(--faint)">数据来源：本地 Wren 引擎 <span class="mono">get_manifest</span> 实时返回（非模拟）。</div>`;
+  // 枚举口径（从 column description 提取状态码值）
+  const enums=[];m.forEach(mod=>{(mod.columns||[]).forEach(c=>{const d=c.description||"";if(/=/.test(d)&&/已/.test(d))enums.push({model:mod.name,col:c.name,note:d});});});
+  $("mdlRules").innerHTML=`<div class="item" style="margin-bottom:6px"><div class="itemRow"><span class="kbType">规则 1</span><span style="flex:1">引用对象必须 ∈ 已建模 MDL 闭集（未建模字段天然不可见）</span></div></div>
+    <div class="item" style="margin-bottom:6px"><div class="itemRow"><span class="kbType">规则 2</span><span style="flex:1">状态码值由字典定义（如 orders.status：1已下单/2已发货/3已完成/4已退款）</span></div></div>
+    <div class="item"><div class="itemRow"><span class="kbType">规则 3</span><span style="flex:1">维度退化列（products.category_name）免 JOIN，但需与维度表一致</span></div></div>
+    <div class="sub" style="margin-top:6px;color:var(--faint)">语义规则由 MDL knowledge/rules 承载，作为 SQL 生成的硬约束注入每次规划。</div>`;
+  $("mdlRels").innerHTML=rels.map(r=>`<div class="item" style="margin-bottom:6px"><div class="itemRow"><strong class="mono">${esc(r.models.join(" ↔ "))}</strong>${badge("已建模")}</div><div class="sub">${esc(r.condition)} · ${r.joinType}</div></div>`).join("")
+    + (enums.length?`<div class="sub" style="font-weight:800;color:var(--pri);margin:8px 0 4px">状态码值口径（枚举）</div>`+enums.map(e=>`<div class="objChip enum" style="display:block;margin-bottom:4px"><span class="ot">枚举</span> ${esc(e.model)}.${esc(e.col)}：${esc(e.note)}</div>`).join(""):"");
+  $("mdlModels").innerHTML=m.map(mod=>{
+    const tbl=(mod.tableReference||{}).table||"";
+    return `<div class="item" style="margin-bottom:10px">
+      <div class="tblHead"><div><div class="tblName">${esc(mod.name)}<span style="color:var(--faint);font-weight:400"> · ${esc(tbl)}</span></div><div class="tblComment">MDL 模型 · ${badge("已建模")}</div></div></div>
+      <div class="fields">${(mod.columns||[]).map(c=>{const isEnum=/=/.test(c.description||"")&&/已/.test(c.description||"");return `<div class="fld"><span class="fldName">${esc(c.name)}</span><span class="fldType">${esc(c.type||"")}</span><span class="fldCmt">${esc(c.description||"字段")}</span>${isEnum?'<span class="flowTag" style="background:var(--warnBg);color:var(--warn);border-color:#f0dab0">枚举口径</span>':''}</div>`;}).join("")}</div>
+    </div>`;}).join("")
+    + `<div class="sub" style="color:var(--faint)">对照 Wren 官方口径：AI 只与 MDL 中定义的业务对象交互，看不到裸库 schema；"status=4 是什么意思、哪张表是权威口径"由字典直接回答，不再靠模型猜。敏感/未建模字段因不在 MDL 中而不可见。</div>`;
+}
+/* ---------- 数据源视图 ---------- */
+function renderDB(){if(!SCHEMA)return;const rows=SCHEMA.schema||[];
+  $("dbConn").innerHTML=`<div class="connBox">
+    <div class="row"><span class="lab">数据源</span><strong>test 库（wren-postgres）</strong></div>
+    <div class="row"><span class="lab">连接</span><span class="mono">127.0.0.1:15432</span></div>
+    <div class="row"><span class="lab">语义引擎</span><span>Wren Engine v1.27.0 · Apache DataFusion</span></div>
+    <div class="row"><span class="lab">状态</span><span>${badge("已连接")} 22+ 数据源方言统一</span></div>
+  </div>
+  <div class="sub" style="margin-top:8px;color:var(--faint)">Wren Engine 支持 PostgreSQL / MySQL / Oracle / 达梦 DM / 人大金仓 / OceanBase / GaussDB / TiDB 等主流与国产库；下方行数由本环境真实库 COUNT 统计。</div>`;
+  $("dbSchema").innerHTML=rows.map(r=>{
+    const total=(r.columns||[]).length;
+    return `<div class="item" style="margin-bottom:8px">
+      <div class="tblHead"><div><div class="tblName">${esc(r.model)}<span style="color:var(--faint);font-weight:400"> · ${esc(r.table)}</span></div><div class="tblComment">真实行数 ${esc(String(r.rows))} · ${total} 字段 · ${badge("已建模")}</div></div></div>
+      <div class="fields">${(r.columns||[]).map(c=>`<div class="fld"><span class="fldName">${esc(c.name)}</span><span class="fldType">${esc(c.type||"")}</span><span class="fldCmt">${esc(c.desc||"")}</span></div>`).join("")}</div>
+    </div>`;}).join("");
+}
+/* ---------- 需求分析视图 ---------- */
+function renderDemoBtns(){if(!EXAMPLES.length)return;$("demoBtns").innerHTML=EXAMPLES.map((e,i)=>`<button class="miniLink" data-ex="${i}" style="${e.tag==='拒绝'?'background:var(--badBg);border-color:#f1c8c8;color:var(--bad)':''}">${e.tag==='拒绝'?'演示拒绝 · ':''}${esc(e.label)}</button>`).join("");}
+const REQ_STEPS=["业务语义分析","MDL 语义对齐","确认生成","dry-run 门禁","Wren 真实执行"];
+function renderReqSteps(p){
+  if(!p){$("reqSteps").innerHTML=`<div class="card"><div class="item warn"><strong>等待输入</strong><div class="sub">输入业务需求后点击「开始业务语义分析」；或在上方选择示例。规划器基于真实 MDL 确定性映射自然语言到 SQL，所有 SQL 真实跑本地库。</div></div></div>`;return;}
+  if(p.blocked){
+    $("reqSteps").innerHTML=`<div class="stepCard fail"><div class="stHead"><span class="stTitle">① 业务语义分析</span>${badge("拒绝")}</div><div class="stBody"><div class="item bad"><strong>硬门禁：未命中语义层（MDL）已建模对象 — 禁止生成 SQL</strong><div class="sub">${esc(p.reason)}</div><div class="sub" style="color:var(--warn);font-weight:700">治理指引：先于「语义层 · MDL 字典」补充建模 / 准入口径后重试；这正体现了"未建模字段对 AI 不可见"的安全属性。</div></div></div></div>`;
+    return;
+  }
+  // 生成态
+  const objHtml=(p.objects||[]).map(o=>{const cls=o.type==='enum'?'enum':o.type==='rule'?'rule':'';return `<span class="objChip ${cls}"><span class="ot">${o.type}</span>${esc(o.name)}${o.detail?` <span style="color:var(--faint)">${esc(o.detail)}</span>`:''}</span>`;}).join("");
+  let body=`<div class="stepCard pass"><div class="stHead"><span class="stTitle">① 业务语义分析</span>${badge("通过")}</div><div class="stBody"><div class="item ok"><div class="sub"><strong style="color:var(--pri)">命中意图：</strong>${esc(p.intent)}</div></div></div></div>`;
+  body+=`<div class="stepCard pass"><div class="stHead"><span class="stTitle">② MDL 语义对齐</span>${badge("通过")}</div><div class="stBody"><div class="sub">规划器仅引用语义层可见对象（封闭世界），下列即本次查询实际命中的 MDL 资产：</div><div class="chipRow">${objHtml||'<span class="chip">无</span>'}</div></div></div>`;
+  body+=`<div class="stepCard now"><div class="stHead"><span class="stTitle">③ 生成 SQL（MDL 受控）</span>${badge("进行中")}</div><div class="stBody"><div class="code">${esc(p.sql)}</div><div class="sub">SQL 使用 MDL 模型名与字段名，仅引用 ② 中可见对象，杜绝裸库猜测。</div>
+    <div style="margin-top:8px"><button class="btn" id="execBtn">经语义层执行（dry-run 门禁 + 真实查询）</button></div></div></div>`;
+  if(p.dry_run){body+=`<div class="stepCard ${p.dry_run.ok?'pass':'fail'}"><div class="stHead"><span class="stTitle">④ dry-run 门禁（MDL 预演 + 语法）</span>${badge(p.dry_run.ok?'通过':'失败')}</div><div class="stBody"><div class="gate"><span class="gName">语义层预演</span><span>${esc(p.dry_run.message)}</span></div></div></div>`;}
+  if(p.result){
+    const cols=p.result.columns||[];const data=p.result.data||[];
+    body+=`<div class="stepCard pass"><div class="stHead"><span class="stTitle">⑤ Wren 真实执行（落本地测试库）</span>${badge("通过")}</div><div class="stBody"><div class="resPanel"><div class="resHead"><strong>真实查询结果</strong>${badge("通过")}<span style="font-size:11px;color:var(--faint)">本地 test 库 · 只读执行</span></div>
+      <div class="resGrid">${resultStat(data)}</div>
+      ${barHtml(p.result)}
+      <div style="overflow-x:auto"><table class="dataTbl"><thead><tr>${cols.map(c=>`<th>${esc(String(c))}</th>`).join("")}</tr></thead><tbody>${data.map(r=>`<tr>${r.map(v=>`<td>${esc(String(v))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+      <div class="sub" style="margin-top:8px;color:var(--soft)">核查提示：返回行数与口径基线一致、数值在容差范围内 → 可点击右侧「导出 SQL 脚本」交付；不一致则回到编辑区修正后重新联调。</div>
+      </div></div></div>`;
+  }
+  if(p.exec_error){body+=`<div class="stepCard fail"><div class="stHead"><span class="stTitle">⑤ Wren 真实执行</span>${badge("失败")}</div><div class="stBody"><div class="item bad">${esc(p.exec_error)}</div></div></div>`;}
+  $("reqSteps").innerHTML=body;
+  const eb=$("execBtn");if(eb)eb.addEventListener("click",()=>execReq(p));
+}
+function resultStat(data){const n=data.length;return `<div class="resStat"><div class="v">${n}</div><div class="l">返回行数</div></div><div class="resStat"><div class="v">本地库</div><div class="l">真实数据</div></div><div class="resStat"><div class="v">只读</div><div class="l">执行模式</div></div>`;}
+function barHtml(res){const cols=res.columns||[];const data=res.data||[];if(cols.length<2)return "";const numIdx=cols.findIndex((c,i)=>i>0&&data.every(r=>!isNaN(parseFloat(r[i]))));if(numIdx<0)return "";const rows=data.map(r=>({name:String(r[0]),value:parseFloat(r[numIdx])})).filter(r=>!isNaN(r.value));if(rows.length>12)return "";const W=560,H=200,P={l:46,r:12,t:18,b:34};const max=Math.max(...rows.map(r=>r.value))*1.12;const iw=W-P.l-P.r,ih=H-P.t-P.b;const n=rows.length,gap=iw/n,bw=Math.min(54,gap*0.5);let grid="",labels="",bars="";for(let s=0;s<=4;s++){const y=P.t+ih-ih*s/4;const v=Math.round(max*s/4);grid+=`<line x1="${P.l}" y1="${y}" x2="${W-P.r}" y2="${y}" stroke="#edf2fb"/>`;labels+=`<text x="${P.l-6}" y="${y+4}" text-anchor="end" font-size="10" fill="#8a96aa">${v}</text>`;}
+  rows.forEach((r,i)=>{const x=P.l+gap*i+(gap-bw)/2;const h=Math.max(4,r.value/max*ih);const y=P.t+ih-h;bars+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="4" fill="${i%2?'#7aa3ff':'#2f67ff'}"/><text x="${x+bw/2}" y="${Math.max(12,y-6)}" text-anchor="middle" font-size="10" font-weight="700" fill="#1e2b3d">${r.value}</text><text x="${x+bw/2}" y="${H-P.b+15}" text-anchor="middle" font-size="10.5" fill="#66758b">${r.name}</text>`;});
+  return `<div class="barWrap"><div class="t">可视化 <em>· ${esc(String(cols[0]))} × ${esc(String(cols[numIdx]))}</em></div><svg viewBox="0 0 ${W} ${H}" width="100%" style="max-height:220px;display:block">${grid}${labels}${bars}</svg></div>`;}
+async function doAnalyze(){const nl=$("nlInput").value.trim();if(!nl){toast("请先输入业务需求。","te");return;}
+  btnBusy($("analyzeBtn"),"语义分析中…");await loading("正在执行业务语义分析（基于真实 MDL）…");
+  try{const r=await api("/api/ask",{nl});state.req=r;renderReqSteps(r);
+    if(r.blocked)toast("硬门禁：未命中语义层已建模对象，禁止生成。","te");else toast("语义分析完成，已生成 SQL，点击「经语义层执行」跑真实库。","ts");}
+  catch(e){toast("分析失败："+e,"te");}
+  btnIdle($("analyzeBtn"));
+}
+async function execReq(p){const btn=$("execBtn");if(btn){btnBusy(btn,"执行中…");}await loading("正在经 MDL dry-run 门禁并真实查询本地库…");try{
+    const r=await api("/api/ask",{nl:state.nl});state.req=r;renderReqSteps(r);
+    if(r.result)toast("真实执行完成，结果已呈现。","ts");else if(r.dry_run&&!r.dry_run.ok)toast("dry-run 门禁未通过："+r.dry_run.message,"te");}
+  catch(e){toast("执行失败："+e,"te");}}
+/* ---------- SQL 联调视图 ---------- */
+function renderTestConn(){const rows=(SCHEMA&&SCHEMA.schema||[]).length;$("tConn").innerHTML=`<div class="connBox">
+    <div class="row"><span class="lab">联调数据源</span><strong>test 库（wren-postgres）</strong></div>
+    <div class="row"><span class="lab">连接</span><span class="mono">127.0.0.1:15432</span></div>
+    <div class="row"><span class="lab">执行路径</span><span>SQL → Wren 语义层规划 → Apache DataFusion</span></div>
+    <div class="row"><span class="lab">保护</span><span>${badge("只读")} 仅允许 SELECT / WITH</span></div></div>`;
+  $("tHints").innerHTML=(SCHEMA&&SCHEMA.schema||[]).map(r=>`<div class="objChip"><span class="ot">模型</span>${esc(r.model)}</div>`).join("")+`<div class="sub" style="margin-top:8px;color:var(--faint)">SQL 须使用 MDL 模型名（如 orders / products）。可写 SELECT 或 WITH（CTE），禁止 INSERT/UPDATE/DELETE/DROP 等写操作。</div>`;}
+async function runTest(){const sql=$("sqlEditor").value.trim();if(!sql){toast("请先输入 SQL。","te");return;}
+  btnBusy($("tRunBtn"),"联调中…");await loading("正在经语义层校验并执行…");
+  try{const r=await api("/api/query",{sql});
+    if(!r.ok){$("tResult").innerHTML=`<div class="resPanel"><div class="gate"><span class="gName">语义层 / 只读门禁</span>${badge("拦截")}<span>${esc(r.error||"未通过")}</span></div></div>`;$("tExportBtn").disabled=true;toast("未通过："+r.error,"te");}
+    else{const cols=r.columns||[];const data=r.data||[];
+      $("tResult").innerHTML=`<div class="resPanel"><div class="resHead"><strong>联调结果（真实只读执行）</strong>${badge("通过")}<span style="font-size:11px;color:var(--faint)">本地 test 库</span></div>
+        <div class="resGrid"><div class="resStat"><div class="v">${data.length}</div><div class="l">返回行数</div></div><div class="resStat"><div class="v">${cols.length}</div><div class="l">列数</div></div><div class="resStat"><div class="v">通过</div><div class="l">门禁</div></div></div>
+        ${barHtml(r)}
+        <div style="overflow-x:auto"><table class="dataTbl"><thead><tr>${cols.map(c=>`<th>${esc(String(c))}</th>`).join("")}</tr></thead><tbody>${data.map(row=>`<tr>${row.map(v=>`<td>${esc(String(v))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
+      $("tExportBtn").disabled=false;toast("联调通过，可核查后导出。","ts");}}
+  catch(e){toast("联调失败："+e,"te");}
+  btnIdle($("tRunBtn"));}
+function exportSql(){const sql=$("sqlEditor").value.trim();if(!sql){toast("无 SQL 可导出。","te");return;}
+  const header=`-- 数据需求智能分析助手 · 生产环境 SQL 脚本\n-- 已通过：MDL 语义层 → dry-run 门禁 → 测试库真实联调\n-- 生成时间：${new Date().toLocaleString("zh-CN")}\n\n`;
+  const blob=new Blob([header+sql+"\n"],{type:"text/sql;charset=utf-8"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="生产环境-SQL-"+new Date().toISOString().slice(0,10)+".sql";a.click();URL.revokeObjectURL(a.href);toast("SQL 脚本已导出（含口径依据与门禁记录头注）。","ts");}
+/* ---------- 开源选型视图 ---------- */
+const OSS=[
+  {n:"Wren AI（Canner）",role:"语义层 MDL + 查询引擎",used:true,lic:"Apache-2.0",src:"docs.getwren.ai",note:"本项目语义层基准：MDL 字典 + Apache DataFusion/ibis 执行；已落地。"},
+  {n:"SQLGlot（tobymao）",role:"SQL AST / 方言转换 / lineage",used:false,lic:"Apache-2.0",src:"github.com/tobymao/sqlglot",note:"SQL 审查层：解析、格式化、方言转换、AST 差异比对；可作为语义层之外的独立语法/方言校验。"},
+  {n:"SchemaCrawler",role:"元数据采集 / ER 图",used:false,lic:"LGPL/GPL",src:"schemacrawler.com",note:"数据源接入层：周期性采集 schema、导出结构与 ER 图，驱动 MDL 候选生成。"},
+  {n:"Vanna",role:"Text2SQL RAG 引擎",used:false,lic:"Apache-2.0",src:"vanna.ai",note:"NL→SQL 的可选替代/互补：基于 schema+文档+查询历史做 RAG 生成；可与本规划器并用。"},
+  {n:"DB-GPT",role:"数据智能体框架",used:false,lic:"Apache-2.0",src:"github.com/eosphoros-ai/DB-GPT",note:"架构参考：连接数据库、自动 SQL、Skills、分析报告的分层能力设计。"},
+  {n:"RAGFlow",role:"文档知识处理",used:false,lic:"Apache-2.0",src:"ragflow.io",note:"知识层：复杂文档解析、切块、引用式检索；承接表样/需求文档/口径说明。"},
+  {n:"Apache DataFusion",role:"执行引擎（Wren 底座）",used:true,lic:"Apache-2.0",src:"datafusion.apache.org",note:"查询执行内核：Wren Engine 即基于它；也可独立作为 OLAP 执行层。"},
+  {n:"DuckDB",role:"轻量 OLAP 执行引擎",used:false,lic:"MIT",src:"duckdb.org",note:"可替换/补充的执行层：单机嵌入式分析引擎，适合本地联调与样本执行。"},
+  {n:"dbt / MetricFlow",role:"指标即代码（口径层）",used:false,lic:"Apache-2.0",src:"getdbt.com",note:"口径层：把复购率/核销 GMV 等指标写成可版本化的代码，与 MDL measure 互补。"}
+];
+function renderOSS(){
+  // 架构图（内联 SVG）：分层 + 组件标注 + 已用/可选区分
+  const L=[["交互层 · 工作台",["需求门户","知识准入","SQL 联调"]],
+           ["智能编排层 · Agent Skill",["语义分析","结构化需求","确认闭环"]],
+           ["语义层（中枢） · Wren MDL",["MDL 字典","口径/枚举","关系"]],
+           ["生成与审查层",["NL→SQL 规划器(已用 MDL)","SQLGlot 审查(可选)","Vanna 互补(可选)"]],
+           ["数据与执行层",["SchemaCrawler 采集(可选)","Wren Engine / DataFusion(已用)","DuckDB(可选)"]],
+           ["知识与文档层",["RAGFlow 文档(可选)","知识库/案例库","dbt 指标(可选)"]]];
+  const W=940, rowH=64, top=20, gap=10;const H=top+L.length*(rowH+gap);
+  let lanes="";L.forEach((l,i)=>{const y=top+i*(rowH+gap);const isCore=i===2;const fill=isCore?'#eaf0ff':'#fbfdff';const stroke=isCore?'#2f67ff':'#dce6f4';
+    lanes+=`<rect x="14" y="${y}" width="${W-28}" height="${rowH}" rx="14" fill="${fill}" stroke="${stroke}" stroke-width="${isCore?2:1}"/>`;
+    lanes+=`<text x="28" y="${y+22}" font-size="12.5" font-weight="800" fill="${isCore?'#2f67ff':'#1e2b3d'}">${l[0]}</text>`;
+    l[1].forEach((c,j)=>{const cx=200+j*150;lanes+=`<rect x="${cx}" y="${y+34}" width="138" height="22" rx="7" fill="#fff" stroke="#cdd9ec"/><text x="${cx+69}" y="${y+49}" text-anchor="middle" font-size="10.5" fill="#66758b">${c}</text>`;});});
+  // 组件标注（右侧）
+  let comps="";const used=OSS.filter(o=>o.used);const opt=OSS.filter(o=>!o.used);
+  comps+=`<text x="14" y="${H-6}" font-size="10.5" fill="#8a96aa">已用组件（实线底色）：Wren AI · Apache DataFusion ｜ 可选替换/互补（虚线框见下）：SQLGlot · SchemaCrawler · Vanna · DB-GPT · RAGFlow · DuckDB · dbt</text>`;
+  $("archSvg").innerHTML=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">${lanes}${comps}</svg>`;
+  $("ossList").innerHTML=OSS.map(o=>`<div class="ovCard"><h4>${esc(o.n)}<span class="tg ${o.used?'tagUsed':'tagOpt'}">${o.used?'已用':'可选替换'}</span></h4><div class="sub">${esc(o.role)} · <span class="mono">${esc(o.lic)}</span></div><div class="sub">${esc(o.note)}</div><div class="sub" style="color:var(--faint)">来源：${esc(o.src)}</div></div>`).join("");
+  $("ossTable").innerHTML=`<table class="dataTbl"><thead><tr><th>环节</th><th>当前已用</th><th>可选替换 / 互补</th></tr></thead><tbody>
+    <tr><td>语义层</td><td>Wren MDL</td><td>自研字典 / dbt 指标层</td></tr>
+    <tr><td>NL→SQL</td><td>MDL 受控规划器</td><td>Vanna（RAG）/ DB-GPT（智能体）</td></tr>
+    <tr><td>SQL 审查</td><td>MDL dry-run 门禁</td><td>SQLGlot（AST/方言/lineage）</td></tr>
+    <tr><td>元数据采集</td><td>Wren get_manifest</td><td>SchemaCrawler（ER/结构）</td></tr>
+    <tr><td>执行引擎</td><td>Apache DataFusion</td><td>DuckDB（本地联调）</td></tr>
+    <tr><td>文档知识</td><td>—</td><td>RAGFlow（解析/检索）</td></tr>
+  </tbody></table><div class="sub" style="margin-top:8px;color:var(--faint)">替换原则：语义层（MDL）为不可替换的中枢，其余环节均按"可插拔"设计，按数据域与合规要求灵活替换。</div>`;
+}
+/* ---------- 事件 ---------- */
+const state={view:"mdl",nl:"",req:null};
+document.addEventListener("click",e=>{
+  const nav=e.target.closest(".navTab[data-view]");if(nav){location.hash="#/"+nav.dataset.view;return;}
+  const ex=e.target.closest("[data-ex]");if(ex){const i=+ex.dataset.ex;const ex0=EXAMPLES[i];$("nlInput").value=ex0.nl;if(ex0.tag==='拒绝')toast("这是一条「未建模对象」演示，将被硬门禁拒绝。","ti");doAnalyze();return;}
+});
+$("analyzeBtn").addEventListener("click",doAnalyze);
+$("tRunBtn").addEventListener("click",runTest);
+$("tExportBtn").addEventListener("click",exportSql);
+window.addEventListener("hashchange",route);
+/* ---------- 初始化 ---------- */
+(async()=>{
+  renderNav();route();renderOSS();
+  await loadTop();
+  try{MDL=await api("/api/manifest");renderMDL();}catch(e){}
+  try{SCHEMA=await api("/api/schema");renderDB();renderTestConn();}catch(e){}
+  try{const ex=await api("/api/examples");EXAMPLES=ex.examples||[];renderDemoBtns();}catch(e){}
+  renderReqSteps(null);
+})();
+})();
+</script>
+</body>
+</html>

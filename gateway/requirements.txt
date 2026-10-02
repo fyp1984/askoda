@@ -1,0 +1,9 @@
+fastmcp==4.0.10
+starlette>=0.47
+# M2 新增：网关自有元数据库（需求单 / 元数据字典）与附件对象存储
+psycopg[binary]>=3.2
+minio>=7.2
+# M5 新增：SQL 解析与 AST 静态检查（纯 Python / MIT / 零系统依赖）
+# 五层门禁的第三方能力全部收口在 gateway/gates.py 一处；SQLFluff 与 Great Expectations
+# 一期不引入，留成该模块内的可插拔插槽（默认关闭）。
+sqlglot>=25.0

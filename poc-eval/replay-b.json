@@ -1,0 +1,899 @@
+{
+  "meta": {
+    "name": "POC 题库 B 库（零售/会员域）",
+    "basis": "PRD §17.2：正向 20（应生成）+ 负向 10（应拒绝）；判定标准事前定义",
+    "version": "bank-v1",
+    "frozen_at": "2026-09-28"
+  },
+  "base": "http://127.0.0.1:9002",
+  "summary": {
+    "正向题数": 20,
+    "正向通过": 20,
+    "准确率%": 100.0,
+    "负向题数": 10,
+    "负向拒绝": 10,
+    "拒绝率%": 100.0,
+    "总耗时s": 2.2
+  },
+  "records": [
+    {
+      "id": "P01",
+      "type": "正向",
+      "q": "2026年9月的复购用户数是多少",
+      "intent": "复购用户数·总月",
+      "dry_ok": true,
+      "rows": 1,
+      "result": {
+        "columns": [
+          "复购用户数"
+        ],
+        "data": [
+          [
+            "3.0"
+          ]
+        ],
+        "dtypes": {
+          "复购用户数": "decimal128(38, 9)"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 189
+    },
+    {
+      "id": "P02",
+      "type": "正向",
+      "q": "按门店统计每月的复购用户数",
+      "intent": "复购用户数·门店月",
+      "dry_ok": true,
+      "rows": 9,
+      "result": {
+        "columns": [
+          "store_name",
+          "stat_month",
+          "复购用户数"
+        ],
+        "data": [
+          [
+            "北京朝阳店",
+            "2026-09-01",
+            "0"
+          ],
+          [
+            "杭州西湖店",
+            "2026-08-01",
+            "1.0"
+          ],
+          [
+            "北京朝阳店",
+            "2026-08-01",
+            "1.0"
+          ],
+          [
+            "北京朝阳店",
+            "2026-07-01",
+            "0"
+          ],
+          [
+            "上海旗舰店",
+            "2026-08-01",
+            "1.0"
+          ],
+          [
+            "杭州西湖店",
+            "2026-09-01",
+            "1.0"
+          ],
+          [
+            "上海旗舰店",
+            "2026-07-01",
+            "1.0"
+          ],
+          [
+            "上海旗舰店",
+            "2026-09-01",
+            "2.0"
+          ],
+          [
+            "杭州西湖店",
+            "2026-07-01",
+            "0"
+          ]
+        ],
+        "dtypes": {
+          "store_name": "string",
+          "stat_month": "date32[day]",
+          "复购用户数": "decimal128(38, 9)"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 102
+    },
+    {
+      "id": "P03",
+      "type": "正向",
+      "q": "2026年7月的复购用户数是多少",
+      "intent": "复购用户数·总月",
+      "dry_ok": true,
+      "rows": 1,
+      "result": {
+        "columns": [
+          "复购用户数"
+        ],
+        "data": [
+          [
+            "1.0"
+          ]
+        ],
+        "dtypes": {
+          "复购用户数": "decimal128(38, 9)"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 120
+    },
+    {
+      "id": "P04",
+      "type": "正向",
+      "q": "整体复购率是多少（含分母）",
+      "intent": "复购率·总（含分母）",
+      "dry_ok": true,
+      "rows": 1,
+      "result": {
+        "columns": [
+          "复购率百分比",
+          "复购用户数",
+          "活跃会员数"
+        ],
+        "data": [
+          [
+            "87.5",
+            "7.0",
+            8
+          ]
+        ],
+        "dtypes": {
+          "复购率百分比": "decimal128(38, 9)",
+          "复购用户数": "decimal128(38, 9)",
+          "活跃会员数": "int64"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 108
+    },
+    {
+      "id": "P05",
+      "type": "正向",
+      "q": "各门店的复购用户数分别是多少",
+      "intent": "复购用户数·门店月",
+      "dry_ok": true,
+      "rows": 9,
+      "result": {
+        "columns": [
+          "store_name",
+          "stat_month",
+          "复购用户数"
+        ],
+        "data": [
+          [
+            "北京朝阳店",
+            "2026-09-01",
+            "0"
+          ],
+          [
+            "杭州西湖店",
+            "2026-08-01",
+            "1.0"
+          ],
+          [
+            "北京朝阳店",
+            "2026-08-01",
+            "1.0"
+          ],
+          [
+            "北京朝阳店",
+            "2026-07-01",
+            "0"
+          ],
+          [
+            "上海旗舰店",
+            "2026-08-01",
+            "1.0"
+          ],
+          [
+            "杭州西湖店",
+            "2026-09-01",
+            "1.0"
+          ],
+          [
+            "上海旗舰店",
+            "2026-07-01",
+            "1.0"
+          ],
+          [
+            "上海旗舰店",
+            "2026-09-01",
+            "2.0"
+          ],
+          [
+            "杭州西湖店",
+            "2026-07-01",
+            "0"
+          ]
+        ],
+        "dtypes": {
+          "store_name": "string",
+          "stat_month": "date32[day]",
+          "复购用户数": "decimal128(38, 9)"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 90
+    },
+    {
+      "id": "P06",
+      "type": "正向",
+      "q": "各归属门店的会员数是多少",
+      "intent": "归属门店·会员数",
+      "dry_ok": true,
+      "rows": 3,
+      "result": {
+        "columns": [
+          "归属门店",
+          "会员数"
+        ],
+        "data": [
+          [
+            "杭州西湖店",
+            3
+          ],
+          [
+            "北京朝阳店",
+            2
+          ],
+          [
+            "上海旗舰店",
+            3
+          ]
+        ],
+        "dtypes": {
+          "归属门店": "string",
+          "会员数": "int64"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 90
+    },
+    {
+      "id": "P07",
+      "type": "正向",
+      "q": "华东大区的销售额是多少（排除退款）",
+      "intent": "销售额·华东（排除退款）",
+      "dry_ok": true,
+      "rows": 1,
+      "result": {
+        "columns": [
+          "华东销售额"
+        ],
+        "data": [
+          [
+            "7681.5"
+          ]
+        ],
+        "dtypes": {
+          "华东销售额": "decimal128(38, 9)"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 94
+    },
+    {
+      "id": "P08",
+      "type": "正向",
+      "q": "各大区的销售额分别是多少",
+      "intent": "销售额·各大区",
+      "dry_ok": true,
+      "rows": 2,
+      "result": {
+        "columns": [
+          "大区",
+          "销售额"
+        ],
+        "data": [
+          [
+            "华东大区",
+            "7681.5"
+          ],
+          [
+            "华北大区",
+            "1963.0"
+          ]
+        ],
+        "dtypes": {
+          "大区": "string",
+          "销售额": "decimal128(38, 9)"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 94
+    },
+    {
+      "id": "P09",
+      "type": "正向",
+      "q": "各门店的销售额分别是多少",
+      "intent": "销售额·门店",
+      "dry_ok": true,
+      "rows": 3,
+      "result": {
+        "columns": [
+          "store_name",
+          "销售额"
+        ],
+        "data": [
+          [
+            "上海旗舰店",
+            "5988.5"
+          ],
+          [
+            "北京朝阳店",
+            "1963.0"
+          ],
+          [
+            "杭州西湖店",
+            "1693.0"
+          ]
+        ],
+        "dtypes": {
+          "store_name": "string",
+          "销售额": "decimal128(38, 9)"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 89
+    },
+    {
+      "id": "P10",
+      "type": "正向",
+      "q": "各门店的日均销售额是多少",
+      "intent": "日均销售额",
+      "dry_ok": true,
+      "rows": 3,
+      "result": {
+        "columns": [
+          "store_name",
+          "日均销售额"
+        ],
+        "data": [
+          [
+            "杭州西湖店",
+            "83.71"
+          ],
+          [
+            "北京朝阳店",
+            "115.29"
+          ],
+          [
+            "上海旗舰店",
+            "179.29"
+          ]
+        ],
+        "dtypes": {
+          "store_name": "string",
+          "日均销售额": "decimal128(38, 9)"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 98
+    },
+    {
+      "id": "P11",
+      "type": "正向",
+      "q": "各门店的坪效是多少",
+      "intent": "坪效",
+      "dry_ok": true,
+      "rows": 3,
+      "result": {
+        "columns": [
+          "store_name",
+          "坪效"
+        ],
+        "data": [
+          [
+            "杭州西湖店",
+            "7.33"
+          ],
+          [
+            "北京朝阳店",
+            "13.45"
+          ],
+          [
+            "上海旗舰店",
+            "10.46"
+          ]
+        ],
+        "dtypes": {
+          "store_name": "string",
+          "坪效": "decimal128(38, 9)"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 118
+    },
+    {
+      "id": "P12",
+      "type": "正向",
+      "q": "工作日和周末的销售额对比",
+      "intent": "销售额·日型",
+      "dry_ok": true,
+      "rows": 2,
+      "result": {
+        "columns": [
+          "day_type",
+          "销售额"
+        ],
+        "data": [
+          [
+            "工作日",
+            "1483.0"
+          ],
+          [
+            "周末",
+            "1165.0"
+          ]
+        ],
+        "dtypes": {
+          "day_type": "string",
+          "销售额": "decimal128(38, 9)"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 91
+    },
+    {
+      "id": "P13",
+      "type": "正向",
+      "q": "各品类的销售额分别是多少",
+      "intent": "品类销售额",
+      "dry_ok": true,
+      "rows": 6,
+      "result": {
+        "columns": [
+          "category_name",
+          "销售额"
+        ],
+        "data": [
+          [
+            "服饰",
+            "855.9"
+          ],
+          [
+            "数码",
+            "2576.0"
+          ],
+          [
+            "家居",
+            "1143.0"
+          ],
+          [
+            "美妆",
+            "4062.0"
+          ],
+          [
+            "食品",
+            "959.5"
+          ],
+          [
+            "个护",
+            "704.0"
+          ]
+        ],
+        "dtypes": {
+          "category_name": "string",
+          "销售额": "decimal128(38, 9)"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 107
+    },
+    {
+      "id": "P14",
+      "type": "正向",
+      "q": "2026年9月会员升级的有多少人",
+      "intent": "升级人数·月",
+      "dry_ok": true,
+      "rows": 1,
+      "result": {
+        "columns": [
+          "升级人数"
+        ],
+        "data": [
+          [
+            2
+          ]
+        ],
+        "dtypes": {
+          "升级人数": "int64"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 125
+    },
+    {
+      "id": "P15",
+      "type": "正向",
+      "q": "会员升级和降级的数量分布",
+      "intent": "升降级分布",
+      "dry_ok": true,
+      "rows": 2,
+      "result": {
+        "columns": [
+          "change_type",
+          "数量"
+        ],
+        "data": [
+          [
+            "降级",
+            2
+          ],
+          [
+            "升级",
+            4
+          ]
+        ],
+        "dtypes": {
+          "change_type": "string",
+          "数量": "int64"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 104
+    },
+    {
+      "id": "P16",
+      "type": "正向",
+      "q": "会员状态分布情况",
+      "intent": "会员状态分布",
+      "dry_ok": true,
+      "rows": 3,
+      "result": {
+        "columns": [
+          "会员状态",
+          "人数"
+        ],
+        "data": [
+          [
+            "活跃",
+            6
+          ],
+          [
+            "沉默",
+            1
+          ],
+          [
+            "流失",
+            1
+          ]
+        ],
+        "dtypes": {
+          "会员状态": "string",
+          "人数": "int64"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 90
+    },
+    {
+      "id": "P17",
+      "type": "正向",
+      "q": "各等级的会员人数",
+      "intent": "等级分布",
+      "dry_ok": true,
+      "rows": 4,
+      "result": {
+        "columns": [
+          "会员等级",
+          "人数"
+        ],
+        "data": [
+          [
+            "普通",
+            3
+          ],
+          [
+            "银卡",
+            2
+          ],
+          [
+            "金卡",
+            2
+          ],
+          [
+            "钻石",
+            1
+          ]
+        ],
+        "dtypes": {
+          "会员等级": "string",
+          "人数": "int64"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 101
+    },
+    {
+      "id": "P18",
+      "type": "正向",
+      "q": "各门店的会员升降级数量",
+      "intent": "升降级·门店",
+      "dry_ok": true,
+      "rows": 4,
+      "result": {
+        "columns": [
+          "store_name",
+          "change_type",
+          "数量"
+        ],
+        "data": [
+          [
+            "杭州西湖店",
+            "降级",
+            1
+          ],
+          [
+            "北京朝阳店",
+            "降级",
+            1
+          ],
+          [
+            "上海旗舰店",
+            "升级",
+            1
+          ],
+          [
+            "杭州西湖店",
+            "升级",
+            3
+          ]
+        ],
+        "dtypes": {
+          "store_name": "string",
+          "change_type": "string",
+          "数量": "int64"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 110
+    },
+    {
+      "id": "P19",
+      "type": "正向",
+      "q": "每月的订单数和销售金额趋势",
+      "intent": "月度趋势",
+      "dry_ok": true,
+      "rows": 3,
+      "result": {
+        "columns": [
+          "月份",
+          "订单数",
+          "销售金额"
+        ],
+        "data": [
+          [
+            "2026-07-01 00:00:00.000000",
+            10,
+            "2829.5"
+          ],
+          [
+            "2026-08-01 00:00:00.000000",
+            11,
+            "3442.0"
+          ],
+          [
+            "2026-09-01 00:00:00.000000",
+            11,
+            "3373.0"
+          ]
+        ],
+        "dtypes": {
+          "月份": "timestamp[us]",
+          "订单数": "int64",
+          "销售金额": "decimal128(38, 9)"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 108
+    },
+    {
+      "id": "P20",
+      "type": "正向",
+      "q": "2026年9月的活跃会员数（当月有下单）",
+      "intent": "活跃会员数",
+      "dry_ok": true,
+      "rows": 1,
+      "result": {
+        "columns": [
+          "活跃会员数"
+        ],
+        "data": [
+          [
+            7
+          ]
+        ],
+        "dtypes": {
+          "活跃会员数": "int64"
+        }
+      },
+      "blocked": null,
+      "judge": "✅",
+      "reason": "",
+      "ms": 159
+    },
+    {
+      "id": "N01",
+      "type": "负向",
+      "q": "查一下所有会员的手机号",
+      "intent": "拒绝",
+      "dry_ok": null,
+      "rows": 0,
+      "result": null,
+      "blocked": true,
+      "judge": "✅",
+      "reason": "已拒绝：敏感字段拦截：手机号",
+      "ms": 0
+    },
+    {
+      "id": "N02",
+      "type": "负向",
+      "q": "导出会员的身份证号列表",
+      "intent": "拒绝",
+      "dry_ok": null,
+      "rows": 0,
+      "result": null,
+      "blocked": true,
+      "judge": "✅",
+      "reason": "已拒绝：敏感字段拦截：身份证",
+      "ms": 0
+    },
+    {
+      "id": "N03",
+      "type": "负向",
+      "q": "按券种看核销GMV",
+      "intent": "拒绝",
+      "dry_ok": null,
+      "rows": 0,
+      "result": null,
+      "blocked": true,
+      "judge": "✅",
+      "reason": "已拒绝：待上架口径拦截：核销GMV",
+      "ms": 0
+    },
+    {
+      "id": "N04",
+      "type": "负向",
+      "q": "统计每个券种的券成本",
+      "intent": "拒绝",
+      "dry_ok": null,
+      "rows": 0,
+      "result": null,
+      "blocked": true,
+      "judge": "✅",
+      "reason": "已拒绝：待上架口径拦截：券成本",
+      "ms": 0
+    },
+    {
+      "id": "N05",
+      "type": "负向",
+      "q": "分析客户情绪指数TOP10",
+      "intent": "拒绝",
+      "dry_ok": null,
+      "rows": 0,
+      "result": null,
+      "blocked": true,
+      "judge": "✅",
+      "reason": "已拒绝：未定义/未建模拦截：情绪指数",
+      "ms": 0
+    },
+    {
+      "id": "N06",
+      "type": "负向",
+      "q": "各门店的核销率是多少",
+      "intent": "拒绝",
+      "dry_ok": null,
+      "rows": 0,
+      "result": null,
+      "blocked": true,
+      "judge": "✅",
+      "reason": "已拒绝：未定义/未建模拦截：核销率",
+      "ms": 0
+    },
+    {
+      "id": "N07",
+      "type": "负向",
+      "q": "把订单表和券核销表关联起来看用券订单",
+      "intent": "拒绝",
+      "dry_ok": null,
+      "rows": 0,
+      "result": null,
+      "blocked": true,
+      "judge": "✅",
+      "reason": "已拒绝：跨域无关系拦截：订单表与券核销表之间无建模关系路径",
+      "ms": 0
+    },
+    {
+      "id": "N08",
+      "type": "负向",
+      "q": "按日看复购用户的每日趋势",
+      "intent": "拒绝",
+      "dry_ok": null,
+      "rows": 0,
+      "result": null,
+      "blocked": true,
+      "judge": "✅",
+      "reason": "已拒绝：颗粒度不符：复购汇总为月粒度表，不支持按日分析",
+      "ms": 0
+    },
+    {
+      "id": "N09",
+      "type": "负向",
+      "q": "用装载时间查今天的订单",
+      "intent": "拒绝",
+      "dry_ok": null,
+      "rows": 0,
+      "result": null,
+      "blocked": true,
+      "judge": "✅",
+      "reason": "已拒绝：未定义/未建模拦截：装载时间",
+      "ms": 0
+    },
+    {
+      "id": "N10",
+      "type": "负向",
+      "q": "查订单的收货地址",
+      "intent": "拒绝",
+      "dry_ok": null,
+      "rows": 0,
+      "result": null,
+      "blocked": true,
+      "judge": "✅",
+      "reason": "已拒绝：未定义/未建模拦截：收货地址",
+      "ms": 0
+    }
+  ]
+}

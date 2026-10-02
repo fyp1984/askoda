@@ -1,0 +1,10 @@
+{
+  "properties": {
+    "dataSource": "postgres",
+    "host": "wren-postgres-b",
+    "port": "5432",
+    "user": "test",
+    "password": "test",
+    "database": "retail"
+  }
+}

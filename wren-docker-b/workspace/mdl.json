@@ -1,0 +1,429 @@
+{
+  "catalog": "wren_catalog",
+  "schema": "public",
+  "dataSource": "postgres",
+  "models": [
+    {
+      "name": "dwd_order_di",
+      "tableReference": {
+        "catalog": "retail",
+        "schema": "public",
+        "table": "dwd_order_di"
+      },
+      "primaryKey": "order_id",
+      "columns": [
+        {
+          "name": "order_id",
+          "type": "integer",
+          "isPrimaryKey": true,
+          "description": "订单ID"
+        },
+        {
+          "name": "member_id",
+          "type": "integer",
+          "description": "会员ID（关联 dim_member）"
+        },
+        {
+          "name": "store_id",
+          "type": "integer",
+          "description": "门店ID（关联 dim_store）"
+        },
+        {
+          "name": "pay_amount",
+          "type": "numeric",
+          "description": "实付金额（元）；口径：订单金额=SUM(sales_amount) 明细扩展，不含退款单"
+        },
+        {
+          "name": "order_date",
+          "type": "date",
+          "description": "业务日期（分析一律用此字段；装载时间不建模，禁止用装载时间过滤业务日期）"
+        },
+        {
+          "name": "order_status",
+          "type": "varchar",
+          "description": "订单状态；枚举：已完成 / 已退款"
+        }
+      ]
+    },
+    {
+      "name": "dwd_order_detail_di",
+      "tableReference": {
+        "catalog": "retail",
+        "schema": "public",
+        "table": "dwd_order_detail_di"
+      },
+      "primaryKey": "detail_id",
+      "columns": [
+        {
+          "name": "detail_id",
+          "type": "integer",
+          "isPrimaryKey": true,
+          "description": "明细行ID"
+        },
+        {
+          "name": "order_id",
+          "type": "integer",
+          "description": "订单ID（关联 dwd_order_di）"
+        },
+        {
+          "name": "store_id",
+          "type": "integer",
+          "description": "门店ID（关联 dim_store）"
+        },
+        {
+          "name": "sku_id",
+          "type": "integer",
+          "description": "SKU编码"
+        },
+        {
+          "name": "category_name",
+          "type": "varchar",
+          "description": "维度退化列：品类名（美妆/个护/食品/服饰/家居/数码），免 JOIN 直接分组"
+        },
+        {
+          "name": "quantity",
+          "type": "integer",
+          "description": "购买数量"
+        },
+        {
+          "name": "unit_price",
+          "type": "numeric",
+          "description": "成交单价（元）"
+        },
+        {
+          "name": "sales_amount",
+          "type": "numeric",
+          "description": "销售金额（元）=数量×单价；口径：订单金额=SUM(sales_amount)，退款单除外"
+        }
+      ]
+    },
+    {
+      "name": "dim_store",
+      "tableReference": {
+        "catalog": "retail",
+        "schema": "public",
+        "table": "dim_store"
+      },
+      "primaryKey": "store_id",
+      "columns": [
+        {
+          "name": "store_id",
+          "type": "integer",
+          "isPrimaryKey": true,
+          "description": "门店ID"
+        },
+        {
+          "name": "store_name",
+          "type": "varchar",
+          "description": "门店名称"
+        },
+        {
+          "name": "region_name",
+          "type": "varchar",
+          "description": "所属大区；枚举：华东大区 / 华北大区 / 华南大区（无其他取值）"
+        },
+        {
+          "name": "store_type",
+          "type": "varchar",
+          "description": "门店类型；枚举：直营 / 加盟"
+        },
+        {
+          "name": "open_date",
+          "type": "date",
+          "description": "开业日期"
+        }
+      ]
+    },
+    {
+      "name": "dws_store_daily_agg",
+      "tableReference": {
+        "catalog": "retail",
+        "schema": "public",
+        "table": "dws_store_daily_agg"
+      },
+      "primaryKey": "stat_date",
+      "columns": [
+        {
+          "name": "stat_date",
+          "type": "date",
+          "isPrimaryKey": true,
+          "description": "统计日期（表主键之一）"
+        },
+        {
+          "name": "store_id",
+          "type": "integer",
+          "description": "门店ID（关联 dim_store）"
+        },
+        {
+          "name": "sales_amount",
+          "type": "numeric",
+          "description": "当日销售额（元）"
+        },
+        {
+          "name": "order_cnt",
+          "type": "integer",
+          "description": "当日订单数"
+        },
+        {
+          "name": "member_cnt",
+          "type": "integer",
+          "description": "当日下单会员数"
+        },
+        {
+          "name": "area_sqm",
+          "type": "numeric",
+          "description": "门店经营面积（平方米）；口径：坪效=销售额/面积"
+        },
+        {
+          "name": "day_type",
+          "type": "varchar",
+          "description": "日期类型；枚举：工作日 / 周末 / 节假日"
+        }
+      ]
+    },
+    {
+      "name": "ads_coupon_order_di",
+      "tableReference": {
+        "catalog": "retail",
+        "schema": "public",
+        "table": "ads_coupon_order_di"
+      },
+      "primaryKey": "coupon_order_id",
+      "columns": [
+        {
+          "name": "coupon_order_id",
+          "type": "integer",
+          "isPrimaryKey": true,
+          "description": "券核销记录ID"
+        },
+        {
+          "name": "member_id",
+          "type": "integer",
+          "description": "会员ID（关联 dim_member）"
+        },
+        {
+          "name": "coupon_type",
+          "type": "varchar",
+          "description": "券种；枚举：满减券 / 折扣券 / 新人券。按券种细分核销属【待上架】口径，暂不可分析"
+        },
+        {
+          "name": "coupon_amount",
+          "type": "numeric",
+          "description": "券面额（元）；券成本口径【待上架】，暂不可分析"
+        },
+        {
+          "name": "order_gmv",
+          "type": "numeric",
+          "description": "用券订单GMV（元）；核销GMV口径【待上架】，暂不可分析"
+        },
+        {
+          "name": "stat_date",
+          "type": "date",
+          "description": "核销日期"
+        }
+      ]
+    },
+    {
+      "name": "dim_member",
+      "tableReference": {
+        "catalog": "retail",
+        "schema": "public",
+        "table": "dim_member"
+      },
+      "primaryKey": "member_id",
+      "columns": [
+        {
+          "name": "member_id",
+          "type": "integer",
+          "isPrimaryKey": true,
+          "description": "会员ID"
+        },
+        {
+          "name": "member_name",
+          "type": "varchar",
+          "description": "会员姓名"
+        },
+        {
+          "name": "grade",
+          "type": "varchar",
+          "description": "会员等级；枚举：普通 / 银卡 / 金卡 / 钻石"
+        },
+        {
+          "name": "member_status",
+          "type": "varchar",
+          "description": "会员状态；枚举：活跃 / 沉默 / 流失。口径：复购率分母=活跃用户数（当月有下单），禁止用流失会员做分母"
+        },
+        {
+          "name": "register_date",
+          "type": "date",
+          "description": "注册日期"
+        },
+        {
+          "name": "store_id",
+          "type": "integer",
+          "description": "归属门店（关联 dim_store）"
+        }
+      ]
+    },
+    {
+      "name": "ads_member_grade_change_wi",
+      "tableReference": {
+        "catalog": "retail",
+        "schema": "public",
+        "table": "ads_member_grade_change_wi"
+      },
+      "primaryKey": "change_id",
+      "columns": [
+        {
+          "name": "change_id",
+          "type": "integer",
+          "isPrimaryKey": true,
+          "description": "异动记录ID"
+        },
+        {
+          "name": "member_id",
+          "type": "integer",
+          "description": "会员ID（关联 dim_member）"
+        },
+        {
+          "name": "change_month",
+          "type": "date",
+          "description": "异动月份（月粒度）"
+        },
+        {
+          "name": "change_type",
+          "type": "varchar",
+          "description": "异动类型；枚举：升级 / 降级"
+        }
+      ]
+    },
+    {
+      "name": "ads_member_repurchase_di",
+      "tableReference": {
+        "catalog": "retail",
+        "schema": "public",
+        "table": "ads_member_repurchase_di"
+      },
+      "primaryKey": "member_id",
+      "columns": [
+        {
+          "name": "member_id",
+          "type": "integer",
+          "description": "会员ID（关联 dim_member；与 stat_month 联合唯一）"
+        },
+        {
+          "name": "store_id",
+          "type": "integer",
+          "description": "归属门店（关联 dim_store）"
+        },
+        {
+          "name": "stat_month",
+          "type": "date",
+          "description": "统计月份（月粒度，存当月1日）"
+        },
+        {
+          "name": "repurchase_flag",
+          "type": "integer",
+          "description": "当月是否复购：0/1；口径：复购用户数=SUM(repurchase_flag)，复购率=复购用户数/活跃用户数（须随附活跃用户数，分母不可悬空）"
+        },
+        {
+          "name": "order_cnt",
+          "type": "integer",
+          "description": "当月订单数"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "name": "dwd_order_di_dim_member",
+      "models": [
+        "dwd_order_di",
+        "dim_member"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "dwd_order_di.member_id = dim_member.member_id"
+    },
+    {
+      "name": "dwd_order_di_dim_store",
+      "models": [
+        "dwd_order_di",
+        "dim_store"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "dwd_order_di.store_id = dim_store.store_id"
+    },
+    {
+      "name": "order_detail_order",
+      "models": [
+        "dwd_order_detail_di",
+        "dwd_order_di"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "dwd_order_detail_di.order_id = dwd_order_di.order_id"
+    },
+    {
+      "name": "order_detail_store",
+      "models": [
+        "dwd_order_detail_di",
+        "dim_store"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "dwd_order_detail_di.store_id = dim_store.store_id"
+    },
+    {
+      "name": "store_agg_store",
+      "models": [
+        "dws_store_daily_agg",
+        "dim_store"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "dws_store_daily_agg.store_id = dim_store.store_id"
+    },
+    {
+      "name": "coupon_member",
+      "models": [
+        "ads_coupon_order_di",
+        "dim_member"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "ads_coupon_order_di.member_id = dim_member.member_id"
+    },
+    {
+      "name": "member_store",
+      "models": [
+        "dim_member",
+        "dim_store"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "dim_member.store_id = dim_store.store_id"
+    },
+    {
+      "name": "grade_change_member",
+      "models": [
+        "ads_member_grade_change_wi",
+        "dim_member"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "ads_member_grade_change_wi.member_id = dim_member.member_id"
+    },
+    {
+      "name": "repurchase_member",
+      "models": [
+        "ads_member_repurchase_di",
+        "dim_member"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "ads_member_repurchase_di.member_id = dim_member.member_id"
+    },
+    {
+      "name": "repurchase_store",
+      "models": [
+        "ads_member_repurchase_di",
+        "dim_store"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "ads_member_repurchase_di.store_id = dim_store.store_id"
+    }
+  ]
+}

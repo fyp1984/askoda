@@ -1,0 +1,118 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cheersai.local/schemas/structured_requirement.v1.json",
+  "title": "结构化技术需求对象",
+  "description": "M4-2 · 合取 M3 语义分析结论与已确认答复，经契约校验后作为 SQL 生成链路的唯一上游输入。本文件是该对象的唯一数据契约，任何结构变更必须同时更新 validate()。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "demand_id",
+    "dataset",
+    "version",
+    "source_round",
+    "schema_version",
+    "subject",
+    "granularity",
+    "time_semantics",
+    "data_scope",
+    "output_fields",
+    "aggregation_rules",
+    "confirmed_facts",
+    "evidence_chain",
+    "residual_risks",
+    "status"
+  ],
+  "definitions": {
+    "SlotClaim": {
+      "description": "单一结论项：带值、带证据、带置信度，缺一不可。无源结论（evidence 为空数组）是契约错误——证据链必须能回溯到'哪条依据支持了这个判断'。",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["value", "evidence", "confidence"],
+      "properties": {
+        "value": {
+          "description": "结论取值。类型由槽位决定：主体/颗粒度/时间是字符串，输出字段可以是字符串或对象。"
+        },
+        "evidence": {
+          "description": "支持本结论的证据条目数组（每个元素至少含 level/source/locator 三项）。长度必须 > 0：无源结论 = 契约错误，必须在 residual_risks 里报出来，不得以空数组占位。",
+          "type": "array",
+          "minItems": 1
+        },
+        "confidence": {
+          "description": "置信度，闭区间 [0, 1]。越界即契约错误——负数和 >1 的值在上游（M3 semantics）已经被 round() 限制，这里出现说明有绕过 M3 直接写入的路径，必须抓。",
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0
+        }
+      }
+    }
+  },
+  "properties": {
+    "demand_id": {
+      "description": "需求单号，与 demand_requests.demand_id 对齐。SQL 生成链路以此串起全部溯源字段。",
+      "type": "string",
+      "minLength": 1
+    },
+    "dataset": {
+      "description": "数据集键（A/B），与 registry.DATASETS 的 key 对齐。决定下游 schema_version 的取数范围、sql_context_pack 的闭集范围，以及 SQL 最终执行的 Wren 端点。",
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "description": "本需求下的结构化对象版本号，>=1。只增不改：同一 demand_id 每次 build = version+1，旧版保留在 structured_requirements 表中可回退比对。",
+      "type": "integer",
+      "minimum": 1
+    },
+    "source_round": {
+      "description": "来源分析轮次号，与 analysis_rounds.round_no 对齐。用于'哪一轮语义分析产出了这个结构化对象'的精确回溯——同一轮次、不同 build 的差异可被定位。",
+      "type": "integer",
+      "minimum": 1
+    },
+    "schema_version": {
+      "description": "Schema 快照版本号（schema_snapshots.schema_version），sha256 前 8 位。下游 SQL 生成链路以此锁定'这条 SQL 是针对哪一版结构写的'，实现库表变化后的精确复现。",
+      "type": "string",
+      "minLength": 1
+    },
+    "subject": {
+      "$ref": "#/definitions/SlotClaim",
+      "description": "主体：需求在问的'谁/什么'，通常对应一张主题表。来源 = M3 slots['subject'].candidates[0] 的 value/evidence/confidence 原样保留。"
+    },
+    "granularity": {
+      "$ref": "#/definitions/SlotClaim",
+      "description": "颗粒度：一行数据代表什么业务实体，对应 R1（一对多放大）的判定基础。来源 = M3 slots['granularity'].candidates[0]，原样保留（不重新构造 evidence/confidence）。"
+    },
+    "time_semantics": {
+      "$ref": "#/definitions/SlotClaim",
+      "description": "时间口径：业务日期字段、统计期间、时态语义（发生时间/快照时间/统计期间）。来源 = M3 slots['time'].candidates[0]（设计文档写作 time_semantics，代码键是 time，必须在此处完成映射）。"
+    },
+    "data_scope": {
+      "$ref": "#/definitions/SlotClaim",
+      "description": "范围条件：WHERE 子句要表达的业务筛选（排除/限定/状态筛选）。来源 = M3 slots['scope'].candidates[0]。"
+    },
+    "output_fields": {
+      "description": "输出字段清单。每个元素 = 一条 SlotClaim，与 M3 slots['fields'].candidates 一一对应（顺序保留、项内 value/evidence/confidence 原样保留）。下游 sql_context_pack 会按此清单生成 SELECT 列。",
+      "type": "array",
+      "items": { "$ref": "#/definitions/SlotClaim" }
+    },
+    "aggregation_rules": {
+      "description": "聚合规则。M3 没有此槽位：从 output_fields 各项的 value 中匹配 AGG_KEYWORDS（汇总求和/计数/平均/比率/排名/趋势对比/分组）派生。派生不出则空数组 []，不得编造。数组元素结构 = {rule:string, field:string|null, matched_keyword:string|null}。",
+      "type": "array"
+    },
+    "confirmed_facts": {
+      "description": "已确认答复。来源 = analysis.list_confirmations()[items 中 answered=True]。字段清单固定为 question_id/slot/question/answer/version/answered_by/answered_at。注意 confirmations 表没有 choice 列——选项已被拼进 answer 文本（形如'X（选项：Y）'），不要去找 choice。",
+      "type": "array"
+    },
+    "evidence_chain": {
+      "description": "来源分析轮次的完整证据链（analysis_rounds.evidence）。元素已含 level/source/content/locator，无需再拼——直接赋值即可。此数组是所有 SlotClaim.evidence 的父集。",
+      "type": "array"
+    },
+    "residual_risks": {
+      "description": "残余风险。来源 = 两部分合取：(1) M3 slots['risks'].candidates 全量（规则结论/一对多/时间风险/证据源降级）；(2) 本 build 取不到的槽位（candidates 为空数组），需追加项说明'槽位 X 无候选结论，未进入结构化对象'。数组元素结构 = SlotClaim（value/evidence/confidence）。",
+      "type": "array"
+    },
+    "status": {
+      "description": "审核状态。枚举，受控流转：待审核（build 默认）→ 已通过 / 已退回。值必须完全等于三枚字符串之一，拼写错误是契约错误（例如写成'待审批'/'审核通过'都会被 validate() 抓出）。",
+      "type": "string",
+      "enum": ["待审核", "已通过", "已退回"]
+    }
+  }
+}

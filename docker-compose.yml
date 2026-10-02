@@ -1,0 +1,215 @@
+# 数据需求智能分析助手 · 服务端一键起停编排
+#
+# 范围：gateway（MCP 服务端）+ 模拟库 A（电商域）+ 模拟库 B（零售会员域）
+#
+# 用法：
+#   docker compose up -d          # 一键起停（首次会构建 gateway 镜像）
+#   docker compose ps             # 查看状态
+#   docker compose down           # 停栈（保留数据卷）
+#   docker compose down && docker compose up -d     # 可复现性验证
+#
+# 说明：
+# - 数据卷 wren-pgdata / wren-pgdata-b 为 external，指向单栈时代已存在的数据卷，
+#   升级编排后历史数据与已部署 MDL 保持不变（零迁移）。
+# - 单栈 compose（wren-docker/ 、wren-docker-b/）保留作单库调试用；
+#   与本编排共用同一数据卷与容器名，**不可同时起两套**。
+name: demand-assistant
+
+services:
+  # ------------------------------------------------------------------
+  # 模拟库 A · 电商域（6 表）
+  # ------------------------------------------------------------------
+  wren-postgres-a:
+    image: postgres:15-alpine
+    container_name: wren-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: test
+    ports:
+      - "15432:5432"
+    volumes:
+      - ./wren-docker/postgres/init:/docker-entrypoint-initdb.d:ro
+      - wren-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  wren-mcp-a:
+    image: ghcr.io/canner/wren-engine-ibis:latest
+    container_name: wren-mcp
+    restart: unless-stopped
+    depends_on:
+      wren-postgres-a:
+        condition: service_healthy
+    environment:
+      ENABLE_MCP_SERVER: "true"
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "9000"
+      WREN_URL: localhost:8000
+      WEB_UI_ENABLED: "false"
+      CONNECTION_INFO_FILE: /workspace/connection_info.json
+      MDL_PATH: /workspace/mdl.json
+      MDL_WORKSPACE: /workspace
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+      - "18000:8000"
+    volumes:
+      - ./wren-docker/workspace:/workspace
+
+  # ------------------------------------------------------------------
+  # 模拟库 B · 零售会员域（8 表）
+  # ------------------------------------------------------------------
+  wren-postgres-b:
+    image: postgres:15-alpine
+    container_name: wren-postgres-b
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: retail
+    ports:
+      - "15433:5432"
+    volumes:
+      - ./wren-docker-b/postgres/init:/docker-entrypoint-initdb.d:ro
+      - wren-pgdata-b:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d retail"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  wren-mcp-b:
+    image: ghcr.io/canner/wren-engine-ibis:latest
+    container_name: wren-mcp-b
+    restart: unless-stopped
+    depends_on:
+      wren-postgres-b:
+        condition: service_healthy
+    environment:
+      ENABLE_MCP_SERVER: "true"
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "9000"
+      WREN_URL: localhost:8000
+      WEB_UI_ENABLED: "false"
+      CONNECTION_INFO_FILE: /workspace/connection_info.json
+      MDL_PATH: /workspace/mdl.json
+      MDL_WORKSPACE: /workspace
+    ports:
+      - "9002:9000"
+      - "9003:9001"
+      - "18001:8000"
+    volumes:
+      - ./wren-docker-b/workspace:/workspace
+
+  # ------------------------------------------------------------------
+  # 服务端网关（MCP 服务端 · 双库接入 · 只读执行）
+  # ------------------------------------------------------------------
+  gateway:
+    build:
+      context: ./gateway
+      args:
+        PIP_INDEX: ${PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    image: demand-assistant-gateway:0.1.0
+    container_name: demand-gateway
+    restart: unless-stopped
+    depends_on:
+      wren-mcp-a:
+        condition: service_started
+      wren-mcp-b:
+        condition: service_started
+      assistant-postgres:
+        condition: service_healthy
+      assistant-minio:
+        condition: service_started
+    extra_hosts:
+      # 容器内直连宿主机的 FileBay 知识底座 API（127.0.0.1:19380 在容器内不可达）
+      - "host.docker.internal:host-gateway"
+    environment:
+      GATEWAY_HOST: "0.0.0.0"
+      GATEWAY_PORT: "8080"
+      GATEWAY_MCP_PATH: "/mcp"
+      # 容器内走服务名，不经宿主机回环
+      WREN_A_URL: "http://wren-mcp-a:9000"
+      WREN_B_URL: "http://wren-mcp-b:9000"
+      MDL_A_PATH: "/workspace-a/mdl.json"
+      MDL_B_PATH: "/workspace-b/mdl.json"
+      # --- M2 新增 ---
+      # 网关自有元数据库（需求单 / 元数据字典 / 流转留痕）
+      ASSISTANT_DB_DSN: "postgresql://assistant:assistant@assistant-postgres:5432/assistant"
+      # 元数据采集用的数据源直连串（仅采集结构，查询一律走语义层）
+      WREN_PG_A_DSN: "postgresql://test:test@wren-postgres-a:5432/test"
+      WREN_PG_B_DSN: "postgresql://test:test@wren-postgres-b:5432/retail"
+      # 附件对象存储
+      MINIO_ENDPOINT: "assistant-minio:9000"
+      MINIO_ACCESS_KEY: "assistant"
+      MINIO_SECRET_KEY: "assistant123"
+      MINIO_BUCKET: "demand-attachments"
+      # FileBay 知识底座（RAGFlow v0.26.4）检索接口
+      KNOWLEDGE_API_URL: "${KNOWLEDGE_API_URL:-http://host.docker.internal:19380/api/v1}"
+      KNOWLEDGE_API_KEY: "${KNOWLEDGE_API_KEY:-}"
+      KNOWLEDGE_DATASET_ID: "${KNOWLEDGE_DATASET_ID:-}"
+    ports:
+      # 宿主机 18080（8080 已被本项目 demo-server 长期占用）
+      - "${GATEWAY_HOST_PORT:-18080}:8080"
+    volumes:
+      # MDL 语义层按数据集挂载；换库只换挂载与注册项，不改网关代码
+      - ./wren-docker/workspace/mdl.json:/workspace-a/mdl.json:ro
+      - ./wren-docker-b/workspace/mdl.json:/workspace-b/mdl.json:ro
+
+  # ------------------------------------------------------------------
+  # 网关自有元数据库（M2）：需求单 / 流转留痕 / 元数据字典
+  # 与被分析的模拟库 A、B 严格分离——那两个是「业务数据源」，这里是「运行元数据」
+  # ------------------------------------------------------------------
+  assistant-postgres:
+    image: postgres:15-alpine
+    container_name: demand-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: assistant
+      POSTGRES_PASSWORD: assistant
+      POSTGRES_DB: assistant
+    ports:
+      - "${ASSISTANT_PG_PORT:-15434}:5432"
+    volumes:
+      - assistant-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U assistant -d assistant"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ------------------------------------------------------------------
+  # 附件对象存储（M2）：需求单附件，与 RAGFlow 内部对象存储互不干扰
+  # ------------------------------------------------------------------
+  assistant-minio:
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    container_name: demand-minio
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: assistant
+      MINIO_ROOT_PASSWORD: assistant123
+    ports:
+      - "${ASSISTANT_MINIO_PORT:-19000}:9000"
+      - "${ASSISTANT_MINIO_CONSOLE_PORT:-19001}:9001"
+    volumes:
+      - assistant-minio-data:/data
+
+volumes:
+  # M2 新增：网关元数据库与附件存储（本编排自建，非 external）
+  assistant-pgdata:
+  assistant-minio-data:
+  # 沿用单栈时代的数据卷，零迁移
+  wren-pgdata:
+    external: true
+    name: ${WREN_PG_VOLUME:-wren-docker_wren-pgdata}
+  wren-pgdata-b:
+    external: true
+    name: ${WREN_PG_VOLUME_B:-wren-docker-b_wren-pgdata-b}

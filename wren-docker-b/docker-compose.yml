@@ -1,0 +1,48 @@
+services:
+  wren-postgres-b:
+    image: postgres:15-alpine
+    container_name: wren-postgres-b
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: retail
+    ports:
+      # B 库：宿主机 15433，避开 A 库 15432
+      - "15433:5432"
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - wren-pgdata-b:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d retail"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  wren-mcp-b:
+    image: ghcr.io/canner/wren-engine-ibis:latest
+    container_name: wren-mcp-b
+    restart: unless-stopped
+    depends_on:
+      wren-postgres-b:
+        condition: service_healthy
+    environment:
+      ENABLE_MCP_SERVER: "true"
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "9000"
+      WREN_URL: localhost:8000
+      WEB_UI_ENABLED: "false"
+      CONNECTION_INFO_FILE: /workspace/connection_info.json
+      MDL_PATH: /workspace/mdl.json
+      MDL_WORKSPACE: /workspace
+    ports:
+      # B 栈 MCP：宿主机 9002（A 栈占 9000）；UI 9003；ibis REST 18001
+      - "9002:9000"
+      - "9003:9001"
+      - "18001:8000"
+    volumes:
+      - ./workspace:/workspace
+
+volumes:
+  wren-pgdata-b:

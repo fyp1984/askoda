@@ -1,0 +1,110 @@
+{
+  "catalog": "wren_catalog",
+  "schema": "public",
+  "dataSource": "postgres",
+  "models": [
+    {
+      "name": "customers",
+      "tableReference": { "catalog": "test", "schema": "public", "table": "customers" },
+      "primaryKey": "customer_id",
+      "columns": [
+        { "name": "customer_id", "type": "integer", "isPrimaryKey": true },
+        { "name": "first_name", "type": "varchar" },
+        { "name": "last_name", "type": "varchar" },
+        { "name": "segment", "type": "varchar" },
+        { "name": "created_at", "type": "timestamp" }
+      ]
+    },
+    {
+      "name": "orders",
+      "tableReference": { "catalog": "test", "schema": "public", "table": "orders" },
+      "primaryKey": "order_id",
+      "columns": [
+        { "name": "order_id", "type": "integer", "isPrimaryKey": true },
+        { "name": "customer_id", "type": "integer" },
+        { "name": "order_date", "type": "date" },
+        { "name": "status", "type": "integer", "description": "1=已下单 2=已发货 3=已完成 4=已退款" },
+        { "name": "amount", "type": "numeric" }
+      ]
+    },
+    {
+      "name": "categories",
+      "tableReference": { "catalog": "test", "schema": "public", "table": "categories" },
+      "primaryKey": "category_id",
+      "columns": [
+        { "name": "category_id", "type": "integer", "isPrimaryKey": true },
+        { "name": "category_name", "type": "varchar" }
+      ]
+    },
+    {
+      "name": "products",
+      "tableReference": { "catalog": "test", "schema": "public", "table": "products" },
+      "primaryKey": "product_id",
+      "columns": [
+        { "name": "product_id", "type": "integer", "isPrimaryKey": true },
+        { "name": "product_name", "type": "varchar" },
+        { "name": "category_id", "type": "integer" },
+        { "name": "category_name", "type": "varchar", "description": "维度退化列：冗余存储类目名，便于免 JOIN 直接分析" },
+        { "name": "price", "type": "numeric" },
+        { "name": "stock", "type": "integer" }
+      ]
+    },
+    {
+      "name": "order_items",
+      "tableReference": { "catalog": "test", "schema": "public", "table": "order_items" },
+      "primaryKey": "item_id",
+      "columns": [
+        { "name": "item_id", "type": "integer", "isPrimaryKey": true },
+        { "name": "order_id", "type": "integer" },
+        { "name": "product_id", "type": "integer" },
+        { "name": "quantity", "type": "integer" },
+        { "name": "unit_price", "type": "numeric" },
+        { "name": "subtotal", "type": "numeric" }
+      ]
+    },
+    {
+      "name": "refunds",
+      "tableReference": { "catalog": "test", "schema": "public", "table": "refunds" },
+      "primaryKey": "refund_id",
+      "columns": [
+        { "name": "refund_id", "type": "integer", "isPrimaryKey": true },
+        { "name": "order_id", "type": "integer" },
+        { "name": "refund_date", "type": "date" },
+        { "name": "refund_amount", "type": "numeric" },
+        { "name": "reason", "type": "varchar" }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "name": "orders_customers",
+      "models": ["orders", "customers"],
+      "joinType": "MANY_TO_ONE",
+      "condition": "orders.customer_id = customers.customer_id"
+    },
+    {
+      "name": "products_categories",
+      "models": ["products", "categories"],
+      "joinType": "MANY_TO_ONE",
+      "condition": "products.category_id = categories.category_id"
+    },
+    {
+      "name": "order_items_orders",
+      "models": ["order_items", "orders"],
+      "joinType": "MANY_TO_ONE",
+      "condition": "order_items.order_id = orders.order_id"
+    },
+    {
+      "name": "order_items_products",
+      "models": ["order_items", "products"],
+      "joinType": "MANY_TO_ONE",
+      "condition": "order_items.product_id = products.product_id"
+    },
+    {
+      "name": "refunds_orders",
+      "models": ["refunds", "orders"],
+      "joinType": "MANY_TO_ONE",
+      "condition": "refunds.order_id = orders.order_id"
+    }
+  ]
+}
