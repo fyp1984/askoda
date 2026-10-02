@@ -31,3 +31,7 @@ Thumbs.db
 # ---- 运行产物（日志 / 临时）----
 *.log
 /tmp/
+
+# ---- 门禁报告（每次跑 tools/gate_all.py 重新生成）----
+gate-report.json
+gate-report.md
