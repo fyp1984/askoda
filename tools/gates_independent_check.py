@@ -49,13 +49,19 @@ CASES = [
     ("行注释后 DROP", "SELECT 1 -- x\n", False, False),
 
     # --- 只读正常用例（不应误拦）---
-    ("普通 SELECT", "SELECT order_id FROM orders WHERE amount > 100", False, False),
-    ("聚合 SELECT", "SELECT count(*) FROM orders", False, False),
+    # 修正（2026-10-02）：原用例用了 B 库不存在的表（orders/customers）。因「引用未建模对象」
+    # 现已属硬错误（blocking），会把只读用例顶成"不通过"，偏离本用例意图（本用例只验
+    # L3 只读门禁不误拦合法查询）。改用 B 库真实表/列，保持原意图。
+    ("普通 SELECT", "SELECT store_id, store_name FROM dim_store WHERE region_name = '华东大区'", False, False),
+    ("聚合 SELECT", "SELECT count(*) FROM dwd_order_di", False, False),
     ("WITH 嵌套 SELECT", "WITH a AS (SELECT 1 AS n), b AS (SELECT n FROM a) SELECT n FROM b", False, False),
 
-    # --- L2 静态风险（警告即可，不该阻断）---
-    ("隐式笛卡尔积", "SELECT a.order_id FROM orders a, customers b", False, False),
-    ("SELECT *", "SELECT * FROM orders", False, False),
+    # --- L2 静态风险 ---
+    # 修正（2026-10-02）：隐式笛卡尔积按新决策属「硬错误 → 阻断」，故第 4 列由 False 改 True；
+    # SELECT * 仍是软提示（SELECT_STAR=warning），期望保持「不阻断」。两条都换成 B 库真实表，
+    # 使被测行为纯粹（不掺入"未建模对象"这一无关规则）。
+    ("隐式笛卡尔积（硬错误 → 阻断）", "SELECT a.store_id FROM dim_store a, dwd_order_di b", False, True),
+    ("SELECT *（软提示 → 不阻断）", "SELECT * FROM dim_store", False, False),
 
     # --- L1 语法错误 ---
     ("语法错误", "SELECT (( FROM", True, True),

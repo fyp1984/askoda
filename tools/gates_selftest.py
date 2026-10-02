@@ -220,7 +220,10 @@ def main():
     # 附加：L2 各类静态规则（GROUP BY 不一致、UNNECESSARY DISTINCT）
     # ------------------------------------------------------------------
     title = "附加-10. GROUP BY 不一致 + 不必要 DISTINCT 警告（status=警告）"
-    sql = "SELECT DISTINCT a, b, SUM(c) FROM t GROUP BY a"
+    # 修正（2026-10-02）：原 SQL 用假表 t / 假列 a,b,c。因「引用未建模对象」现已属
+    # 硬错误（blocking），会把本用例顶成"不通过"，偏离本用例意图（本用例只验
+    # GROUP BY 软规则能被检出且不阻断）。改用 B 库真实表/列，保持原意图。
+    sql = "SELECT DISTINCT store_id, order_status, COUNT(*) FROM dwd_order_di GROUP BY store_id"
     r = gt.review(sql, dataset="B", _dry_run_fn=_fake_dry_run_ok)
     rules = {i["rule"] for i in r["semantic_issues"]}
     has_gb = "GROUP_BY_INCONSISTENT" in rules

@@ -596,9 +596,18 @@ def _ev_one_to_many_unhandled(ast_stmt, ctx):
     hit_rel = False
     hit_snippet = None
     hit_detail = ""
-    # SQL 中 MDL 模型的出现顺序（用于方向反解；sql_to_model 已在本函数上文建好）
+    # SQL 中 MDL 模型的出现顺序（用于方向反解；sql_to_model 已在本函数上文建好）。
+    # 修正（2026-10-02）：排除 CTE 定义内部的表 —— CTE 是"先聚合再关联"的标准写法
+    # （gates_selftest 附加-14 用例），CTE 内部表与主查询表混在一起排序会把 JOIN 方向
+    # 判反、产生误报。方向反解只在主查询作用域内生效；宁可少报，不可误报。
+    _cte_table_ids = set()
+    for _cte in ast_stmt.find_all(exp.CTE):
+        for _t in _cte.find_all(exp.Table):
+            _cte_table_ids.add(id(_t))
     _seq = []
     for _t in ast_stmt.find_all(exp.Table):
+        if id(_t) in _cte_table_ids:
+            continue
         _m = sql_to_model.get(_norm_sql_name(_t.name or ""))
         if _m and _m not in _seq:
             _seq.append(_m)
