@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-02T13:58:11",
+  "generated_at": "2026-10-02T15:49:18",
   "mcp": "http://127.0.0.1:18080/mcp",
   "dataset": "B",
   "healthz": {
@@ -21,14 +21,14 @@
         "ok": true,
         "endpoint": "http://wren-mcp-a:9000/mcp",
         "response": "Wren Engine is healthy (data source: postgres, MDL deployed: yes)",
-        "ms": 56
+        "ms": 106
       },
       {
         "dataset": "B",
         "ok": true,
         "endpoint": "http://wren-mcp-b:9000/mcp",
         "response": "Wren Engine is healthy (data source: postgres, MDL deployed: yes)",
-        "ms": 88
+        "ms": 142
       }
     ],
     "components": {
@@ -38,16 +38,16 @@
         "endpoint": "assistant-postgres:5432/assistant",
         "ms": 0,
         "tables": {
-          "demand_requests": 395,
-          "demand_events": 1616,
+          "demand_requests": 426,
+          "demand_events": 1741,
           "table_docs": 14,
           "column_docs": 79,
           "business_glossary": 5,
-          "analysis_rounds": 350,
-          "confirmations": 650,
+          "analysis_rounds": 381,
+          "confirmations": 695,
           "schema_snapshots": 2,
-          "structured_requirements": 325,
-          "sql_runs": 543,
+          "structured_requirements": 356,
+          "sql_runs": 564,
           "knowledge_citations": 42
         }
       },
@@ -60,7 +60,7 @@
       "knowledge": {
         "ok": true,
         "endpoint": "http://host.docker.internal:19380/api/v1",
-        "ms": 39,
+        "ms": 38,
         "datasets_visible": 1,
         "dataset": {
           "id": "bf1312d28b3d11f1847f73b364e50e19",
@@ -74,7 +74,7 @@
   },
   "part1_demo": {
     "question": "各门店的复购用户数分别是多少",
-    "demand_id": "DR-20261002-AH2I",
+    "demand_id": "DR-20261002-KE4S",
     "analysis": {
       "slots": {
         "subject": "ads_member_repurchase_di",
@@ -95,11 +95,11 @@
     },
     "requirement_version": 1,
     "chosen_table": "ads_member_repurchase_di",
-    "pack_version": "88a8f30e",
+    "pack_version": "b68bcbcb",
     "sql_draft": "SELECT s.store_name, r.stat_month, SUM(r.repurchase_flag) AS 复购用户数 FROM ads_member_repurchase_di r JOIN dim_store s ON r.store_id = s.store_id GROUP BY s.store_name, r.stat_month",
     "review_status": "通过",
     "row_count": 9,
-    "sql_run_id": "SR-5776092f2c61c6b2",
+    "sql_run_id": "SR-e464683a97159315",
     "adopted": true,
     "replay_ok": true,
     "replay_gaps": []
@@ -112,8 +112,8 @@
       "负向题数": 10,
       "负向拒绝": 10,
       "拒绝率%": 100.0,
-      "耗时s": 51.0,
-      "正向题L2命中数": 2
+      "耗时s": 46.2,
+      "正向题L2命中数": 1
     },
     "records": [
       {
@@ -158,13 +158,10 @@
         "q": "整体复购率是多少（含分母）",
         "intent": "复购率·总",
         "sql": "SELECT ROUND(CAST(100.0 * a.c / b.m AS DECIMAL(10,1)), 1) AS 复购率百分比, a.c AS 复购用户数, b.m AS 活跃会员数 FROM (SELECT SUM(repurchase_flag) AS c FROM ads_member_repurchase_di) a, (SELECT COUNT(DISTINCT member_id) AS m FROM dwd_order_di) b",
-        "review": "警告",
+        "review": "通过",
         "rows": 1,
         "judge": "✅",
-        "l2_rules": [
-          "JOIN_WITHOUT_CONDITION",
-          "UNMAPPED_OBJECT_REF"
-        ],
+        "l2_rules": [],
         "reason": ""
       },
       {
@@ -485,9 +482,9 @@
   },
   "part3_poc3": {
     "traps": 10,
-    "blocked": 7,
-    "拦截率%": 70.0,
-    "平均review_ms": 58,
+    "blocked": 10,
+    "拦截率%": 100.0,
+    "平均review_ms": 63,
     "records": [
       {
         "id": "T01",
@@ -496,10 +493,11 @@
         "status": "不通过",
         "blocked": true,
         "why": [
+          "L2:静态风险",
           "L4:语义校验",
           "None"
         ],
-        "ms": 49
+        "ms": 60
       },
       {
         "id": "T02",
@@ -508,10 +506,11 @@
         "status": "不通过",
         "blocked": true,
         "why": [
+          "L2:静态风险",
           "L4:语义校验",
           "None"
         ],
-        "ms": 61
+        "ms": 42
       },
       {
         "id": "T03",
@@ -523,7 +522,7 @@
           "L4:语义校验",
           "None"
         ],
-        "ms": 39
+        "ms": 38
       },
       {
         "id": "T04",
@@ -535,16 +534,18 @@
           "L4:语义校验",
           "None"
         ],
-        "ms": 45
+        "ms": 71
       },
       {
         "id": "T05",
         "desc": "一对多未定颗粒度（会员⋈订单直接 COUNT 会员）",
         "sql": "SELECT COUNT(m.member_id) AS 会员数 FROM dim_member m JOIN dwd_order_di o ON m.member_id = o.member_id",
-        "status": "通过",
-        "blocked": false,
-        "why": [],
-        "ms": 61
+        "status": "不通过",
+        "blocked": true,
+        "why": [
+          "L2:静态风险"
+        ],
+        "ms": 83
       },
       {
         "id": "T06",
@@ -553,28 +554,33 @@
         "status": "不通过",
         "blocked": true,
         "why": [
+          "L2:静态风险",
           "L4:语义校验",
           "None"
         ],
-        "ms": 44
+        "ms": 48
       },
       {
         "id": "T07",
         "desc": "跨域无关系 JOIN（订单 ⋈ 券核销，无关系路径）",
         "sql": "SELECT COUNT(*) FROM dwd_order_di o JOIN ads_coupon_order_di c ON o.order_id = c.coupon_order_id",
-        "status": "警告",
-        "blocked": false,
-        "why": [],
-        "ms": 71
+        "status": "不通过",
+        "blocked": true,
+        "why": [
+          "L2:静态风险"
+        ],
+        "ms": 117
       },
       {
         "id": "T08",
         "desc": "枚举值错误（region_name=西南大区）",
         "sql": "SELECT store_name FROM dim_store WHERE region_name = '西南大区'",
-        "status": "通过",
-        "blocked": false,
-        "why": [],
-        "ms": 72
+        "status": "不通过",
+        "blocked": true,
+        "why": [
+          "L2:静态风险"
+        ],
+        "ms": 88
       },
       {
         "id": "T09",
@@ -583,10 +589,11 @@
         "status": "不通过",
         "blocked": true,
         "why": [
+          "L2:静态风险",
           "L4:语义校验",
           "None"
         ],
-        "ms": 59
+        "ms": 43
       },
       {
         "id": "T10",
@@ -595,10 +602,11 @@
         "status": "不通过",
         "blocked": true,
         "why": [
+          "L2:静态风险",
           "L4:语义校验",
           "None"
         ],
-        "ms": 80
+        "ms": 45
       }
     ]
   },
