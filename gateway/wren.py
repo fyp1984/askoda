@@ -113,7 +113,7 @@ class WrenClient:
                 "params": {
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": {},
-                    "clientInfo": {"name": "demand-gateway", "version": "0.1.0"},
+                    "clientInfo": {"name": "askoda", "version": "0.3.0"},
                 },
             }
         )

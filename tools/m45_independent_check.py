@@ -11,7 +11,7 @@
   4) 写操作 SQL 是否在**执行前**就被拦，且**不留下 sql_runs 记录**。
 
 用法（容器内）：
-    docker exec -e PYTHONPATH=/app demand-gateway python /tmp/m45_independent_check.py
+    docker exec -e PYTHONPATH=/app askoda python /tmp/m45_independent_check.py
 退出码 0 = 全过。
 """
 import hashlib

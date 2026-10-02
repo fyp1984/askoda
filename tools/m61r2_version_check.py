@@ -9,7 +9,7 @@
      pack_version == sha8(schema_version + requirement_version + rules_version)。
 
 运行（容器内，需 DB 中有需求单）：
-    docker exec -e PYTHONPATH=/app demand-gateway python /tmp/m61r2_version_check.py
+    docker exec -e PYTHONPATH=/app askoda python /tmp/m61r2_version_check.py
 """
 import hashlib
 import inspect

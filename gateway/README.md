@@ -1,4 +1,4 @@
-# 服务端网关（M1 网关骨架 → M2 需求受理与知识底座 → M3 语义分析与确认闭环）
+# 服务端网关（MCP 工具面 41 个 · 双库语义层 · 五层门禁 · 只读执行 · 留痕回放）
 
 数据需求智能分析助手的服务端入口：对 Agent 暴露 MCP 工具，对内接入 Wren 语义层双库、
 自有元数据库与附件对象存储，对下接入 RAGFlow 知识底座。
@@ -9,7 +9,7 @@
 
 ## 一、一键起停
 
-在**项目根目录**（`数据需求智能分析助手/`）执行：
+在**仓库根目录**（`askoda/`）执行：
 
 ```bash
 docker compose up -d          # 起停全部：gateway + 元数据库 + 附件存储 + 双库（7 服务）
@@ -44,12 +44,15 @@ docker compose up -d --build
 | 模拟库 A | `127.0.0.1:9000`（MCP）/ `15432`（PG） | 电商域，6 表 |
 | 模拟库 B | `127.0.0.1:9002`（MCP）/ `15433`（PG） | 零售会员域，8 表 |
 | 网关元数据库 | `127.0.0.1:15434`（PG） | 需求单 / 事件 / 元数据字典（网关自有） |
-| 附件对象存储 | `127.0.0.1:19000`（S3）/ `19001`（控制台） | MinIO，桶 `demand-attachments` |
+| 附件对象存储 | `127.0.0.1:19000`（S3）/ `19001`（控制台） | MinIO，桶 `askoda-attachments` |
 | 知识底座 | `http://127.0.0.1:19380/api/v1` | RAGFlow 检索接口（网关只做客户端） |
 
 宿主机端口用 `18080` 而非 `8080`：`8080` 已被本项目 `demo-server.py` 长期占用。
 
-## 三、MCP 工具契约（M1 7 个 + M2 14 个 + M3 7 个 = 28 个）
+## 三、MCP 工具面（41 个 · 九域）
+
+> 按落地批次分列：**M1–M3 第一批（28 个）** + **M4–M6 第二批（13 个）**。
+> 逐条入参默认值与返回要点，以仓库根 `README.md` §5.5 与项目文档《MCP 工具契约与注册说明》为事实源（`app.py` 增删工具须同批更新）。
 
 ### M1 · 语义层与问数
 
@@ -96,13 +99,41 @@ docker compose up -d --build
 
 | 工具 | 入参 | 说明 |
 |---|---|---|
-| `analysis_first_round` | `demand_id`, `dataset="B"` | 取证据（P1–P8）→ 六槽位结论 → 规则校验 → 生成待确认问题 → 落库。**轮次只增不改** |
+| `analysis_first_round` | `demand_id`, `dataset="B"` | 取证据（P1–P9）→ 六槽位结论 → 规则校验 → 生成待确认问题 → 落库。**轮次只增不改** |
 | `analysis_rounds` | `demand_id` | 列出全部轮次：轮次号、证据数、问题数、主体、阻断项数 |
 | `analysis_get` | `demand_id`, `round_no=None` | 取某一轮完整结果（默认最新一轮） |
 | `analysis_evidence` | `demand_id`, `round_no`, `level` | 取证据链，可按优先级过滤（P1–P9） |
 | `confirmation_generate` | `demand_id`, `dataset="B"` | **只刷新待确认问题**，不新增轮次（知识库/元数据更新后重问用） |
 | `confirmation_list` | `demand_id`, `include_history=False` | 列确认问答；`include_history=True` 连历史版本一起给 |
 | `confirmation_answer` | `demand_id`, `question_id`, `answer`, `choice` | 答复问题。**不覆盖历史**：`version+1` + `supersedes` 指向旧版 |
+
+### M4 · Schema 快照与结构化需求（6）
+
+| 工具 | 入参 | 说明 |
+|---|---|---|
+| `schema_version` | `dataset="B"` | 取最近一次 Schema 快照版本号 |
+| `schema_scan` | `dataset="B"`, `persist=true` | 采集 Schema 快照 + 稳定版本号（同库两次采集必须同值） |
+| `requirement_structured` | `demand_id`, `dataset="B"` | 合成结构化技术需求对象 + 契约校验（版本只增不改） |
+| `requirement_get` | `demand_id`, `version=None` | 取某一版结构化需求（默认最新） |
+| `schema_candidates` | `demand_id`, `dataset="B"` | 主题表 / 关联路径 / 时间字段候选（仅在 MDL 闭集内产生） |
+| `sql_context_pack` | `demand_id`, `dataset="B"` | SQL 上下文包 + 溯源三件套（schema / requirement / pack） |
+
+### M5 · 生成 · 门禁 · 执行（4）
+
+| 工具 | 入参 | 说明 |
+|---|---|---|
+| `sql_review` | `sql`, `dataset="B"` | 五层门禁审查（L1 语法 / L2 静态规则·分级阻断 / L3 只读 / L4 语义 dry-plan / L5 结果断言） |
+| `sql_plan` | `demand_id`, `dataset="B"` | 计划草稿（不含 SQL 正文）；选不出唯一解给候选集合并标「需人工审核」 |
+| `sql_generate` | `demand_id`, `dataset="B"`, `candidate_sql=None` | SQL 初稿；`candidate_sql` 为空则回退确定性规划器 |
+| `sql_execute_readonly` | `demand_id`, `dataset="B"`, `sql=None`, `actor=""` | 全过五层门禁才执行，每次写一条 `sql_runs`（溯源齐全，可回放） |
+
+### M6 · 留痕 · 回放（3）
+
+| 工具 | 入参 | 说明 |
+|---|---|---|
+| `sql_run_get` | `demand_id` | 该需求全部运行记录（生成 SQL / 门禁结果 / 结果校验 / 溯源版本号） |
+| `sql_run_list` | `demand_id=""`, `dataset=""`, `limit=20` | 跨需求执行留痕列表（时间倒序，可筛选） |
+| `sql_run_replay` | `demand_id`, `version=0` | 按版本精确复原「输入 → pack_version → SQL → 审查 → 结果」 |
 
 #### 两类消费者的边界（勿混发）
 
@@ -121,17 +152,17 @@ docker compose up -d --build
 分级判据是：该来源支撑的判定是否 **blocking** 级。是则缺失本身即 blocking；
 仅支撑参考性判断的（历史案例、表样）记为 warning。
 
-### 设计边界（尚未做）
+### 原「设计边界（尚未做）」的现状
 
-- SQL 生成链路（语义层门禁之后）→ **M4**
-- 五层门禁的 SQLGlot / SQLFluff / Great Expectations 三层 → **M5**（当前为只读门禁 + Wren dry_run 两层）
-- 需求单的**对话式补全**（多轮追问缺失字段）→ 未排期；当前为一次性校验 + 提示
+- SQL 生成链路（语义层门禁之后）→ **M4 已落地**（plan → generate 两段式）
+- 五层门禁 → **M5 已落地**（L1 语法 / L2 静态规则·分级阻断 / L3 只读 / L4 语义 dry-plan / L5 结果断言）；SQLFluff / Great Expectations 留插槽、默认关闭
+- 需求单的**对话式补全**（多轮追问缺失字段）→ 由**客户端 Agent** 承担（网关不内置 LLM）；网关侧为一次性校验 + 澄清问答闭环（`confirmation_*`）
 
 ## 四、代码结构
 
 | 文件 | 职责 |
 |---|---|
-| `app.py` | FastMCP 服务端：28 个工具、`/healthz` 路由、启动入口（启动时幂等建表） |
+| `app.py` | FastMCP 服务端：41 个工具、`/healthz` 路由、启动入口（启动时幂等建表） |
 | `wren.py` | Wren MCP 客户端（streamable-http，会话复用 + 失效重握手） |
 | `registry.py` | 数据集注册表（Wren 端点 + MDL 路径 + PG DSN），**换库只改注册项** |
 | `planner.py` | 确定性规划器兜底（A/B 两套意图库）+ 只读门禁 |
@@ -142,7 +173,7 @@ docker compose up -d --build
 | `metadata.py` | 元数据字典：MDL 语义 × 物理结构合流，"建表但不建模"标注 |
 | `collect.py` | 元数据采集：`native` / `schemacrawler` 双后端 + 交叉校验 |
 | `attachments.py` | MinIO 附件：上传、列举、临时链接、文本风险扫描 |
-| `evidence.py` | **M3** 证据编排：P1–P8 阶梯、词表构建、命中匹配、冲突检测、R1–R7 规则集 |
+| `evidence.py` | **M3** 证据编排：P1–P9 阶梯、词表构建、命中匹配、冲突检测、R1–R7 规则集 |
 | `semantics.py` | **M3** 语义分析：五个 Skill 的确定性落地（需求理解 / 颗粒度 / 时间口径 / 规则校验 / 问题生成），纯函数不碰库 |
 | `analysis.py` | **M3** 编排与落库：组装、轮次与确认记录持久化、状态流转（写入纪律集中在这一层） |
 | `healthcheck.py` | 双探活脚本（HTTP `/healthz` + MCP `initialize`/`tools/list`） |
@@ -151,14 +182,19 @@ docker compose up -d --build
 ## 五、探活与自证
 
 ```bash
-# 在项目根目录
+# 在仓库根目录
 python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # 双探活
 python3 tools/m2_verify.py                                            # M2 端到端 22 用例
 python3 tools/m3_verify.py                                            # M3 端到端 109 断言
+python3 tools/m4_verify.py                                            # M4 两段式生成 51/0（库 A）
+python3 tools/mcp_acceptance_check.py                                 # MCP 工具面 41 个逐条核对
 python3 tools/masking_selftest.py                                     # 脱敏自证（离线）
 python3 tools/knowledge_selftest.py                                   # 问句压缩自证（离线）
 python3 tools/evidence_selftest.py                                    # 证据词表自证（近线，无元数据库则跳跃跳过）
 python3 tools/semantics_selftest.py                                   # 语义闸门自证（离线）
+
+# 依赖网关内部模块、须 `docker cp` 进容器跑的脚本：m5_verify / audit_verify / robustness_verify
+# 完整命令见仓库根 `README.md` §6.2
 ```
 
 - 退出码 `0` = 全过；`1` = 任一失败（`collect_metadata.py` 用 `2` 表示数据不一致）
@@ -199,7 +235,7 @@ $VENV tools/reset_demo_data.py --apply --purge-attachments  # 连同附件对象
 | `MDL_A_PATH` / `MDL_B_PATH` | `/workspace-a/mdl.json` 等 | MDL 语义层文件 |
 | `WREN_PG_A_DSN` / `WREN_PG_B_DSN` | `postgresql://test:test@wren-postgres-a:5432/test` 等 | 元数据采集直连 DSN |
 | `ASSISTANT_DB_DSN` | `postgresql://assistant:assistant@assistant-postgres:5432/assistant` | 网关自有元数据库 |
-| `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` | `assistant-minio:9000` / `…` / `demand-attachments` | 附件存储 |
+| `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` | `assistant-minio:9000` / `…` / `askoda-attachments` | 附件存储 |
 | `KNOWLEDGE_API_URL` | `http://host.docker.internal:19380/api/v1` | RAGFlow 检索接口 |
 | `KNOWLEDGE_API_KEY` / `KNOWLEDGE_API_KEY_FILE` | 空 | 知识库凭据（二选一） |
 | `KNOWLEDGE_DATASET_ID` | 空 | 目标数据集 |
@@ -211,11 +247,11 @@ $VENV tools/reset_demo_data.py --apply --purge-attachments  # 连同附件对象
 ## 七、已知工程约束
 
 1. **FastMCP 代理能力**：FastMCP 版本已升至 4.x，`create_proxy` 已移除。按《实施推进与验收方案》§12「待实测项 1」的降级条款，改用 POC 阶段已验证的手写 streamable-http client 作为 Wren 接入层——不依赖框架代理，Wren 会话完全可控。
-2. **数据卷复用**：编排里的 `wren-pgdata` / `wren-pgdata-b` 为 external，指向单栈时代既有卷，历史数据与已部署 MDL 零迁移。M2 新增的 `assistant-pgdata` / `assistant-minio-data` 为本编排自有卷。
+2. **数据卷复用**：编排里的 `wren-pgdata` / `wren-pgdata-b` 为 external，指向单栈时代既有卷，历史数据与已部署 MDL 零迁移。M2 新增的 `askoda-pgdata` / `askoda-minio-data` 为本编排自有卷（卷名在 `volumes:` 里显式 `name:` 钉住，与工程名一致，换目录名 / 项目名不影响数据）。
 3. **单栈 compose 与本编排共用容器名与数据卷**（`wren-docker/`、`wren-docker-b/`），**不可同时起两套**；单栈仅作单库调试用。
 4. **入口侧脱敏的作用域边界**：姓名规则靠"首字须为常见姓氏"降误判，因此**孤立人名（如只在句中出现的"李明"而无任何称谓/上下文）不会被识别**。这是刻意的取舍——误掩普通词的代价（需求单读不通）与漏掩的代价（敏感值落库）需要平衡，而真正敏感的手机号/身份证/银行卡/邮箱/地址是**格式驱动**、识别稳定的。详见 `knowledge/02-数据安全与敏感字段管理办法.md`。
 5. **RAGFlow 表格型 chunk 无坐标**：从 markdown 表格切出的 chunk `positions` 为空。`knowledge._locator` 会如实标注为 `position=n/a(表格型chunk未返回坐标)`，下游用 `position_available` 分支处理，不要依赖 `positions` 恒存在。
 6. **元数据两条采集路径**：`schemacrawler` 后端出结构（表/列/主键），`information_schema` 出类型名，每次采集自动交叉校验，不一致即退出码 2。不要单看一侧就认为字典正确。
 7. **MDL 只在容器内可达**：`MDL_A_PATH` / `MDL_B_PATH` 默认是容器内路径（`/workspace-a/mdl.json`），宿主机直跑网关代码时读不到，P7（表关系）会失败。这不是缺陷，而是编排设计（MDL 以只读卷挂载）；要宿主机复现，把 `MDL_B_PATH` 指向 `wren-docker-b/workspace/mdl.json` 即可。**重要的是失败时不会静默**：`degraded_sources` 会报出 P7 缺失、R1 未生效、置信度压到 0.50 上限。
-8. **镜像标签未随版本号更新**：编排里 `image: demand-assistant-gateway:0.1.0`，而网关实际版本 0.3.0。不影响运行（每次 `build` 都重新构建），但运维侧看标签会误判。已在 M3 验收单列为未决事项。
+8. **镜像标签与版本号同步**：编排里 `image: askoda-gateway:0.3.0`，与 `gateway/app.py` 的 `GATEWAY_VERSION` 一致。**升版本号时两处要一起改**，否则运维侧看标签会误判。
 9. **网关启动时建表**：`db.init_schema()` 挂在 `main()` 里（幂等）。此前只有 `tools/collect_metadata.py` 会调它，导致「全新部署 + 首次调用」必然失败且要到第一次写库才暴露。元数据库未就绪时不阻断启动，只打警告——探活会把状态如实报成 `degraded`。

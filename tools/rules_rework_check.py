@@ -15,7 +15,7 @@
   E. 回归 —— 顺序稳定 / 异常隔离 / REGISTRY 契约（首轮已过，此处复查不许退化）
 
 用法（容器内；R5/R6 需 MDL）：
-    docker exec -e PYTHONPATH=/app demand-gateway python /tmp/rules_rework_check.py
+    docker exec -e PYTHONPATH=/app askoda python /tmp/rules_rework_check.py
 退出码 0 = 全过；非 0 = 有失败（失败项即验收结论依据）。
 """
 import hashlib

@@ -11,8 +11,8 @@
                         且 F5（0 行不可交付）要真能命中（证明不是写死的空壳）。
 
 运行（容器内）：
-  docker cp tools/m65_remediation_check.py demand-gateway:/app/tools/
-  docker exec -e PYTHONPATH=/app demand-gateway python /app/tools/m65_remediation_check.py
+  docker cp tools/m65_remediation_check.py askoda:/app/tools/
+  docker exec -e PYTHONPATH=/app askoda python /app/tools/m65_remediation_check.py
 退出码 0 = 全过，1 = 有失败。
 """
 import json
