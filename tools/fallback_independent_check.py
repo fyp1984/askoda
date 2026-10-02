@@ -158,7 +158,7 @@ print("\n[B] F4 f4_guidance 规则覆盖")
 import rules as rules_mod  # noqa: E402
 
 reg_ids = [r.get("id") for r in (getattr(rules_mod, "REGISTRY", None) or []) if r.get("id")]
-ck("B1 REGISTRY 规则数 == 10", len(reg_ids) == 10, "实际 %d：%s" % (len(reg_ids), reg_ids))
+ck("B1 REGISTRY 规则数 == 11", len(reg_ids) == 11, "实际 %d：%s" % (len(reg_ids), reg_ids))
 
 gd = fb.f4_guidance(reg_ids)
 by_id = {g["rule"]: g for g in gd}

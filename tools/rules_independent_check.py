@@ -192,7 +192,7 @@ seq2 = [(x["rule"], x["snippet"]) for x in o2]
 ck("D2 evaluate_all 同输入两次结果顺序一致", seq1 == seq2)
 # D3 REGISTRY 契约
 ids = [r["id"] for r in rules.REGISTRY]
-ck("D3 REGISTRY 有 10 条规则", len(ids) == 10, "实际=%d" % len(ids))
+ck("D3 REGISTRY 有 11 条规则", len(ids) == 11, "实际=%d" % len(ids))
 ck("D3b 规则 id 唯一", len(ids) == len(set(ids)), "重复=%s" % [i for i in ids if ids.count(i) > 1])
 sev = {r["severity"] for r in rules.REGISTRY}
 ck("D3c 一期 severity 全为 warning", sev == {"warning"}, "实际=%s" % sev)

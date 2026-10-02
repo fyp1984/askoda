@@ -302,7 +302,7 @@ try:
 finally:
     rules.REGISTRY[:] = _saved
 ids = [r["id"] for r in rules.REGISTRY]
-ck("E3 REGISTRY 10 条 / id 唯一", len(ids) == 10 and len(set(ids)) == 10, "实际=%d" % len(ids))
+ck("E3 REGISTRY 11 条 / id 唯一", len(ids) == 11 and len(set(ids)) == 11, "实际=%d" % len(ids))
 ck("E4 一期 severity 全为 warning", {r["severity"] for r in rules.REGISTRY} == {"warning"})
 old4 = {"JOIN_WITHOUT_CONDITION", "SELECT_STAR", "GROUP_BY_INCONSISTENT", "UNNECESSARY_DISTINCT"}
 ck("E5 4 条老规则名一字未改", old4 <= set(ids))

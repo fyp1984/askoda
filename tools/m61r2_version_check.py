@@ -3,8 +3,8 @@
 """M6-1 返工第二轮 · 版本口径独立核对（验收方自建，非交付方脚本）
 
 目的：
-  1) 独立复算 10 条规则 evaluate 的源码指纹 source_sha8，与交付方自述逐个对照；
-  2) 打印 rules_version（应与交付方自述 b72c1f48 一致）；
+  1) 独立复算每条规则 evaluate 的源码指纹 source_sha8，与交付方自述逐个对照；
+  2) 打印 rules_version（其值随 REGISTRY 内容变化 —— 本脚本只核一致性与可复算，不写死具体值）；
   3) 用真实需求单复算 A/B 的 pack_version 是否满足
      pack_version == sha8(schema_version + requirement_version + rules_version)。
 

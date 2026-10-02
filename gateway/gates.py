@@ -7,7 +7,7 @@
 核心约束：
 - 一期只新增 sqlglot 一个第三方依赖（SQLFluff / Great Expectations 留成可插拔插槽，默认关闭）
 - 「生成」与「审查」严格分离：本模块只做审查，不生成 SQL
-- 阻断 vs 警告分层：L1/L3/L4 不通过则阻断，L2 只记警告不阻断，L5 无 exec_result 时 skipped
+- 阻断 vs 警告分层：L1/L2(blocking 规则)/L3/L4 不通过则阻断，L2 其余规则只记警告不阻断，L5 无 exec_result 时 skipped
 - M6-1 改造：L2 10 类静态规则**整体搬迁**到 gateway/rules.py 的 REGISTRY；
   gates.py 只保留 is_write / L2~L5 接线层。新增一条规则 = 只改 rules.py，
   不需要再进 gates.py 改 _static_checks。
@@ -73,7 +73,7 @@ def _gx_assert(exec_result) -> dict:
 
 
 def _static_checks(ast_stmt, ctx=None) -> list:
-    """遍历 AST，顺序执行 rules.REGISTRY 中**全部**静态规则，结果全记为 L2 警告（不阻断）。
+    """遍历 AST，顺序执行 rules.REGISTRY 中**全部**静态规则，结果按 REGISTRY 的 blocking 标记分级（blocking→阻断 / 其余→警告）。
 
     为什么加 ctx 参数：R1（1:N 关系）、R5（未建模对象）、R6（时间字段）三类规则
     必须拿到 MDL（relationships / models / columns / 时间候选列）才能判定；
@@ -234,8 +234,23 @@ def review(
     for stmt in ast_stmts:
         issues = _static_checks(stmt, ctx_for_rules)
         semantic_issues.extend(issues)
+    # 分级阻断（2026-10-02）：按 REGISTRY 的 "blocking" 标记决定 L2 是否阻断。
+    # 历史约束：M6-1 期 L2 全 warning、只提示不阻断；现把「引用未建模对象 / 无条件 JOIN /
+    # 一对多放大 / 枚举值错」四类硬错误升级为 blocking，其余规则行为不变。
+    blocking_rule_ids = set()
+    try:
+        for _r in (getattr(rules_mod, "REGISTRY", None) or []):
+            if _r.get("blocking"):
+                blocking_rule_ids.add(_r.get("id"))
+    except Exception:
+        blocking_rule_ids = set()
+    blocking_issues = [i for i in semantic_issues if i.get("rule") in blocking_rule_ids]
+    warning_issues = [i for i in semantic_issues if i.get("rule") not in blocking_rule_ids]
+    if blocking_issues:
+        l2_ok = False
     if semantic_issues:
-        l2_detail_parts.append("检出 %d 项静态风险（警告不阻断）" % len(semantic_issues))
+        l2_detail_parts.append("检出 %d 项静态风险（阻断 %d / 警告 %d）"
+                               % (len(semantic_issues), len(blocking_issues), len(warning_issues)))
         for it in semantic_issues[:6]:
             l2_detail_parts.append("  - %s：%s" % (it["rule"], it["snippet"][:80]))
         if len(semantic_issues) > 6:
@@ -249,9 +264,14 @@ def review(
         "skipped": l2_skipped,
         "detail": "\n".join(l2_detail_parts),
     })
-    if semantic_issues:
-        rules_set = sorted({i["rule"] for i in semantic_issues})
-        notes.append("L2 警告 %d 项（不阻断）：%s" % (len(semantic_issues), "、".join(rules_set)))
+    if blocking_issues:
+        notes.append("L2 阻断 %d 项（硬错误）：%s"
+                     % (len(blocking_issues),
+                        "、".join(sorted({i["rule"] for i in blocking_issues}))))
+    if warning_issues:
+        notes.append("L2 警告 %d 项（不阻断）：%s"
+                     % (len(warning_issues),
+                        "、".join(sorted({i["rule"] for i in warning_issues}))))
 
     l3_ok = True
     l3_skipped = False
@@ -420,7 +440,9 @@ def review(
         "detail": gx_res.get("reason", gx_res.get("detail", "")),
     })
 
-    blocking_layers = [l for l in layers if l["layer"] in ("L1", "L3", "L4", "L5")]
+    # 分级阻断（2026-10-02）：L2 纳入阻断层 —— 其 ok 已按规则的 blocking 标记算好
+    # （只有 blocking 命中才为 False），故与 L1/L3/L4/L5 同列。
+    blocking_layers = [l for l in layers if l["layer"] in ("L1", "L2", "L3", "L4", "L5")]
     has_blocking_fail = any(
         (not l["ok"]) and (not l["skipped"]) for l in blocking_layers
     )

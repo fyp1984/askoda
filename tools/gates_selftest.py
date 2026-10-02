@@ -101,23 +101,24 @@ def main():
         [v for v in r["rule_violations"] if v["layer"] == "L3"]))
 
     # ------------------------------------------------------------------
-    # 4. SELECT * FROM a, b → L2 报隐式笛卡尔积警告，status 不为「不通过」
+    # 4. SELECT * FROM a, b → L2 分级阻断（未建模表 + 无条件 JOIN 均属阻断类）
     # ------------------------------------------------------------------
-    title = "4. SELECT * FROM a,b → L2 警告，status 不是「不通过」（应为警告/通过）"
+    title = "4. SELECT * FROM a,b → L2 分级阻断（未建模表 + 无条件 JOIN 均属阻断类），status=不通过"
     sql = "SELECT * FROM a, b"
     r = gt.review(sql, dataset="B", _dry_run_fn=_fake_dry_run_ok)
     has_join_cond = any(i["rule"] == "JOIN_WITHOUT_CONDITION" for i in r["semantic_issues"])
     has_select_star = any(i["rule"] == "SELECT_STAR" for i in r["semantic_issues"])
+    has_unmapped = any(i["rule"] == "UNMAPPED_OBJECT_REF" for i in r["semantic_issues"])
     ok = (
-        r["status"] != "不通过"
-        and (has_join_cond or has_select_star)
+        r["status"] == "不通过"
+        and has_join_cond and has_select_star and has_unmapped
     )
     if not ok:
         fails.append("%s FAILED: status=%s issues=%s" % (
             title, r["status"], r["semantic_issues"]))
     print("[%s] %s" % ("OK" if ok else "!!", title))
-    print("    status=%s  JOIN_WITHOUT_CONDITION=%s  SELECT_STAR=%s" % (
-        r["status"], has_join_cond, has_select_star))
+    print("    status=%s  JOIN_WITHOUT_CONDITION=%s  SELECT_STAR=%s  UNMAPPED_OBJECT_REF=%s" % (
+        r["status"], has_join_cond, has_select_star, has_unmapped))
     print("    semantic_issues rules=", sorted({i["rule"] for i in r["semantic_issues"]}))
 
     # ------------------------------------------------------------------
@@ -330,9 +331,9 @@ def main():
         r["status"], l4["ok"] if l4 else None, (l4 or {}).get("detail", "")[:60]))
 
     # ------------------------------------------------------------------
-    # 附加-13. 复合 SQL 多规则同时命中（warning 不阻断） → status ∈ {警告, 通过}
+    # 附加-13. 复合 SQL 命中阻断类规则（无 ON JOIN） → status=不通过
     # ------------------------------------------------------------------
-    title = "附加-13. 复合SQL: SELECT* + 无ON JOIN + GROUP_CONCAT无ORDER → 多warning, status≠不通过"
+    title = "附加-13. 复合SQL: SELECT* + 无ON JOIN(阻断类) + GROUP_CONCAT无ORDER → status=不通过"
     sql = """
         SELECT *, GROUP_CONCAT(t1.sku_id, ',') AS skus
         FROM dwd_order_detail_di t1, dim_store t2
@@ -342,7 +343,7 @@ def main():
     l2 = _layer_by(r, "L2")
     sem_count = len(r.get("semantic_issues") or [])
     ok = (
-        r["status"] != "不通过"
+        r["status"] == "不通过"
         and sem_count >= 3
         and (l2 is None or (not l2.get("skipped") and not l2.get("fatal")))
     )
@@ -401,6 +402,21 @@ def main():
     print("[%s] %s" % ("OK" if ok else "!!", title))
     print("    status=%s  ONE_TO_MANY_UNHANDLED=%d  all_rules=%s" % (
         r["status"], r1_n, [x.get("rule") for x in (r.get("semantic_issues") or [])[:5]]))
+
+    # ------------------------------------------------------------------
+    # 附加-16. 仅命中 warning 类规则 → status=警告（不阻断）—— 分级阻断的阴性对照
+    # ------------------------------------------------------------------
+    title = "附加-16. 仅 TIME_FIELD_SUSPECT(warning) → status=警告，不阻断"
+    sql = ("SELECT date_trunc('month', order_date) AS 月份, COUNT(*) AS 订单数, "
+           "SUM(pay_amount) AS 销售金额 FROM dwd_order_di WHERE order_status = '已完成' "
+           "GROUP BY date_trunc('month', order_date) ORDER BY 月份")
+    r = gt.review(sql, dataset="B", _dry_run_fn=_fake_dry_run_ok)
+    hit = {x.get("rule") for x in (r.get("semantic_issues") or [])}
+    ok = r["status"] == "警告" and "TIME_FIELD_SUSPECT" in hit
+    if not ok:
+        fails.append("%s FAILED: status=%s rules=%s" % (title, r["status"], sorted(hit)))
+    print("[%s] %s" % ("OK" if ok else "!!", title))
+    print("    status=%s  rules=%s" % (r["status"], sorted(hit)))
 
     print()
     if fails:

@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""M6-1 · SQL 静态规则注册表（9 条规则：4 旧 + 5 新增 / 2 强化）
+"""M6-1 · SQL 静态规则注册表（11 条规则：4 旧 + 5 新增 / 2 强化）
+
+2026-10-02 变更：新增 R7 ENUM_VALUE_INVALID（枚举值校验）→ 第 11 条；
+并引入 L2 分级阻断（REGISTRY 的 blocking 标记，见文件末与 gates.py）。
 
 设计原则
 --------
@@ -9,8 +12,10 @@
 4. 规则粒度：一条规则只干一件事（单一职责），避免"一个函数同时报 GROUP BY 又报 DISTINCT"。
 5. 输出形状统一：[{rule, snippet, detail}]，rule 是字符串 ID（与 id/name 两键一致），
    snippet 是原始可读 SQL 片段（人类直接能看懂，不出 canonical 键），detail 是中文说明。
-6. 全 warning：本期所有规则 severity 都是 warning（L2 层只警告不阻断），
-   blocking 判定在 gates.review 的阻断层（L1/L3/L4/L5）做，不在单条规则里做。
+6. 分级阻断：所有规则 severity 仍为 warning（不变）；但 REGISTRY 新增 "blocking" 标记，
+   gates.review 的 L2 汇总按该标记决定是否阻断（见 gates.py）。
+   现有 3 条硬错误规则（JOIN_WITHOUT_CONDITION / ONE_TO_MANY_UNHANDLED /
+   UNMAPPED_OBJECT_REF）标记为 blocking，其余保持"只警告不阻断"。
 
 ctx 约定
 -------
@@ -29,6 +34,7 @@ mdl_index 推荐形状（与 sqlpack._mdl_index 对齐）：
      "all_tables": {model_name, tableReference.table}  # 物理表名与模型名都能过
      "rels": mdl["relationships"]  # 原关系列表（R1 查 joinType 用）
      "time_cols": {"model.col": True, "table.col": True, "col": True}  # R6 查时间字段候选
+     "enum_cols": {列名归一: 合法值集合}  # R7 枚举值校验：从列 description 的「枚举：A / B」提取
 }
 """
 import sys
@@ -209,7 +215,8 @@ def build_mdl_index(dataset: str) -> dict:
         metadata_mod = None
     if registry_mod is None:
         return {"models": {}, "tables": {}, "model_cols": {},
-                "all_columns": set(), "all_tables": set(), "rels": [], "time_cols": set()}
+                "all_columns": set(), "all_tables": set(), "rels": [], "time_cols": set(),
+                "enum_cols": {}}
     mdl = registry_mod.get(dataset).mdl
     models = mdl.get("models", []) or []
     out_models = {}
@@ -274,11 +281,40 @@ def build_mdl_index(dataset: str) -> dict:
         "all_tables": all_tables,
         "rels": list(mdl.get("relationships", []) or []),
         "time_cols": time_cols,
+        "enum_cols": _extract_enum_cols(out_models),   # 新增：{列名归一: 合法值集合}
     }
 
 
+_ENUM_RE = None
+
+
+def _extract_enum_cols(models: dict) -> dict:
+    """从 MDL 各列的 description 里提取「枚举值域」。
+
+    只认 '枚举：A / B / C'（中文或英文冒号）这一种写法 —— 精确、不误判；
+    后面若带 '（无其他取值）' 之类括号说明，先剥掉；遇 '。' / '；' / ';' 截止。
+    返回 {列名归一: set(合法值)}；无声明的列不进结果（该列不校验，宁可少报）。
+    """
+    import re as _re
+    global _ENUM_RE
+    if _ENUM_RE is None:
+        _ENUM_RE = _re.compile(r"枚举[:：]\s*([^。；;]+)")
+    out = {}
+    for _mn, _mm in (models or {}).items():
+        for _c in (_mm.get("columns") or []):
+            _desc = _c.get("description") or ""
+            _mo = _ENUM_RE.search(_desc)
+            if not _mo:
+                continue
+            _raw = _re.sub(r"[（(].*?[)）]", "", _mo.group(1))
+            _vals = {v.strip() for v in _re.split(r"[/、，,]", _raw) if v.strip()}
+            if _vals:
+                out[_norm_sql_name(_c.get("name"))] = _vals
+    return out
+
+
 # ===========================================================================
-# 三、9 条规则逐条 evaluate
+# 三、11 条规则逐条 evaluate
 # ===========================================================================
 # ----------------------------
 # 规则 1/9：JOIN_WITHOUT_CONDITION（老规则，行为一字不变）
@@ -289,6 +325,12 @@ def _ev_join_without_condition(ast_stmt, ctx):
         on_ok = j.args.get("on") is not None
         using_ok = bool(j.args.get("using"))
         if not on_ok and not using_ok:
+            # 修正（2026-10-02 误报修复）：逗号连接的子查询（如 FROM (sub) a, (sub) b）
+            # 被 sqlglot 解析为 Join(kind=None, this=Subquery, on=None)，语义上确实是无条件连接，
+            # 但业务上合法（分子 / 分母两个标量子查询做笛卡尔积是标准写法，如复购率）。
+            # 因此连接对象是子查询时不报；只对真实表之间的隐式笛卡尔积报。
+            if isinstance(j.this, exp.Subquery) or j.this.find(exp.Subquery) is not None:
+                continue
             out.append({
                 "rule": "JOIN_WITHOUT_CONDITION",
                 "snippet": j.sql(dialect="postgres"),
@@ -546,26 +588,58 @@ def _ev_one_to_many_unhandled(ast_stmt, ctx):
     mdltbl_in_sql = set(sql_to_model.values())
     if len(mdltbl_in_sql) < 2:
         return out  # 跨表不足两张（或均未建模），不判
-    # 真放大道具：为每个 joinType=ONETOMANY/MANYTOMANY，把它的 models 两端 vs mdltbl_in_sql
+    # 真放大判定（2026-10-02 改造）：原逻辑只认字面 joinType ∈ {ONE_TO_MANY, MANY_TO_MANY}，
+    # 而本库 MDL 10 条关系 joinType 全部是 MANY_TO_ONE → 该分支实为死代码。
+    # 现按「SQL 里的 JOIN 方向」反解：MANY_TO_ONE 声明「models[0]=多端, models[1]=一端」，
+    # 若 SQL 中「一端」出现在「多端」之前（= 从一端发起 JOIN 到多端），
+    # 即构成一对多放大（一端的一行对应多端多行，聚合被放大），应报。
     hit_rel = False
     hit_snippet = None
     hit_detail = ""
-    # (1) 真放大：ONETOMANY / MANYTOMANY 精确匹配
+    # SQL 中 MDL 模型的出现顺序（用于方向反解；sql_to_model 已在本函数上文建好）
+    _seq = []
+    for _t in ast_stmt.find_all(exp.Table):
+        _m = sql_to_model.get(_norm_sql_name(_t.name or ""))
+        if _m and _m not in _seq:
+            _seq.append(_m)
+    _pos = {_m: _i for _i, _m in enumerate(_seq)}
     for r in rels:
         jt = (r.get("joinType") or "").upper()
-        if jt not in ("ONE_TO_MANY", "MANY_TO_MANY"):
-            continue
         ms = [_norm_sql_name(x) for x in (r.get("models") or [])]
         if len(ms) < 2:
             continue
-        a, b = ms[0], ms[1]
-        if a in mdltbl_in_sql and b in mdltbl_in_sql:
+        if jt == "MANY_TO_ONE":
+            multi_end, one_end = ms[0], ms[1]
+        elif jt == "ONE_TO_MANY":
+            multi_end, one_end = ms[1], ms[0]
+        elif jt == "MANY_TO_MANY":
+            # 多对多：两端都可能放大，只要两端都在 SQL 里就报（保持原意）
+            if ms[0] in mdltbl_in_sql and ms[1] in mdltbl_in_sql:
+                hit_rel = True
+                hit_snippet = "JOIN %s<->%s（joinType=%s）+ 聚合 无 DISTINCT/预聚合" % (
+                    r.get("models")[0], r.get("models")[1], jt)
+                hit_detail = (
+                    "MDL 关系 %s 为 %s，SQL 中有聚合且未加 DISTINCT，也无 FROM 聚合子查询；"
+                    "可能因多对多放大导致重复计算，请确认是否先在明细侧预聚合或去重。"
+                    % (r.get("name") or ",".join(r.get("models") or []), jt)
+                )
+                break
+            continue
+        else:
+            continue
+        # 方向反解：一端先于多端出现 → 一对多放大
+        if multi_end in _pos and one_end in _pos and _pos[one_end] < _pos[multi_end]:
             hit_rel = True
-            hit_snippet = "JOIN %s<->%s（joinType=%s）+ 聚合 无 DISTINCT/预聚合" % (r.get("models")[0], r.get("models")[1], jt)
+            hit_snippet = (
+                "JOIN 方向反用 %s<->%s（MDL 声明 %s：一端 %s 先出现，多端 %s 后被 JOIN）+ 聚合 无 DISTINCT/预聚合"
+                % (r.get("models")[0], r.get("models")[1], jt, one_end, multi_end)
+            )
             hit_detail = (
-                "MDL 关系 %s 为 %s，SQL 中有聚合且未加 DISTINCT，也无 FROM 聚合子查询；"
-                "可能因一对多放大导致重复计算，请确认是否先在明细侧预聚合或去重。"
-                % (r.get("name") or ",".join(r.get("models") or []), jt)
+                "MDL 关系 %s 声明为 %s（多端=%s，一端=%s）；SQL 从「一端 %s」发起 JOIN 到「多端 %s」，"
+                "形成一对多放大，且外有聚合又未加 DISTINCT / 未做 FROM 预聚合；"
+                "请确认是否先在多端侧预聚合或对主键去重，避免计数/求和被放大。"
+                % (r.get("name") or ",".join(r.get("models") or []), jt,
+                   multi_end, one_end, one_end, multi_end)
             )
             break
     # (2) 图连通性：N = mdltbl_in_sql；边 = 所有 MDL 已声明 relationship（任意 joinType），
@@ -792,13 +866,17 @@ def _collect_cte_names(ast_stmt) -> set:
 
 
 def _collect_subquery_aliases(ast_stmt) -> set:
-    """FROM (subquery) AS foo → 收集 foo 别名。"""
+    """收集所有派生表别名：FROM (subquery) AS foo，以及 JOIN (subquery) AS bar。
+
+    修正（2026-10-02 误报修复）：原实现只扫 exp.From 下的 Subquery，
+    漏掉了逗号连接 / JOIN 里的子查询别名（它挂在 exp.Join 上、不在 From 下）。
+    改为全局扫描 exp.Subquery，保证派生表别名一个不漏。
+    """
     aliases = set()
-    for f in ast_stmt.find_all(exp.From):
-        for sub in f.find_all(exp.Subquery):
-            alias = sub.alias_or_name
-            if alias:
-                aliases.add(_norm_sql_name(alias))
+    for sub in ast_stmt.find_all(exp.Subquery):
+        alias = sub.alias_or_name
+        if alias:
+            aliases.add(_norm_sql_name(alias))
     return aliases
 
 
@@ -884,6 +962,12 @@ def _ev_unmapped_object_ref(ast_stmt, ctx):
         if n_col:
             candidates.append(n_col)
         hit_any = any(c in all_columns for c in candidates)
+        # 修正（2026-10-02 误报修复）：表前缀是 CTE 名 / 子查询别名（派生表）时，
+        # 该列属于派生表内部，其真实来源已在子查询自身校验过，不应在此报"未建模列"。
+        # 原逻辑只对"表前缀不在 MDL 且不在 excluded"跳过，导致 `a.c`（a 是子查询别名）
+        # 反而绕过 continue 走进报错分支 —— 复购率类合法查询因此被误报。
+        if n_tbl and n_tbl in excluded:
+            continue
         # 如果带了表名且表名不在 MDL 中 → 前面表级已经报过，列级不重复
         if n_tbl and n_tbl not in all_tables and n_tbl not in excluded:
             continue
@@ -965,6 +1049,62 @@ def _ev_time_field_suspect(ast_stmt, ctx):
     return out
 
 
+# ----------------------------
+# 规则 11/11：R7 ENUM_VALUE_INVALID（新增，枚举值校验）
+# ----------------------------
+def _ev_enum_value_invalid(ast_stmt, ctx):
+    """枚举值校验：对「MDL 已声明枚举列」做等值 / IN 比较时，字面量不在声明的值域内 → 报。
+    仅认字符串字面量；计算表达式 / 参数化不判（宁可少报）。
+    """
+    out = []
+    mdl_index = (ctx or {}).get("mdl_index")
+    if mdl_index is None and (ctx or {}).get("dataset"):
+        mdl_index = build_mdl_index(ctx["dataset"])
+    if not mdl_index:
+        return out
+    enum_cols = mdl_index.get("enum_cols")
+    if enum_cols is None:
+        enum_cols = _extract_enum_cols(mdl_index.get("models") or {})
+    if not enum_cols:
+        return out
+    reported = set()
+
+    def _lit_val(lit):
+        t = lit.this
+        if isinstance(t, str):
+            return t
+        return getattr(t, "name", "") or ""
+
+    def _hit(col_expr, bad_val):
+        cn = _norm_sql_name(col_expr.name)
+        if cn not in enum_cols or bad_val in enum_cols[cn]:
+            return
+        key = cn + "=" + bad_val
+        if key in reported:
+            return
+        reported.add(key)
+        out.append({
+            "rule": "ENUM_VALUE_INVALID",
+            "snippet": "%s = '%s'" % (col_expr.name, bad_val),
+            "detail": "列「%s」的合法取值为 %s；SQL 里出现的「%s」不在其中，请核对是否写错了枚举值。"
+                      % (col_expr.name, " / ".join(sorted(enum_cols[cn])), bad_val),
+        })
+
+    # 等值比较（两侧都看，防止字面量写在左边）
+    for eq in ast_stmt.find_all(exp.EQ):
+        for col, lit in ((eq.left, eq.right), (eq.right, eq.left)):
+            if isinstance(col, exp.Column) and isinstance(lit, exp.Literal) and lit.is_string:
+                _hit(col, _lit_val(lit))
+    # IN (...) 列表
+    for inx in ast_stmt.find_all(exp.In):
+        col = inx.this
+        if isinstance(col, exp.Column):
+            for v in (inx.expressions or []):
+                if isinstance(v, exp.Literal) and v.is_string:
+                    _hit(col, _lit_val(v))
+    return out
+
+
 # ===========================================================================
 # 四、REGISTRY + evaluate_all（顺序稳定）
 # ===========================================================================
@@ -974,6 +1114,7 @@ REGISTRY = [
         "name": "JOIN_WITHOUT_CONDITION",
         "statement": "JOIN 必须带 ON 或 USING 连接条件，禁止隐式笛卡尔积",
         "severity": "warning",
+        "blocking": True,          # 新增：门禁分级 —— 本条命中即阻断（severity 语义不变）
         "detect": "join_condition",
         "evaluate": _ev_join_without_condition,
     },
@@ -1006,6 +1147,7 @@ REGISTRY = [
         "name": "ONE_TO_MANY_UNHANDLED",
         "statement": "存在一对多 / 多对多 JOIN 且有聚合时，必须做 DISTINCT 或明细侧预聚合，避免放大",
         "severity": "warning",
+        "blocking": True,          # 新增：跨域无关系 JOIN / 一对多放大属硬错误 → 阻断
         "detect": "one_to_many",
         "evaluate": _ev_one_to_many_unhandled,
     },
@@ -1038,6 +1180,7 @@ REGISTRY = [
         "name": "UNMAPPED_OBJECT_REF",
         "statement": "SQL 引用的表/列必须在 MDL 闭集内（排除 CTE 名、子查询别名、SELECT 别名）",
         "severity": "warning",
+        "blocking": True,          # 新增：引用不存在的表/列属硬错误 → 阻断
         "detect": "unmapped_object",
         "evaluate": _ev_unmapped_object_ref,
     },
@@ -1048,6 +1191,15 @@ REGISTRY = [
         "severity": "warning",
         "detect": "time_field_suspect",
         "evaluate": _ev_time_field_suspect,
+    },
+    {
+        "id": "ENUM_VALUE_INVALID",
+        "name": "ENUM_VALUE_INVALID",
+        "statement": "对 MDL 已声明枚举列的等值 / IN 比较，取值必须在声明的值域内",
+        "severity": "warning",
+        "blocking": True,          # 枚举值错误属硬错误 → 阻断
+        "detect": "enum_value",
+        "evaluate": _ev_enum_value_invalid,
     },
 ]
 

@@ -4,7 +4,7 @@
 
 设计目的
 --------
-对 10 条规则逐条验证：
+对 11 条规则逐条验证：
     (1) 正例：必须命中 ≥ 1 条该 rule 的 issues；
     (2) 反例：必须命中 = 0 条该 rule 的 issues。
 离线纯 AST 验证，不连 DB、不连 Wren、无任何副作用。
@@ -97,6 +97,8 @@ def build_mdl_index_b():
         "all_columns": all_columns,
         "time_cols": time_cols,
         "rels": mdl.get("relationships", []) or [],
+        # 形状对齐 rules.build_mdl_index（新增键，2026-10-02）：从 models 的列 description 提取枚举值域
+        "enum_cols": rules_mod._extract_enum_cols({m.get("name"): m for m in models}),
     }
 
 
@@ -346,6 +348,33 @@ def main():
         "WHERE stat_date 标准时间候选",
         "SELECT store_id, SUM(sales_amount) FROM dws_store_daily_agg WHERE stat_date >= '2025-01-01' GROUP BY store_id",
         "TIME_FIELD_SUSPECT",
+        ctx=CTX_B,
+    )
+    # ----------------------------------------------------------------
+    # 11. R7 ENUM_VALUE_INVALID — 枚举值校验（新增）
+    # ----------------------------------------------------------------
+    all_ok &= assert_pos(
+        "region_name='西南大区'（不在枚举）",
+        "SELECT store_name FROM dim_store WHERE region_name = '西南大区'",
+        "ENUM_VALUE_INVALID",
+        ctx=CTX_B,
+    )
+    all_ok &= assert_pos(
+        "grade='铂金'（不在枚举）",
+        "SELECT member_id FROM dim_member WHERE grade = '铂金'",
+        "ENUM_VALUE_INVALID",
+        ctx=CTX_B,
+    )
+    all_ok &= assert_neg(
+        "region_name='华东大区'（合法值）",
+        "SELECT store_name FROM dim_store WHERE region_name = '华东大区'",
+        "ENUM_VALUE_INVALID",
+        ctx=CTX_B,
+    )
+    all_ok &= assert_neg(
+        "grade IN ('金卡','钻石')（均合法）",
+        "SELECT member_id FROM dim_member WHERE grade IN ('金卡', '钻石')",
+        "ENUM_VALUE_INVALID",
         ctx=CTX_B,
     )
 
