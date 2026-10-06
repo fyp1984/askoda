@@ -1,0 +1,6 @@
+# BFF（Backend for Frontend）运行时依赖
+# 说明：本文件只服务于 bff/，与 gateway/requirements.txt 相互独立。
+# 红线：不得把此处依赖写入 gateway/requirements.txt。
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27

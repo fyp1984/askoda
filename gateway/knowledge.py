@@ -6,6 +6,17 @@
 RAGFlow v0.26.4 原生检索接口 `POST /api/v1/retrieval`（自带 OIDC/API-Key 鉴权，
 网关侧零代码侵入 RAGFlow，只做客户端）。
 
+底座唯一性
+----------
+网关只连**一个** RAGFlow API（`KNOWLEDGE_API_URL` 指向其 `/v1`），代码里不存在第二个
+底座地址、也不存在 FileBay 兜底分支：RAGFlow 不可用时 `search()` 如实抛
+`KnowledgeError`、`health()` 返回 `ok=false`，由上层把该证据源标为「未就绪」，
+而不是悄悄换一个底座给出看似正常的结果。
+
+注意「唯一底座」≠「独立部署」。B4 实测：19380 入口是 nginx 代理，其 backend 仍是
+旧绑定栈 compose 内的 `ragflow-cpu`——**「RAGFlow 独立栈」在物理上尚未成立**，
+文档口径亦已按此写明。
+
 实测得到的三个关键契约（决定了下面的默认参数）
 ----------------------------------------------
 1. **`similarity_threshold` 必须 > 0**：传 `0.0` 会被服务端按 falsy 处理、
@@ -32,6 +43,10 @@ API_BASE = os.getenv("KNOWLEDGE_API_URL", "http://127.0.0.1:19380/api/v1")
 API_KEY = os.getenv("KNOWLEDGE_API_KEY", "").strip()
 API_KEY_FILE = os.getenv("KNOWLEDGE_API_KEY_FILE", "").strip()
 DATASET_ID = os.getenv("KNOWLEDGE_DATASET_ID", "").strip()
+# 底座标识。**这里只报"网关连的是哪个 RAGFlow API"，不报"部署形态已独立"**——
+# B4 实测：19380 入口是 nginx 代理，backend 仍是旧绑定栈 compose 内的 ragflow-cpu，
+# 「RAGFlow 独立栈」在物理上尚未成立。改名这个字段等于把未完成的事说成已完成。
+BASE_NAME = os.getenv("KNOWLEDGE_BASE_NAME", "RAGFlow API（19380 入口）").strip()
 TIMEOUT = int(os.getenv("KNOWLEDGE_TIMEOUT", "30"))
 
 # 实测校准后的默认检索参数
@@ -135,6 +150,7 @@ def health():
                 docs = None
         return {
             "ok": True,
+            "base": BASE_NAME,
             "endpoint": API_BASE,
             "ms": int((time.time() - t0) * 1000),
             "datasets_visible": len(items),
@@ -153,6 +169,7 @@ def health():
     except Exception as e:
         return {
             "ok": False,
+            "base": BASE_NAME,
             "endpoint": API_BASE,
             "error": "%s: %s" % (type(e).__name__, str(e)[:200]),
             "ms": int((time.time() - t0) * 1000),
@@ -428,6 +445,51 @@ def record_citations(demand_id, question, citations, round_no=None,
         inserted += 1
         citation_ids.append(cid)
     return {"ok": True, "inserted": inserted, "citation_ids": citation_ids}
+
+
+def record_citations_once(demand_id, question, citations, stage, actor,
+                          fingerprint, dataset_id=None, round_no=None, sql_run_id=None):
+    """幂等版自动取证落表（P1-15）——**新增函数，不动 record_citations 契约**。
+
+    为什么需要幂等
+    --------------
+    `sql_plan` / `evidence.collect` 是会被反复调用的动作（客户端 Agent 常把同一需求
+    重跑好几轮，每次都会重新出一次 plan）。直接在它们里面调 record_citations，
+    实测打桩后连跑 3 次 sqlgen.plan → 审计表 +12 行，线性膨胀且内容完全重复。
+
+    幂等键 =（demand_id, stage, 内容指纹）。指纹由**调用侧**给出（本次 plan 的
+    选表/时间字段/颗粒度 + 命中引用的 id 集合），内容变了才会再写一行；
+    内容没变就直接跳过并返回 skipped="duplicate"。
+    """
+    import hashlib as _hashlib
+
+    if not demand_id or not citations:
+        return {"ok": True, "inserted": 0, "citation_ids": [], "skipped": "empty"}
+    raw = str(fingerprint or "")
+    fp = _hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12] if raw else "nofp"
+    # marker 只含 [A-Za-z0-9=·. _-]，LIKE 通配安全
+    marker = "AUTO_INTERNAL · stage=%s · fp=%s" % (stage, fp)
+    try:
+        import db as _db_once
+        dup = _db_once.query_one(
+            "SELECT citation_id FROM knowledge_citations "
+            "WHERE demand_id=%s AND question LIKE %s LIMIT 1",
+            (str(demand_id), "%" + marker + "%"),
+        )
+        if dup:
+            return {"ok": True, "inserted": 0, "citation_ids": [], "skipped": "duplicate"}
+    except Exception:
+        # 查不到不代表能写；继续往下，由 record_citations 自己的异常兜底
+        pass
+    full_q = "%s · actor=%s · query=%s" % (marker, actor, str(question or "")[:120])
+    res = record_citations(
+        demand_id, full_q, citations,
+        round_no=round_no, sql_run_id=sql_run_id,
+        dataset_id=dataset_id or str(stage or "")[:32],
+    )
+    if isinstance(res, dict):
+        res.setdefault("skipped", None)
+    return res
 
 
 def retire_citation(citation_id, reason):

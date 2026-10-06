@@ -37,7 +37,7 @@
     WREN_A_URL / WREN_B_URL / MDL_A_PATH / MDL_B_PATH            —— 语义层双库
     ASSISTANT_DB_DSN                                             —— 网关自有元数据库
     MINIO_ENDPOINT / MINIO_ACCESS_KEY / MINIO_SECRET_KEY         —— 附件存储
-    KNOWLEDGE_API_URL / KNOWLEDGE_API_KEY / KNOWLEDGE_DATASET_ID —— FileBay 知识底座
+    KNOWLEDGE_API_URL / KNOWLEDGE_API_KEY / KNOWLEDGE_DATASET_ID —— RAGFlow 独立栈知识底座
     GATEWAY_HOST / GATEWAY_PORT
 """
 import json
@@ -127,7 +127,7 @@ async def healthz(_request):
     datasets = [_probe(ds) for ds in registry.DATASETS.values()]
     comps = _probe_components()
     # 判定口径：网关自身 + 语义层双库 + 元数据库 + 附件存储决定 ok/degraded；
-    # 知识库（FileBay 外栈）单独展示——它不可用时问数链路仍应可用，故不拖垮整体状态。
+    # 知识库（RAGFlow 独立栈）单独展示——它不可用时问数链路仍应可用，故不拖垮整体状态。
     core_ok = (
         all(d["ok"] for d in datasets)
         and comps["meta_db"].get("ok")
@@ -416,6 +416,80 @@ def knowledge_documents(limit: int = 50) -> dict:
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
 
+@mcp.tool
+def knowledge_retire(citation_id: str, reason: str = "", actor: str = "") -> dict:
+    """把某条知识引用标记为已下架/已回退（PRD §13 第③类留痕）。
+
+    `citation_id` = 引用 ID（`knowledge_search` 返回的 `citations_recorded.citation_ids`
+    之一，或 `knowledge_citation_list` 返回的 `citation_id`）。
+    `reason` = 下架原因（如"口径变更"/"文档过期"/"引用错了"等）。
+    `actor` = 操作人身份，仅用于留痕（不写入 retire_citation 内部，因该函数签名只接受两个参数）。
+    """
+    try:
+        if not citation_id:
+            return {"ok": False, "error": "citation_id 不能为空"}
+        result = knowledge.retire_citation(citation_id, reason)
+        if actor:
+            try:
+                import db as _db
+                _db.execute(
+                    "INSERT INTO demand_events (demand_id, event_type, actor, detail) "
+                    "VALUES (%s,%s,%s,%s)",
+                    ("KC-EVENT", "knowledge_retire", actor[:64],
+                     _db.dumps({"citation_id": citation_id, "reason": reason[:500]})),
+                )
+            except Exception:
+                pass
+        return result
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@mcp.tool
+def knowledge_citation_list(
+    demand_id: str = "", include_retired: bool = False, limit: int = 50
+) -> dict:
+    """列出知识引用留痕记录（按 demand_id 筛选，按时间倒序）。
+
+    `demand_id` 为空时返回跨需求的最近记录；`include_retired=True` 会带出
+    已下架记录（默认只返回未下架）。
+    """
+    import db as _db
+    try:
+        params = []
+        where = []
+        if demand_id:
+            where.append("demand_id = %s")
+            params.append(demand_id)
+        if not include_retired:
+            where.append("retired_at IS NULL")
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        sql = (
+            "SELECT citation_id, demand_id, question, document_id, document_name, "
+            "       chunk_id, positions, round_no, sql_run_id, dataset_id, "
+            "       retired_at IS NOT NULL AS is_retired, retired_reason, "
+            "       created_at::text AS created_at, retired_at::text AS retired_at "
+            "FROM knowledge_citations %s "
+            "ORDER BY created_at DESC LIMIT %%s"
+        ) % where_sql
+        params.append(int(limit))
+        rows = _db.query(sql, params)
+        total = _db.query_one(
+            "SELECT count(*) AS n FROM knowledge_citations %s" % where_sql,
+            params[:-1] if where else [],
+        )["n"]
+        return {
+            "ok": True,
+            "demand_id": demand_id or None,
+            "include_retired": bool(include_retired),
+            "total": total,
+            "returned": len(rows),
+            "items": rows,
+        }
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
 # ---------------------------------------------------------------------------
 # M2 · 元数据字典（MDL 语义 + 物理结构合流）
 # ---------------------------------------------------------------------------
@@ -631,6 +705,8 @@ def confirmation_answer(
     一致时按 noop 处理，不无谓地堆版本。
 
     答复后需求状态转「待补充修改」，等分析人员据答复重新整理。
+    **答复后必须重跑 `analysis_first_round`**，答复才会作为 P2 证据
+    进入证据链并被槽位回填；仅答复不重跑，后续步骤看不到这次答复。
     """
     try:
         return analysis_mod.answer(
@@ -773,9 +849,25 @@ def sql_plan(demand_id: str, dataset: str = "B") -> dict:
     """M5-2 · 出「计划草稿」：选哪张主题表 / 什么颗粒度 / 哪条关联路径 / 哪个时间字段。
 
     这是两段式的第一段，**不含 SQL 正文**；选不出唯一解时给候选集合并标「需人工审核」，
-    不硬选。候选一律取自 `sql_context_pack` 的闭集。
+    不硬选。候选一律取自 `sql_context_pack` 的闭集；本工具与 `sql_context_pack`
+    **无先后依赖**，两者可任意顺序调用（实测结果一致）。
     """
-    return _wired("sqlgen", "plan", demand_id, dataset=dataset)
+    plan_out = _wired("sqlgen", "plan", demand_id, dataset=dataset)
+    if isinstance(plan_out, dict) and not plan_out.get("ok") is False:
+        chosen = plan_out.get("chosen_table") or ""
+        if not chosen:
+            try:
+                import fallback as fallback_mod
+                ctx = {
+                    "f2_hit": True,
+                    "f2_reason": (plan_out.get("draft_gate") or {}).get("detail")
+                                 or (plan_out.get("chosen_table_reason") or "")
+                                 or "chosen_table 为空：Schema 筛选未命中唯一主题表",
+                }
+                plan_out["fallback_matrix"] = fallback_mod.classify(**ctx)
+            except Exception as e:
+                plan_out["fallback_matrix_error"] = "%s: %s" % (type(e).__name__, str(e)[:200])
+    return plan_out
 
 
 @mcp.tool
@@ -840,6 +932,300 @@ def sql_run_replay(demand_id: str, version: int = 0) -> dict:
     与 `sql_run_get` 的区别：这里返回「可对照复算的快照」，而不只是留痕行列表。
     """
     return _wired("sqlrun", "sql_run_replay", demand_id, version=version or None)
+
+
+@mcp.tool
+def sql_optimize(sql: str, dataset: str = "B") -> dict:
+    """用 sqlglot 对 SQL 做纯静态等价重写（不执行）。
+
+    改写规则（仅当能保证语义等价时才应用，否则在 rewrites 里标注跳过原因）：
+      · 谓词下推：仅当 FROM 为单个子查询（不含 JOIN）且外层 WHERE 全部列
+        严格引用该子查询输出列时，下推条件到内层 WHERE；否则跳过；
+      · 去重优化：外层 SELECT DISTINCT * over 含 GROUP BY 的单 From 子查询
+        视为冗余，移除外层 DISTINCT；否则跳过；
+      · 公共子表达式消除：同 SELECT 投影检测重复表达式签名，但保守跳过
+        （避免改变列数破坏下游读取契约）。
+
+    返回 before/after/rewrites/changed。仅当真实发生结构变化时 changed=True
+    与 rewrites 中出现 rule 生效记录；sqlglot round-trip 导致的 AS/空格外观
+    差异一律不算作改写（changed=False）。解析失败时返回 {error:{type,message,stage}}。
+    """
+    import sqlglot
+    from sqlglot import exp
+
+    before = (sql or "").strip()
+    rewrites = []
+
+    if not before:
+        return {"error": {"type": "ValueError", "message": "SQL 为空"}}
+
+    # 1. 解析
+    try:
+        tree = sqlglot.parse_one(before, read="postgres")
+    except Exception as e:
+        return {
+            "error": {
+                "type": type(e).__name__,
+                "message": str(e)[:400],
+                "stage": "parse",
+            }
+        }
+
+    after_sql = before
+    real_structured_changes = 0
+
+    # 2. 谓词下推（保守等价：仅顶层 Select 的 FROM 为单 Subquery 且列归属一致才下推）
+    pushdown_applied = False
+    try:
+        tree_push = tree.copy()
+
+        if isinstance(tree_push, exp.Select):
+            from_clause = tree_push.args.get("from_")
+            where_clause = tree_push.args.get("where")
+
+            # A1 · 只看顶层 FROM，禁止 find_all(exp.From) 递归搜内层
+            if from_clause is not None and where_clause is not None:
+                subq_node = None
+                subq_alias = None
+
+                # 遍历 From 下的表达式：要么 Subquery(expr) 要么 Table(expr) 要么 Join(expr)
+                # 仅当无 JOIN 且唯一子节点是 Subquery（含 alias）
+                for child in from_clause.iter_expressions():
+                    if isinstance(child, exp.Subquery):
+                        subq_node = child
+                        subq_alias = child.alias
+                        break
+                    elif isinstance(child, exp.Table):
+                        # 真实表不支持下推
+                        break
+                    elif isinstance(child, exp.Join):
+                        # 有 JOIN 一律跳过（跨表列可能出现）
+                        break
+
+                if (
+                    subq_node is not None
+                    and isinstance(subq_node.this, exp.Select)
+                    and subq_alias
+                ):
+                    inner = subq_node.this
+
+                    # P1-11 · 安全门槛 2/3：内层若含 LIMIT / FETCH / OFFSET（行数/位移限制）→ 一律不下推
+                    # LIMIT/FETCH FIRST → args["limit"]（Limit / Fetch）；裸 OFFSET → args["offset"]（Offset）
+                    if (
+                        inner.args.get("limit") is not None
+                        or inner.args.get("offset") is not None
+                    ):
+                        inner = None
+                    # P1-11 · 安全门槛 3/3：内层若含窗口函数 → 一律不下推
+                    # find_all 返回 generator（恒真），必须 list() 显式消费后才能判断是否为空
+                    if inner is not None and list(inner.find_all(exp.Window)):
+                        inner = None
+
+                    if inner is not None:
+                        # P1-11 · 安全门槛 1/3（B2a-补3 B 收窄）：只计「裸 exp.Column」作透传投影
+                        # 同时建 {outer_name -> inner Column 拷贝} 映射，方案 A 解决多源同名歧义
+                        inner_passthrough_cols = set()
+                        inner_passthrough_map = {}
+                        for proj in inner.expressions:
+                            if isinstance(proj, exp.Column):
+                                nm = proj.alias_or_name
+                                if nm:
+                                    inner_passthrough_cols.add(nm)
+                                    # 方案 A：保留内层 Column 自带的限定符（如 x.a）
+                                    # 每个映射值预拷贝一份原型，后续下推每次再单独拷贝
+                                    # 避免 sqlglot 节点多处复用心造成树结构异常
+                                    inner_passthrough_map[nm] = proj.copy()
+
+                        if inner_passthrough_cols:
+                            # A2 · 逐列校验：外层 WHERE 所有列必须严格归属该子查询
+                            #     且列名必须在 inner_passthrough_cols（聚合/表达式/窗口列一律拒推）
+                            cols_ok = True
+                            referenced_aliases = set()
+                            for col in where_clause.find_all(exp.Column):
+                                tbl_alias = col.table
+                                col_name = col.name
+                                if tbl_alias:
+                                    referenced_aliases.add(tbl_alias)
+                                    if tbl_alias != subq_alias:
+                                        cols_ok = False
+                                        break
+                                # 无前缀 OR 有前缀且 == 子查询别名：列名必须在透传集合里
+                                if col_name not in inner_passthrough_cols:
+                                    cols_ok = False
+                                    break
+                            # 若有前缀引用，但引用到了多张表 → 不下推
+                            if len(referenced_aliases) > 1:
+                                cols_ok = False
+
+                            if cols_ok:
+                                # B2a-补4 · 方案 A：把外层引用列替换为内层 Column（保留其源限定符）
+                                # 多源同名（x JOIN y 均含 a）时，内层投影自带 x./y. → 下推后不会报 ambiguous
+                                # 每次替换都 fresh copy，防止节点被多表达式复用心
+                                def _rewrite_ref(c):
+                                    if isinstance(c, exp.Column):
+                                        ta = c.table
+                                        cn = c.name
+                                        if (ta is None or ta == subq_alias) and cn in inner_passthrough_map:
+                                            return inner_passthrough_map[cn].copy()
+                                    return c
+
+                                rewritten_where = where_clause.copy().transform(_rewrite_ref)
+                                merged_inner_where = None
+                                existing_inner = inner.args.get("where")
+                                if existing_inner:
+                                    merged_inner_where = exp.Where(
+                                        this=exp.and_(existing_inner.this, rewritten_where.this)
+                                    )
+                                else:
+                                    merged_inner_where = rewritten_where
+                                inner.set("where", merged_inner_where)
+                                tree_push.set("where", None)
+                                pushdown_applied = True
+
+        if pushdown_applied:
+            after_sql = tree_push.sql(dialect="postgres", pretty=False)
+            if after_sql != before:
+                real_structured_changes += 1
+                rewrites.append({
+                    "rule": "predicate_pushdown",
+                    "from_snippet": before[:200] + ("…" if len(before) > 200 else ""),
+                    "to_snippet": after_sql[:200] + ("…" if len(after_sql) > 200 else ""),
+                })
+    except Exception:
+        # P1-11 · 异常分支不谎报已应用：不下推、不改写、不写 predicate_pushdown 记录
+        # （异常时 pushdown_applied 已为 False，外层 changed 判据自然保持 False）
+        pass
+
+    # 3. DISTINCT 去重：仅 SELECT DISTINCT * over 含 GROUP BY 子查询（单 From）
+    distinct_removed = False
+    try:
+        # 从 pushdown 后的 SQL 解析（若无变化则与 before 相同）
+        tree_dist = sqlglot.parse_one(
+            (after_sql if pushdown_applied else before), read="postgres"
+        )
+        if (
+            isinstance(tree_dist, exp.Select)
+            and tree_dist.args.get("distinct")
+        ):
+            # 仅顶层单 From 子查询 + GROUP BY + SELECT *（保守可证明等价）
+            from_clause = tree_dist.args.get("from_")
+            from_subq = None
+            if from_clause is not None:
+                for child in from_clause.iter_expressions():
+                    if isinstance(child, exp.Subquery):
+                        from_subq = child
+                        break
+                    elif isinstance(child, (exp.Join, exp.Table)):
+                        break
+
+            if (
+                from_subq is not None
+                and isinstance(from_subq.this, exp.Select)
+                and from_subq.this.args.get("group")
+            ):
+                exprs = list(tree_dist.expressions)
+                if len(exprs) == 1 and isinstance(exprs[0], exp.Star):
+                    tree_dist.set("distinct", False)
+                    distinct_removed = True
+
+        if distinct_removed:
+            new_dist = tree_dist.sql(dialect="postgres", pretty=False)
+            after_sql = new_dist
+            real_structured_changes += 1
+            rewrites.append({
+                "rule": "distinct_after_groupby_removed",
+                "from_snippet": "外层 SELECT DISTINCT * over GROUP BY 子查询",
+                "to_snippet": "内层已 GROUP BY，移除外层 DISTINCT（结果集等价）",
+            })
+    except Exception as e:
+        rewrites.append({
+            "rule": "distinct_elimination",
+            "from_snippet": "保守等价检查阶段",
+            "to_snippet": "跳过：%s: %s" % (type(e).__name__, str(e)[:120]),
+        })
+
+    # 4. 公共子表达式消除（仅检测签名重复，保守跳过：改变列数会破坏下游契约）
+    try:
+        tree_cse = sqlglot.parse_one(after_sql, read="postgres")
+        if isinstance(tree_cse, exp.Select):
+            exprs = list(tree_cse.expressions)
+            seen = {}
+            dup_groups = 0
+            for i, p in enumerate(exprs):
+                # A5 · 剥离别名，只比较表达式本体签名（a+1 AS x 与 a+1 AS y 视为同签名）
+                body = p.this if isinstance(p, exp.Alias) else p
+                sig = body.sql(dialect="postgres", pretty=False)
+                if sig in seen:
+                    dup_groups += 1
+                else:
+                    seen[sig] = i
+            if dup_groups > 0:
+                rewrites.append({
+                    "rule": "common_subexpr_eliminate",
+                    "from_snippet": "同一 SELECT 中检测到 %d 组重复投影签名" % dup_groups,
+                    "to_snippet": "跳过：合并子表达式会改变列数与列顺序，破坏调用方按列读取契约",
+                })
+    except Exception as e:
+        rewrites.append({
+            "rule": "common_subexpr_eliminate",
+            "from_snippet": "保守等价检查阶段",
+            "to_snippet": "跳过：%s: %s" % (type(e).__name__, str(e)[:120]),
+        })
+
+    changed = bool(real_structured_changes > 0 and after_sql != before)
+    return {
+        "before": before,
+        "after": after_sql,
+        "rewrites": rewrites,
+        "changed": changed,
+    }
+
+
+@mcp.tool
+def demand_similar_precheck(
+    title: str, description: str = "", top: int = 5, threshold: float = 0.55
+) -> dict:
+    """预检索与本条新需求最相似的历史需求（只读，不落库、不写日志表）。
+
+    字符级相似度（title + description 拼接比较），用于需求提交前的查重提醒。
+    返回 top-N 历史需求的 demand_id / title / similarity / status。
+    """
+    try:
+        payload = {"title": title or "", "description": description or ""}
+        try:
+            thr = float(threshold)
+        except (TypeError, ValueError):
+            thr = 0.55
+        if thr < 0.0:
+            thr = 0.0
+        if thr > 1.0:
+            thr = 1.0
+        try:
+            n = int(top)
+        except (TypeError, ValueError):
+            n = 5
+        if n < 1:
+            n = 1
+        if n > 50:
+            n = 50
+        scored = demand_mod.find_similar(payload, top=n, threshold=thr)
+        items = []
+        for s in scored:
+            items.append({
+                "demand_id": s.get("demand_id"),
+                "title": s.get("title"),
+                "similarity": s.get("similarity"),
+                "status": s.get("status"),
+            })
+        return {
+            "ok": True,
+            "top": n,
+            "threshold": thr,
+            "matched": len(items),
+            "items": items,
+        }
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
 
 def main():

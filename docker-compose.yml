@@ -130,7 +130,7 @@ services:
       assistant-minio:
         condition: service_started
     extra_hosts:
-      # 容器内直连宿主机的 FileBay 知识底座 API（127.0.0.1:19380 在容器内不可达）
+      # 容器内直连宿主机的 RAGFlow 独立栈知识底座 API（127.0.0.1:19380 在容器内不可达）
       - "host.docker.internal:host-gateway"
     environment:
       GATEWAY_HOST: "0.0.0.0"
@@ -152,7 +152,9 @@ services:
       MINIO_ACCESS_KEY: "assistant"
       MINIO_SECRET_KEY: "assistant123"
       MINIO_BUCKET: "askoda-attachments"
-      # FileBay 知识底座（RAGFlow v0.26.4）检索接口
+      # RAGFlow v0.26.4 原生检索接口（无 FileBay 兜底分支）。
+      # 注意：19380 入口目前是 nginx 代理，backend 仍是旧绑定栈内的 ragflow-cpu
+      # ——「RAGFlow 独立栈」在物理上尚未成立，见 P1-1。
       KNOWLEDGE_API_URL: "${KNOWLEDGE_API_URL:-http://host.docker.internal:19380/api/v1}"
       KNOWLEDGE_API_KEY: "${KNOWLEDGE_API_KEY:-}"
       KNOWLEDGE_DATASET_ID: "${KNOWLEDGE_DATASET_ID:-}"
@@ -163,6 +165,68 @@ services:
       # MDL 语义层按数据集挂载；换库只换挂载与注册项，不改网关代码
       - ./wren-docker/workspace/mdl.json:/workspace-a/mdl.json:ro
       - ./wren-docker-b/workspace/mdl.json:/workspace-b/mdl.json:ro
+
+  # ------------------------------------------------------------------
+  # 本地 embedding 服务（B4b · 恢复知识检索召回）
+  #
+  # 为什么需要它
+  # ------------
+  # RAGFlow 里 `tenant_model_instance.extra.base_url` 原先写死远端 TEI
+  # `http://100.103.240.78:18001/v1`，该主机已不可达（Connection refused）。
+  # RAGFlow 自己**不缓存查询向量**，每次 `/api/v1/retrieval` 都要现调 embedding，
+  # 于是所有检索直接失败：EmbeddingError code=100。
+  #
+  # 为什么必须是 bge-m3
+  # -------------------
+  # 已入库 chunk 的向量是**当初用 bge-m3 生成的**，存在 ES 里。换模型 → 查询向量
+  # 与库内向量的空间不一致 → 相似度无意义、召回静默变错。所以本服务固定
+  # bge-m3，不接受通过环境变量换成别的模型。
+  #
+  # 参数里的四个「小」都是为在 OrbStack（amd64 镜像跑 arm64 模拟）下不 OOM：
+  # 2.27GB fp32 权重 + 8 个 tokenization worker 在 15.66GiB 的 VM 里会被 OOM
+  # kill（实测 ExitCode=137 OOMKilled=true）。降并发后可稳定常驻，实测 /health 200。
+  # ------------------------------------------------------------------
+  tei-embedding:
+    image: infiniflow/text-embeddings-inference:cpu-1.8
+    container_name: askoda-tei-embedding
+    restart: unless-stopped
+    platform: linux/amd64
+    command:
+      - "--model-id"
+      - "/models/bge-m3"
+      - "--auto-truncate"
+      - "--pooling"
+      - "cls"
+      - "--tokenization-workers"
+      - "2"
+      - "--max-batch-tokens"
+      - "2048"
+      - "--max-client-batch-size"
+      - "8"
+    environment:
+      RAYON_NUM_THREADS: "4"
+      MKL_ENABLE_INSTRUCTIONS: "AVX2"
+    ports:
+      # 宿主机端口。RAGFlow 容器侧走 host.docker.internal:该端口（见 .models/README.md）
+      - "${TEI_EMBEDDING_PORT:-18002}:80"
+    volumes:
+      # 模型文件不入 git（2.27GB），用 .models/fetch_bge_m3.sh 从 hf-mirror 拉取
+      - ./.models/bge-m3:/models/bge-m3:ro
+    shm_size: 512m
+    healthcheck:
+      # 镜像内自带 curl（实测 /usr/bin/curl 存在）。用 curl 而不是 /dev/tcp：
+      # TEI 基础镜像的 /bin/sh 是 dash，不支持 bash 的 /dev/tcp 重定向。
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:80/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      # 模型加载 + warm up 实测约 40~180s（amd64 模拟下更慢），期间不算 unhealthy
+      start_period: 300s
+    deploy:
+      resources:
+        limits:
+          # 上限低于 VM 总量，避免它把同机其它容器挤死；12g 是实测能常驻的值
+          memory: 12g
 
   # ------------------------------------------------------------------
   # 网关自有元数据库（M2）：需求单 / 流转留痕 / 元数据字典

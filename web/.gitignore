@@ -1,0 +1,5 @@
+node_modules/
+web/vite.config.ts.timestamp-*.mjs
+__pycache__/
+*.pyc
+.DS_Store
