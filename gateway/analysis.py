@@ -467,6 +467,11 @@ def _advance_status(demand_id, status, actor, note):
 def first_round(demand_id, dataset="B", actor="analyst", persist=True):
     """跑第一轮语义分析：取证 → 分析 → 落库轮次 → 生成确认问题 → 状态流转。"""
     d, bundle, result = build(demand_id, dataset)
+
+    slots_backfilled, slots_affected = _backfill_slots_from_confirmations(
+        demand_id, result["slots"]
+    )
+
     round_no = _save_round(demand_id, dataset, bundle, result, actor) if persist else None
 
     actions = {}
@@ -502,7 +507,82 @@ def first_round(demand_id, dataset="B", actor="analyst", persist=True):
         "conflicts": evidence.detect_conflicts(_claims_from_slots(result["slots"])),
         "confirmation_actions": actions,
         "demand_status": demand_mod.get(demand_id)["status"],
+        "slots_backfilled": slots_backfilled,
+        "slots_backfilled_count": len(slots_backfilled),
+        "slots_affected": slots_affected,
     }
+
+
+def _backfill_slots_from_confirmations(demand_id, slots):
+    """把 confirmations 里**当前版本已答复**的内容合并进对应 slot。
+
+    设计原则
+    --------
+    1. confirmations 表**只增不改**：这里只读 latest，不写版本链。
+    2. 回填 candidate 的 level/source 显式标记为「P2 业务确认」，和首跑证据区分开。
+    3. 只对已 answered=True 的最新版生效；answer=NULL 的失效答复不回填。
+    4. 幂等：对同一 question_id 重复调用不重复堆 candidate。
+    """
+    import json as _json
+    if not slots:
+        return [], []
+    conf = list_confirmations(demand_id, include_history=False)
+    answered_items = [it for it in conf.get("items") or [] if it.get("answered")]
+    backfilled_ids = []
+    affected_slots = set()
+    for it in answered_items:
+        qid = it.get("question_id")
+        slot_name = it.get("slot")
+        answer_val = it.get("answer")
+        version = it.get("version")
+        if not qid or not slot_name or not answer_val:
+            continue
+        slot = slots.get(slot_name)
+        if slot is None:
+            continue
+        cands = slot.setdefault("candidates", [])
+        # qid 本身已是 Q- 开头（如 Q-TIME-1），不要再拼一个 Q
+        dedup_key = "P2_CONFIRM_%s" % qid
+        already = any(
+            (c.get("source") or "").startswith("P2 业务确认")
+            and (c.get("confirmation_dedup") or "") == dedup_key
+            for c in cands
+        )
+        if already:
+            continue
+        cite_ev = [
+            {
+                "level": "P2",
+                "level_name": "业务确认答复",
+                "source": "confirmations",
+                "locator": "question_id=%s v%s" % (qid, version),
+            }
+        ]
+        cands.insert(
+            0,
+            {
+                "slot": slot_name,
+                "value": answer_val,
+                "confidence": 1.0,
+                "needs_confirmation": False,
+                "level": "confirmed",
+                "source": "P2 业务确认 · %s v%s" % (qid, version),
+                "confirmation_dedup": dedup_key,
+                "question_id": qid,
+                "version": version,
+                "evidence": cite_ev,
+                "matched_terms": [answer_val[:32]],
+                "hit_by": ["business_confirmation"],
+            },
+        )
+        slot["needs_confirmation"] = False
+        existing_ids = slot.get("filled_by_confirmation_ids") or []
+        if qid not in existing_ids:
+            existing_ids.append(qid)
+        slot["filled_by_confirmation_ids"] = existing_ids
+        backfilled_ids.append(qid)
+        affected_slots.add(slot_name)
+    return backfilled_ids, sorted(affected_slots)
 
 
 def _claims_from_slots(slots):
