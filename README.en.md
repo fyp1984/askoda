@@ -222,14 +222,15 @@ askoda/
 │   ├── sqlgen.py / sqlpack.py   2-stage SQL generation (plan → generate)
 │   ├── sqlrun.py     Read-only execute + 9-field trace + list filter + audit replay
 │   └── healthcheck.py  Dual liveness (HTTP /healthz + MCP initialize/tools-list)
-├── tools/            Self-cert & independent re-scan scripts (per-milestone suites + adversarial cases)
-│   ├── m4_verify.py / m5_verify.py / mcp_acceptance_check.py …
-│   ├── gates_selftest.py / rules_selftest.py / evidence_selftest.py …
-│   ├── audit_verify.py (audit replay) / robustness_verify.py (retries/timeouts/concurrency)
-│   └── collect_metadata.py / reset_demo_data.py
-├── poc-eval/         POC evaluation & E2E drills (question banks, replay, scripts, machine-readable reports)
+├── tools/            Gate, self-test & ops tooling (shipped long-term)
+│   ├── gate_all.py   Unified gate entry (G0–G3, auto-discovers sibling scripts)
+│   ├── redline_guard.py  Machine-checked six red lines
+│   ├── mcp_acceptance_check.py  Tool-surface verification over real MCP protocol
+│   ├── *_selftest.py  Offline self-tests (gates / rules / masking / knowledge / evidence / semantics)
+│   └── collect_metadata.py / ingest_knowledge.py / reset_demo_data.py / embedding_failover.sh
+├── poc-eval/         POC evaluation & E2E drills (question banks + drill scripts)
 │   ├── poc_e2e_gateway.py    Mainline stories + POC-1 bank + POC-3 traps + MDL fact-check
-│   └── e2e-gateway-report.json
+│   └── poc_eval.py / bank-b.json / rule_upgrade_dryrun.py
 ├── knowledge/        Example knowledge-base documents
 │   ├── 01-Metric-Caliber-Handbook-Retail-Member-Domain.md
 │   ├── 02-Data-Security-and-Sensitive-Field-Management-Policy.md
@@ -304,7 +305,7 @@ Gateway host port is `18080` (not `8080`) because port `8080` is reserved for th
 | Wren MCP returns `503` / `connection refused` | Wren Engine cold-start takes 30–60s on first boot | Wait 60s and retry, or `docker compose logs wren-mcp-a` |
 | Knowledge API reports `host.docker.internal` unreachable | RAGFlow not running on host or different network | Set actual reachable `KNOWLEDGE_API_URL` in `.env`, or leave blank — `degraded_sources` will report honestly |
 | Volume `wren-pgdata` says `external volume not found` | Fresh host, no legacy volume from single-stack era | Change `WREN_PG_VOLUME=askoda_wren-pgdata` in `.env` or drop `external: true` to let compose manage it |
-| `tools/*_verify.py` raises ModuleNotFoundError | Script imports gateway internals; cannot run bare-metal on host | Follow script header comments: `docker cp` into container + run with `PYTHONPATH=/app` |
+| `tools/*_selftest.py` raises ModuleNotFoundError | Some self-tests import gateway internals | Pure offline self-tests (`gates` / `rules` / `masking` / `knowledge` / `evidence` / `semantics`) run directly on the host; those that genuinely need internals: `docker cp` into container + run with `PYTHONPATH=/app` per the script header |
 
 ---
 
@@ -491,7 +492,7 @@ python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # dual liv
 python3 tools/mcp_acceptance_check.py                                 # verify all 41 tools one by one
 ```
 
-> ⚠️ Container code is flattened to `/app`, but `tools/` is not in the build context — `docker cp` before running in-container scripts. HTTP-based scripts (`m4_verify` etc.) **must run on the host**; inside the container they get connection refused.
+> ⚠️ Container code is flattened to `/app`, but `tools/` is not in the build context — `docker cp` before running in-container scripts. HTTP-based scripts **must run on the host**; inside the container they get connection refused.
 
 #### 5.6.3 Version identifiers (the table people mix up during upgrades)
 
@@ -514,7 +515,7 @@ After editing `gateway/app.py` (adding/removing `@mcp.tool`), do the following i
 1. **Update docs in the same batch**: the per-tool contract and domain counts in the project documentation workspace (MCP Tool Contract & Registration Notes) → the domain-count and per-domain tables in this README (both languages);
 2. **Rebuild the image**: `BUILDX_CONFIG="$PWD/.buildx" docker compose build gateway && docker compose up -d`;
 3. **Verify the tool surface**: the `tools/list` count and list must match the docs (`python3 tools/mcp_acceptance_check.py`);
-4. **Run regressions**: `m4_verify` (51/0), `m5_verify` (62/0), `audit_verify`, `robustness_verify` — confirm no baseline regression;
+4. **Run regressions**: `python3 tools/gate_all.py` (G0–G3 four-layer gate) to confirm no baseline regression;
 5. **Sync the image tag** and `.env` (if new environment variables are involved).
 
 > Knock-on red flags (tool-surface changes touch these assertions/lists — scan them all when writing the change ticket): the **count and list assertions** in `tools/mcp_acceptance_check.py`, the contract doc's domain-count table, and the domain-count tables in both READMEs.
@@ -554,27 +555,34 @@ python3 tools/evidence_selftest.py
 python3 tools/semantics_selftest.py
 ```
 
-### 6.2 Container-Only Scripts (require gateway internals)
+### 6.2 Unified Gate (G0–G3)
 
 ```bash
-# Example: M5 gate E2E, 62 assertions
-docker cp tools/m5_verify.py askoda:/app/tools/m5_verify.py
-docker exec -e PYTHONPATH=/app askoda python /app/tools/m5_verify.py
+# One command runs all four layers, producing gate-report.json / gate-report.md
+# (both are run artifacts, not committed)
+python3 tools/gate_all.py
 
-# M6-4 audit replay assertions (dataset back-ref + payload column correctness)
-docker cp tools/audit_verify.py askoda:/app/tools/audit_verify.py
-docker exec -e PYTHONPATH=/app askoda python /app/tools/audit_verify.py
+# Daily quick run: static + unit layers only (no DB writes, no live chain)
+python3 tools/gate_all.py --layers G0,G1
 
-# M6-3 robustness (timeout backoff retries + 20-concurrent run_id uniqueness)
-docker cp tools/robustness_verify.py askoda:/app/tools/
-docker exec -e PYTHONPATH=/app askoda python /app/tools/robustness_verify.py
+# Final acceptance: every red item blocks (ignores the known-red baseline table)
+python3 tools/gate_all.py --strict
 ```
+
+| Layer | Content | Writes DB |
+|---|---|---|
+| **G0** | Static self-check (syntax compile + dependency baseline) | No |
+| **G1** | Unit self-test (`*_selftest.py`) | No |
+| **G2** | Independent re-check (`*_check.py`) | No |
+| **G3** | Live chain (liveness + E2E) | **Yes** — run with care |
+
+> The gate **auto-discovers** scripts by naming convention: `*_selftest.py` → G1, `*_check.py` → G2, `*_verify.py` → G3. Exit code is the verdict: 0 all green, 1 any red.
 
 ### 6.3 End-to-End Drill
 
 ```bash
 python3 poc-eval/poc_e2e_gateway.py
-# Produces poc-eval/e2e-gateway-report.json (machine-readable, archive-grade)
+# Produces poc-eval/e2e-gateway-report.json (machine-readable, run artifact, not committed)
 ```
 
 Covers: 12 mainline stories + 30-item POC-1 bank (20 positive / 10 refusal) + 10-item POC-3 trap suite + 50-item MDL fact-check.
@@ -598,18 +606,21 @@ python3 tools/reset_demo_data.py --apply --purge-attachments
 
 ### 7.1 Completed Milestones (M1–M6)
 
-| Milestone | Deliverables | Acceptance Script | Result (real measured values) |
+| Milestone | Deliverables | Acceptance | Result (real measured values) |
 |---|---|---|---|
-| **M1** Gateway Skeleton | 7 MCP tools + dual Wren dataset + deterministic ask fallback | `mcp_acceptance_check.py` M1 block | 7/7 ✅ |
-| **M2** Requirement Intake | 14 tools: demand CRUD / masking / metadata / attachments / knowledge | `m2_verify.py` | 22/22 ✅ |
-| **M3** Semantics + Clarification Loop | Evidence P1–P9 + Rules R1–R7 + 7 tools | `m3_verify.py` | 109/109 ✅ |
-| **M4** 2-Stage SQL Generation | plan() → generate() + closed-set self-check + pack_version hash | `m4_verify.py` | 51/0 ✅ (dataset A) |
-| **M5** 5-Layer Gate + Pure Rule Base | sqlglot + R1–R7 canonicalisation + read-only + dry-plan + result assert | `m5_verify.py` | 62/0 ✅ (dataset B) |
-| **M6-1** Rule Version Fingerprints | `rules_version` embeds `source_sha8` of each `evaluate` | `m61r2_version_check.py` | ✅ |
-| **M6-2** Fallback Matrix F1–F5 | Pure classification + F2 criterion fixed to (empty `chosen_table`) | `m62_live_check.py` + `fallback_verify.py` | ✅ |
-| **M6-3** Robustness (timeout/retry/concurrency) | 3-tier timeout config + READ_TOOLS 3× backoff + unique run_id | `robustness_verify.py` | 18/18 ✅ |
-| **M6-4** Audit Trace + Replay | actor pass-through + knowledge_citations + dataset-backed list filter + 5-segment replay | `audit_verify.py` | Section B 16/16 ✅ |
-| **M6-5** M6 Final Acceptance | 9-item M6 acceptance sheet (enumerable rules / positive-negative cases / 5 fallback classes / 20 consecutive runs / 4 trace classes / replay / zero regression / 0-code dataset swap) | `m65_loop20_check.py` + regression suites | 9/9 ✅ |
+| **M1** Gateway Skeleton | 7 MCP tools + dual Wren dataset + deterministic ask fallback | Accepted | 7/7 ✅ |
+| **M2** Requirement Intake | 14 tools: demand CRUD / masking / metadata / attachments / knowledge | Accepted | 22/22 ✅ |
+| **M3** Semantics + Clarification Loop | Evidence P1–P9 + Rules R1–R7 + 7 tools | Accepted | 109/109 ✅ |
+| **M4** 2-Stage SQL Generation | plan() → generate() + closed-set self-check + pack_version hash | Accepted | 51/0 ✅ (dataset A) |
+| **M5** 5-Layer Gate + Pure Rule Base | sqlglot + R1–R7 canonicalisation + read-only + dry-plan + result assert | Accepted | 62/0 ✅ (dataset B) |
+| **M6-1** Rule Version Fingerprints | `rules_version` embeds `source_sha8` of each `evaluate` | Accepted | ✅ |
+| **M6-2** Fallback Matrix F1–F5 | Pure classification + F2 criterion fixed to (empty `chosen_table`) | Accepted | ✅ |
+| **M6-3** Robustness (timeout/retry/concurrency) | 3-tier timeout config + READ_TOOLS 3× backoff + unique run_id | Accepted | 18/18 ✅ |
+| **M6-4** Audit Trace + Replay | actor pass-through + knowledge_citations + dataset-backed list filter + 5-segment replay | Accepted | Section B 16/16 ✅ |
+| **M6-5** M6 Final Acceptance | 9-item M6 acceptance sheet (enumerable rules / positive-negative cases / 5 fallback classes / 20 consecutive runs / 4 trace classes / replay / zero regression / 0-code dataset swap) | Accepted | 9/9 ✅ |
+
+> The values above are **actual measurements** recorded at each milestone's acceptance; the original acceptance sheets and per-assertion evidence are archived in the project documentation workspace.
+> The one-off acceptance scripts (`m2_verify` / `m5_verify` / `audit_verify` etc.) are development process artifacts and **are not distributed with this repository** — they were bound to the container internals of their time and hold no reproduction value for external users. Currently reproducible verification entry points are in chapter 6 (unified gate + offline self-tests + tool-surface check).
 
 ### 7.2 POC Question Bank Acceptance
 
@@ -651,15 +662,15 @@ Signed-off-by: 西北人 <fyp1984@yeah.net>
 | HC-04 | All DB access through `gateway/db.py` `query/query_one/execute` | Call-site audit |
 | HC-05 | `gateway/rules.py` must remain pure: zero IO / zero DB / zero network | Import audit |
 | HC-06 | Every `.py` file must pass `ast.parse` | `python3 -c "import ast; ast.parse(open(f).read())"` per file |
-| HC-07 | All 9 trace fields mandatory, no omitted rows | `m5_verify.py` / `audit_verify.py` assertions |
-| HC-08 | `actor` passed through into `sql_runs.actor`; never defaulted | `audit_verify.py` Section B |
-| HC-09 | On filter error, NEVER silently degrade to unfiltered list | `audit_verify.py` dataset 3-state comparison |
+| HC-07 | All 9 trace fields mandatory, no omitted rows | `tools/gate_all.py` G3 live-chain assertions |
+| HC-08 | `actor` passed through into `sql_runs.actor`; never defaulted | `tools/gate_all.py` G3 trace assertions |
+| HC-09 | On filter error, NEVER silently degrade to unfiltered list | `tools/gate_all.py` G3 dataset 3-state comparison |
 
 ### 8.3 3-Step Acceptance For New Features
 
-1. **Write the self-cert script first**, drop it at `tools/mXX_<feature>_selftest.py`, all assertions, no deps on new code;
+1. **Write the self-cert script first**, drop it at `tools/<feature>_selftest.py` (auto-discovered as G1) or `<feature>_check.py` (auto-discovered as G2), all assertions, no deps on new code;
 2. **Then implement**, first run `ast.parse` sweep;
-3. **Finally run regression** (`m4_verify` / `m5_verify`) to confirm 51/0 and 62/0 baselines do not regress.
+3. **Finally run `python3 tools/gate_all.py --strict`** — all four gate layers green.
 
 ---
 

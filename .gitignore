@@ -46,6 +46,11 @@ Thumbs.db
 gate-report.json
 gate-report.md
 
+# ---- POC 演练产物（脚本每次跑重新生成，题库 bank-*.json 才是资产）----
+poc-eval/e2e-gateway-report.json
+poc-eval/replay-b.json
+poc-eval/replay-b.md
+
 # ---- 智能体运行时产物（每次跑都变，不入库）----
 # 入库的是「资产」：batches.json（唯一状态源）+ adversarial/*.json（对抗用例库）
 # 不入库的是「痕迹」：事件流与每次跑出来的证据，会无限增长
