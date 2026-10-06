@@ -184,29 +184,26 @@ docker compose up -d --build
 ```bash
 # 在仓库根目录
 python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # 双探活
-python3 tools/m2_verify.py                                            # M2 端到端 22 用例
-python3 tools/m3_verify.py                                            # M3 端到端 109 断言
-python3 tools/m4_verify.py                                            # M4 两段式生成 51/0（库 A）
 python3 tools/mcp_acceptance_check.py                                 # MCP 工具面 41 个逐条核对
-python3 tools/masking_selftest.py                                     # 脱敏自证（离线）
-python3 tools/knowledge_selftest.py                                   # 问句压缩自证（离线）
-python3 tools/evidence_selftest.py                                    # 证据词表自证（近线，无元数据库则跳跃跳过）
-python3 tools/semantics_selftest.py                                   # 语义闸门自证（离线）
+python3 tools/gate_all.py --layers G0,G1                              # 静态 + 单元门禁（快跑，不写库）
 
-# 依赖网关内部模块、须 `docker cp` 进容器跑的脚本：m5_verify / audit_verify / robustness_verify
-# 完整命令见仓库根 `README.md` §6.2
+# 离线自证（改动脱敏 / 检索 / 闸门后随手复跑）
+python3 tools/gates_selftest.py                                       # 五层门禁自证
+python3 tools/rules_selftest.py                                       # 规则库自证
+python3 tools/masking_selftest.py                                     # 脱敏自证
+python3 tools/knowledge_selftest.py                                   # 问句压缩自证
+python3 tools/evidence_selftest.py                                    # 证据词表自证（近线，无元数据库则跳跃跳过）
+python3 tools/semantics_selftest.py                                   # 语义闸门自证
 ```
 
 - 退出码 `0` = 全过；`1` = 任一失败（`collect_metadata.py` 用 `2` 表示数据不一致）
 - `--deep` 额外调用一次 `gateway_health` 工具，验证工具面真的可执行
-- 四份 `*_selftest.py` 不依赖网络（`evidence_selftest.py` 的 B/C 组需元数据库），改动脱敏/检索/闸门后应随手复跑
-- `m3_verify.py` 会在客户端**独立复扫一遍技术词**（技术词取自 `wren_manifest`，不是服务端内部清单）——
-  自己验自己等于没验；跑完默认清理产生的需求单，加 `--keep` 保留现场
+- `*_selftest.py` 基本不依赖网络（`evidence_selftest.py` 的 B/C 组需元数据库）
+- 完整四层门禁（G0 静态 / G1 单元 / G2 独立复核 / G3 真实链路）见仓库根 `README.md` §6.2
 
 ### 演示前重置环境（可选）
 
-`tools/m2_verify.py`、`tools/m3_verify.py` 每跑一次都会往元数据库写测试需求单（M3 还会写分析轮次与
-确认问答）、往对象存储写附件；跑过几轮后「需求看板」就全是测试单。演示前用重置工具擦净——
+端到端演练与门禁 G3 每跑一次都会往元数据库写测试需求单、往对象存储写附件；跑过几轮后「需求看板」就全是测试单。演示前用重置工具擦净——
 **默认 dry-run，不加 `--apply` 一个字都不改**。
 
 该工具需宿主机具备 `psycopg` / `minio`，用隔离虚拟环境运行：

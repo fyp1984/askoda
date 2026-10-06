@@ -46,10 +46,9 @@ LAYER_DESC = {
 TAIL_LINES = 40
 
 # 个别脚本的**前置环境变量**——脚本 docstring 里写明的运行姿势。
-# 例：m63_rework_verify.py 需 `WREN_B_TIMEOUT=0.002`，否则"测不出超时链路"
+# 例：某脚本需 `WREN_B_TIMEOUT=0.002`，否则"测不出超时链路"
 #（那条断言本身会先 FAIL）。按需只为该脚本注入，不污染其它脚本的超时行为。
 PER_SCRIPT_ENV = {
-    "m63_rework_verify.py": {"WREN_B_TIMEOUT": "0.002"},
 }
 
 # 已知基线红：**如实报红，但不阻塞准入**。
@@ -63,18 +62,19 @@ KNOWN_RED_BASELINE = {
 }
 # 历史沿革（本表当前为空，说明所有曾登记的已知红项都已真修好）：
 #
-# · ("G2", "tools/rules_rework_check.py") —— B2c 已移除。R1 梯次(1) 细化为
+# · ("G2", "rules_rework_check.py") —— B2c 已移除。R1 梯次(1) 细化为
 #   「方向 + 聚合列归属」两级判据，只聚合多端列不再误报，退出码转 0。
 #
-# · ("G3", "tools/m2_verify.py") —— **B4b 已移除**（原指纹「可召回且引用可追溯」）。
+# · ("G3", "m2_verify.py") —— **B4b 已移除**（原指纹「可召回且引用可追溯」）。
 #   当时红因是 embedding 上游断供：RAGFlow 的 `tenant_model_instance.extra.base_url`
 #   写死远端 TEI `100.103.240.78:18001`（已宕），而 RAGFlow 每次检索都现调
 #   embedding、不缓存查询向量，于是 knowledge_search 全量
 #   `EmbeddingError('Connection error.')`、命中恒为 0。
 #   修法见 `.models/README.md`：本地起 bge-m3 TEI（compose 服务 `tei-embedding`），
-#   把 base_url 改为 host.docker.internal:18002。实测 m2_verify 22/22 通过、
-#   退出码 0，V12「可召回且引用可追溯」与 V12c「口语化问句可召回」均转绿。
+#   把 base_url 改为 host.docker.internal:18002。
 #   规则是「只登记已知待修，修好必须移除」，故此处不再保留。
+#
+# 注：上述两个里程碑验收脚本已随过程产物清理从仓库删除，此处仅留决策沿革备查。
 #
 # 留着的危害：known-red 长期挂账，会把真实红项一并赦免。
 

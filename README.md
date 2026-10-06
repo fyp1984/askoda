@@ -222,14 +222,15 @@ askoda/
 │   ├── sqlgen.py / sqlpack.py   两段式 SQL 生成（plan → generate）
 │   ├── sqlrun.py     只读执行 + 九字段留痕 + 列表筛选 + 审计回放接口
 │   └── healthcheck.py  双探活脚本（HTTP /healthz + MCP initialize）
-├── tools/            自证与独立复扫脚本（每个里程碑一套，含对抗用例）
-│   ├── m4_verify.py / m5_verify.py / mcp_acceptance_check.py  …
-│   ├── gates_selftest.py / rules_selftest.py / evidence_selftest.py …
-│   ├── audit_verify.py（审计回放）/ robustness_verify.py（重试/超时/并发）
-│   └── collect_metadata.py / reset_demo_data.py
-├── poc-eval/         POC 评估与端到端演练（题库、回放、演练脚本、机器可读报告）
+├── tools/            门禁、自证与运维工具（长期随仓库分发）
+│   ├── gate_all.py   统一门禁入口（G0–G3 四层，自动发现同目录脚本）
+│   ├── redline_guard.py  六条红线机器守卫
+│   ├── mcp_acceptance_check.py  工具面逐条核验（走真实 MCP 协议）
+│   ├── *_selftest.py  离线自证（gates / rules / masking / knowledge / evidence / semantics）
+│   └── collect_metadata.py / ingest_knowledge.py / reset_demo_data.py / embedding_failover.sh
+├── poc-eval/         POC 评估与端到端演练（题库与演练脚本）
 │   ├── poc_e2e_gateway.py    主线故事 + POC-1 题库 + POC-3 陷阱 + MDL 事实核对
-│   └── e2e-gateway-report.json
+│   └── poc_eval.py / bank-b.json / rule_upgrade_dryrun.py
 ├── knowledge/        知识底座样例文档
 │   ├── 01-指标口径说明书-零售会员域.md
 │   ├── 02-数据安全与敏感字段管理办法.md
@@ -305,7 +306,7 @@ docker compose up -d --build
 | Wren MCP 返回 `503` / `connection refused` | Wren Engine 冷启动慢，首次需 30–60s | 等 1 分钟后重试，或 `docker compose logs wren-mcp-a` 看日志 |
 | 知识库接口报 `host.docker.internal` 不可达 | RAGFlow 不在本机或未起来 | 在 `.env` 里把 `KNOWLEDGE_API_URL` 改为实际可达地址，或留空跳过（`degraded_sources` 会如实报告） |
 | 数据卷 `wren-pgdata` 报 `external volume not found` | 新机器上没有单栈时代遗留卷 | 在 `.env` 里改为 `WREN_PG_VOLUME=askoda_wren-pgdata` 或删除 `external: true` 由 compose 自建 |
-| `tools/*_verify.py` 报 ModuleNotFoundError | 脚本依赖网关内部模块，不能直接在宿主机跑 | 按脚本头部注释 `docker cp` 进容器 + `PYTHONPATH=/app` 执行 |
+| `tools/*_selftest.py` 报 ModuleNotFoundError | 部分自证脚本依赖网关内部模块 | 纯离线自证（`gates` / `rules` / `masking` / `knowledge` / `evidence` / `semantics`）可在宿主直跑；确实需要内部模块的按脚本头部注释 `docker cp` 进容器 + `PYTHONPATH=/app` 执行 |
 
 ---
 
@@ -492,7 +493,7 @@ python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # 双探�
 python3 tools/mcp_acceptance_check.py                                 # 工具面 41 个逐条核对
 ```
 
-> ⚠️ 容器内代码平铺 `/app`，但 `tools/` 不在 build context —— 跑容器内脚本前需 `docker cp`；走 HTTP 的脚本（`m4_verify` 等）**必须在宿主跑**，容器内会 connection refused。
+> ⚠️ 容器内代码平铺 `/app`，但 `tools/` 不在 build context —— 跑容器内脚本前需 `docker cp`；走 HTTP 的脚本**必须在宿主跑**，容器内会 connection refused。
 
 #### 5.6.3 版本标识对照（升级时最易搞混的一张表）
 
@@ -515,7 +516,7 @@ python3 tools/mcp_acceptance_check.py                                 # 工具�
 1. **同批更新文档**：项目文档工作空间《MCP 工具契约与注册说明》的逐工具契约与域计数 → 本 README 的双语域计数表与逐域工具表；
 2. **重建镜像**：`BUILDX_CONFIG="$PWD/.buildx" docker compose build gateway && docker compose up -d`；
 3. **核验工具面**：`tools/list` 的数量与清单须与文档一致（`python3 tools/mcp_acceptance_check.py`）；
-4. **跑回归**：`m4_verify`（51/0）、`m5_verify`（62/0）、`audit_verify`、`robustness_verify`，确认基线不退化；
+4. **跑回归**：`python3 tools/gate_all.py`（G0–G3 四层门禁），确认基线不退化；
 5. **同步镜像标签**与 `.env`（如涉及新环境变量）。
 
 > 联动红点（改工具面会牵动这些断言 / 清单，出改单时要一并扫）：`tools/mcp_acceptance_check.py` 的**计数与清单断言**、契约文档的域计数表、本 README 双语域计数表。
@@ -555,27 +556,33 @@ python3 tools/evidence_selftest.py
 python3 tools/semantics_selftest.py
 ```
 
-### 6.2 需要容器内跑的脚本（依赖网关内部模块）
+### 6.2 统一门禁（G0–G3 四层）
 
 ```bash
-# 例：M5 门禁端到端 62 断言
-docker cp tools/m5_verify.py askoda:/app/tools/m5_verify.py
-docker exec -e PYTHONPATH=/app askoda python /app/tools/m5_verify.py
+# 一条命令跑完四层门禁，产出 gate-report.json / gate-report.md（均为运行产物，不入库）
+python3 tools/gate_all.py
 
-# M6-4 审计回放断言（含反查 dataset + payload 列）
-docker cp tools/audit_verify.py askoda:/app/tools/audit_verify.py
-docker exec -e PYTHONPATH=/app askoda python /app/tools/audit_verify.py
+# 日常快跑：只跑静态 + 单元两层（不写库、不碰真链路）
+python3 tools/gate_all.py --layers G0,G1
 
-# M6-3 健壮性（超时退避重试 + 并发 20 次 run_id 唯一性）
-docker cp tools/robustness_verify.py askoda:/app/tools/
-docker exec -e PYTHONPATH=/app askoda python /app/tools/robustness_verify.py
+# 总验收：所有红项一律阻塞（忽略「已知基线红」豁免表）
+python3 tools/gate_all.py --strict
 ```
+
+| 层 | 内容 | 是否写库 |
+|---|---|---|
+| **G0** | 静态自检（语法编译 + 依赖基线） | 否 |
+| **G1** | 单元自证（`*_selftest.py`） | 否 |
+| **G2** | 独立复核（`*_check.py`） | 否 |
+| **G3** | 真实链路（探活 + 端到端） | **是**，慎跑 |
+
+> 门禁按命名约定**自动发现**同目录脚本：`*_selftest.py` → G1、`*_check.py` → G2、`*_verify.py` → G3。退出码即准入结论：0 全绿，1 有红项。
 
 ### 6.3 端到端演练
 
 ```bash
 python3 poc-eval/poc_e2e_gateway.py
-# 产出 poc-eval/e2e-gateway-report.json（机器可读，归档用）
+# 产出 poc-eval/e2e-gateway-report.json（机器可读，运行产物，不入库）
 ```
 
 覆盖：主线故事 12 条 + POC-1 题库 30 条（20 正向 / 10 拒绝）+ POC-3 陷阱 10 条 + MDL 事实核对 50 条。
@@ -599,18 +606,21 @@ python3 tools/reset_demo_data.py --apply --purge-attachments
 
 ### 7.1 已完成里程碑（M1–M6）
 
-| 里程碑 | 交付内容 | 验收脚本 | 结果（真实数值） |
+| 里程碑 | 交付内容 | 验收结论 | 结果（真实数值） |
 |---|---|---|---|
-| **M1** · 网关骨架 | MCP 7 工具 + Wren 双库接入 + 确定性 ask 兜底 | `mcp_acceptance_check.py` M1 段 | 7/7 ✅ |
-| **M2** · 需求受理 | 需求 CRUD / 脱敏 / 元数据 / 附件 / 知识库 14 工具 | `m2_verify.py` | 22/22 ✅ |
-| **M3** · 语义分析 + 确认闭环 | 证据编排 P1–P9 + 规则 R1–R7 + 7 工具 | `m3_verify.py` | 109/109 ✅ |
-| **M4** · 两段式 SQL 生成 | plan() → generate() + 闭集自检 + pack_version 哈希 | `m4_verify.py` | 51/0 ✅（库 A） |
-| **M5** · 五层门禁 + 纯规则库 | sqlglot + R1–R7 规范化 + 只读 + dry-plan + 结果断言 | `m5_verify.py` | 62/0 ✅（库 B） |
-| **M6-1** · 规则版本指纹 | `rules_version` 含每条 `evaluate` 的 `source_sha8` | `m61r2_version_check.py` | ✅ |
-| **M6-2** · 失败回退矩阵 F1–F5 | 分类纯函数 + F2 判据修正（按 `chosen_table` 空） | `m62_live_check.py` + `fallback_verify.py` | ✅ |
-| **M6-3** · 健壮性（超时 / 重试 / 并发） | 超时三级配置 + READ_TOOLS 3 次退避 + run_id 唯一 | `robustness_verify.py` | 18/18 ✅ |
-| **M6-4** · 审计留痕 + 回放 | actor 透传 + knowledge_citations + 列表按 dataset 反查 + 五段链条回放 | `audit_verify.py` | B 段 16/16 ✅ |
-| **M6-5** · M6 总验收 | M6 验收单 9 项（规则可枚举 / 正反例 / 5 类回退 / 连续 20 次 / 四类留痕 / 回放 / 零回归 / 换库 0 代码） | `m65_loop20_check.py` + 回归套件 | 9/9 ✅ |
+| **M1** · 网关骨架 | MCP 7 工具 + Wren 双库接入 + 确定性 ask 兜底 | 已验收 | 7/7 ✅ |
+| **M2** · 需求受理 | 需求 CRUD / 脱敏 / 元数据 / 附件 / 知识库 14 工具 | 已验收 | 22/22 ✅ |
+| **M3** · 语义分析 + 确认闭环 | 证据编排 P1–P9 + 规则 R1–R7 + 7 工具 | 已验收 | 109/109 ✅ |
+| **M4** · 两段式 SQL 生成 | plan() → generate() + 闭集自检 + pack_version 哈希 | 已验收 | 51/0 ✅（库 A） |
+| **M5** · 五层门禁 + 纯规则库 | sqlglot + R1–R7 规范化 + 只读 + dry-plan + 结果断言 | 已验收 | 62/0 ✅（库 B） |
+| **M6-1** · 规则版本指纹 | `rules_version` 含每条 `evaluate` 的 `source_sha8` | 已验收 | ✅ |
+| **M6-2** · 失败回退矩阵 F1–F5 | 分类纯函数 + F2 判据修正（按 `chosen_table` 空） | 已验收 | ✅ |
+| **M6-3** · 健壮性（超时 / 重试 / 并发） | 超时三级配置 + READ_TOOLS 3 次退避 + run_id 唯一 | 已验收 | 18/18 ✅ |
+| **M6-4** · 审计留痕 + 回放 | actor 透传 + knowledge_citations + 列表按 dataset 反查 + 五段链条回放 | 已验收 | B 段 16/16 ✅ |
+| **M6-5** · M6 总验收 | M6 验收单 9 项（规则可枚举 / 正反例 / 5 类回退 / 连续 20 次 / 四类留痕 / 回放 / 零回归 / 换库 0 代码） | 已验收 | 9/9 ✅ |
+
+> 上表数值均为各里程碑验收当时**实测记录**，原始验收单与逐条断言留档在项目文档工作空间。
+> 各里程碑的一次性验收脚本（`m2_verify` / `m5_verify` / `audit_verify` 等）属开发过程产物，**不随本仓库分发**——它们绑定当时的容器内部结构，对外部使用者已无复现价值。当前可复现的验证入口见第六章（统一门禁 + 离线自证 + 工具面核验）。
 
 ### 7.2 POC 题库验收
 
@@ -652,15 +662,15 @@ Signed-off-by: 西北人 <fyp1984@yeah.net>
 | HC-04 | 数据库访问必须走 `gateway/db.py` 的 `query/query_one/execute` | 自查调用点 |
 | HC-05 | 规则文件 `gateway/rules.py` 必须纯函数，零 IO / 零 DB / 零网络 | 自查 import |
 | HC-06 | 所有脚本必须 `ast.parse` 通过 | `python3 -c "import ast; ast.parse(open(f).read())"` 对每个 `.py` |
-| HC-07 | 九字段留痕一行都不能缺 | `m5_verify.py` / `audit_verify.py` 断言 |
-| HC-08 | actor 必须透传写入 `sql_runs.actor`，不许用默认值 | `audit_verify.py` B 段断言 |
-| HC-09 | 筛选异常时严禁静默降级成全量 | `audit_verify.py` dataset 三态对照 |
+| HC-07 | 九字段留痕一行都不能缺 | `tools/gate_all.py` G3 真实链路断言 |
+| HC-08 | actor 必须透传写入 `sql_runs.actor`，不许用默认值 | `tools/gate_all.py` G3 留痕断言 |
+| HC-09 | 筛选异常时严禁静默降级成全量 | `tools/gate_all.py` G3 dataset 三态对照 |
 
 ### 8.3 验收新功能的三步法
 
-1. **先写自证脚本**，放 `tools/mXX_<feature>_selftest.py`，全是断言；
+1. **先写自证脚本**，放 `tools/<feature>_selftest.py`（G1 自动发现）或 `<feature>_check.py`（G2 自动发现），全是断言；
 2. **再改代码**，改完先跑 `ast.parse` 全量语法检查；
-3. **最后跑 m4_verify / m5_verify 回归**，确保 51/0 / 62/0 的 baseline 不退化。
+3. **最后跑 `python3 tools/gate_all.py --strict`**，四层门禁全绿才算过。
 
 ---
 
