@@ -515,12 +515,65 @@ def _bfs_connected_components(nodes_set, edges_set):
     return comps
 
 
+def _aggregate_column_owners(ast_stmt, alias_to_model, skip_ids):
+    """收集 SQL 中聚合表达式所引用列的「表归属」（R1 梯次(1) 的第二级判据）。
+
+    为什么需要它：梯次(1) 原先只看 JOIN 方向（从一端发起 JOIN 到多端 → 判放大），
+    却没看**被聚合的列属于哪一端**。反例（本库 A 库）：
+        SELECT SUM(oi.subtotal) FROM orders o JOIN order_items oi ON o.order_id = oi.order_id
+    MDL 声明 order_items_orders 为 MANY_TO_ONE（多端=order_items，一端=orders），
+    方向确实是从「一端」发起，但 SUM 取的是**多端表**的列 —— 每条 order_item 只出现一次，
+    根本不存在行放大。所以方向只是**必要条件**，还必须叠加「聚合列归属」才构成充分判据。
+
+    返回三元组 (owners, has_count_star, unresolved)：
+      owners         —— 聚合列能解析出的 MDL 模型归一名集合（复用调用方已建好的
+                        alias_to_model，即 sql_to_model 的归一结果，不另造一套映射）
+      has_count_star —— 是否存在 COUNT(*)：统计的是行数，放大风险无法从列归属排除
+      unresolved     —— 是否存在**解析不出表归属**的聚合列（无限定符 / 限定符不在 SQL 表集内 /
+                        聚合表达式内无任何列引用）→ 无法证明安全，保守处理
+    只统计主查询作用域内的聚合：CTE 内部的聚合属于「先聚合再关联」，其列归属与外层 JOIN 无关
+    （与同函数 _seq 排除 CTE 表的口径保持一致），由调用方通过 skip_ids 传入 CTE 内聚合节点集合。
+    绝不抛异常。
+    """
+    owners = set()
+    has_count_star = False
+    unresolved = False
+    for a in ast_stmt.find_all(exp.AggFunc):
+        if id(a) in (skip_ids or set()):
+            continue
+        # COUNT(*) → this 是 Star，没有列可归属，行数放大风险无法排除
+        if isinstance(a.this, exp.Star):
+            has_count_star = True
+            continue
+        cols = list(a.find_all(exp.Column))
+        if not cols:
+            # 形如 SUM(1) / SUM(CASE WHEN ... THEN 1 END)：无列引用 → 归属不可解析
+            unresolved = True
+            continue
+        for c in cols:
+            tok = c.args.get("table")
+            qual = (tok.name if isinstance(tok, exp.Identifier) else str(tok or "")) or ""
+            m = alias_to_model.get(_norm_sql_name(qual)) if qual else None
+            if not m:
+                unresolved = True
+            else:
+                owners.add(m)
+    return owners, has_count_star, unresolved
+
+
 def _ev_one_to_many_unhandled(ast_stmt, ctx):
     """一对多未处理：SQL 有 JOIN 且关系是 1:N / M:N，且有聚合函数，且无 DISTINCT/预聚合子查询。
 
     两梯次（M6-1 返工第二轮：梯次(2) 从"两两 pair"改为"图连通性 BFS"，消除三表链式误报）：
       (1) 真放大（不变）：MDL 里存在 joinType ∈ {ONE_TO_MANY, MANY_TO_MANY} 的关系，
           且关系两端模型都出现在 SQL 的 FROM/JOIN 表集里 → 报。
+          P1-8 修复（本轮）：方向反解细化为「方向 + 聚合列归属」两级判据 ——
+          方向（一端先于多端出现）只是**必要条件**，还须叠加聚合列归属才成立：
+            · 聚合引用「一端」表的列（如 SUM(orders.total_amount)）→ 报（真放大）
+            · 存在 COUNT(*) 或聚合引用两端之外的第三表列 → 报（无法证明安全，保守）
+            · 聚合**只**引用「多端」表的列（如 SUM(oi.subtotal)，oi=order_items）
+              → 不报（每条明细只出现一次，不存在行放大）
+            · 列归属解析不出（无限定符/限定符不在表集内）→ 报（保守，宁可提示不可静默放过）
       (2) 未声明关系通路（本轮改）：N = SQL 中所有能解析到 MDL 的模型；
           以 N 为节点、MDL 中所有已声明关系（任意 joinType）为无向边
           （两端必须都在 N 里才算边），BFS 求连通分量：
@@ -588,6 +641,20 @@ def _ev_one_to_many_unhandled(ast_stmt, ctx):
     mdltbl_in_sql = set(sql_to_model.values())
     if len(mdltbl_in_sql) < 2:
         return out  # 跨表不足两张（或均未建模），不判
+    # 别名 → MDL 模型 映射（聚合列归属判定用）。
+    # 复用上文同一套归一基准（_norm_sql_name + sql_to_model 的模型解析结果），
+    # 不另造一套映射：表名与其 alias 都登记，便于把 SUM(oi.subtotal) 的 oi 翻回 order_items。
+    alias_to_model = {}
+    for _t in ast_stmt.find_all(exp.Table):
+        _nm = _norm_sql_name(_t.name or "")
+        _mdl = sql_to_model.get(_nm)
+        if not _mdl:
+            continue
+        if _nm:
+            alias_to_model[_nm] = _mdl
+        _al = _norm_sql_name(_t.alias_or_name or "")
+        if _al:
+            alias_to_model[_al] = _mdl
     # 真放大判定（2026-10-02 改造）：原逻辑只认字面 joinType ∈ {ONE_TO_MANY, MANY_TO_MANY}，
     # 而本库 MDL 10 条关系 joinType 全部是 MANY_TO_ONE → 该分支实为死代码。
     # 现按「SQL 里的 JOIN 方向」反解：MANY_TO_ONE 声明「models[0]=多端, models[1]=一端」，
@@ -604,6 +671,11 @@ def _ev_one_to_many_unhandled(ast_stmt, ctx):
     for _cte in ast_stmt.find_all(exp.CTE):
         for _t in _cte.find_all(exp.Table):
             _cte_table_ids.add(id(_t))
+    # CTE 内部的聚合不属于「主查询外层聚合」→ 排除，避免把 CTE 的预聚合列算进外层判据。
+    _cte_agg_ids = set()
+    for _cte in ast_stmt.find_all(exp.CTE):
+        for _a in _cte.find_all(exp.AggFunc):
+            _cte_agg_ids.add(id(_a))
     _seq = []
     for _t in ast_stmt.find_all(exp.Table):
         if id(_t) in _cte_table_ids:
@@ -636,8 +708,33 @@ def _ev_one_to_many_unhandled(ast_stmt, ctx):
             continue
         else:
             continue
-        # 方向反解：一端先于多端出现 → 一对多放大
+        # 方向反解：一端先于多端出现 → 方向上构成一对多。
+        # P1-8 修复：方向只是**必要条件**，必须再叠加「被聚合的列归属哪一端」才成立。
+        #   原实现只看方向，把「从一端发起 JOIN 到多端 + 聚合多端列」也判成放大 —— 误报。
+        #   实测反例：SELECT SUM(oi.subtotal) FROM orders o JOIN order_items oi ON ...
+        #   方向确实是 orders(一端)→order_items(多端)，但每条 order_item 只出现一次，无行放大。
         if multi_end in _pos and one_end in _pos and _pos[one_end] < _pos[multi_end]:
+            _owners, _has_star, _unresolved = _aggregate_column_owners(
+                ast_stmt, alias_to_model, _cte_agg_ids)
+            # 判定表（方向前置条件已成立时）：
+            #   · 聚合引用 one_end 列            → 真放大，报
+            #   · COUNT(*) 或引用两端外第三表列  → 无法证明安全，保守报
+            #   · 聚合只引用 multi_end 列        → 每条明细只出现一次，无行放大，不报
+            #   · 列归属解析不出                 → 保守报
+            _agg_txt = ("、".join(sorted(_owners)) if _owners else "（无）")
+            if _unresolved:
+                _why = ("聚合列的表归属无法解析（存在无表限定符或限定符不在本SQL 表集内的聚合列），"
+                        "无法证明未发生行放大")
+            elif _has_star:
+                _why = "存在 COUNT(*)，统计的是 JOIN 后的行数，放大风险无法从列归属排除"
+            elif one_end in _owners:
+                _why = "聚合直接引用了「一端 %s」的列，该列值会随多端行数被重复累加" % one_end
+            elif _owners and multi_end in _owners and not (_owners - {multi_end}):
+                # 只聚合多端列 → 可证明无行放大 → 放行（继续看下一条关系，不 break）
+                continue
+            else:
+                _owners_txt = "、".join(sorted(_owners)) if _owners else "（无）"
+                _why = ("聚合引用了两端之外的第三表列（%s），其粒度是否被本关系放大无法判定" % _owners_txt)
             hit_rel = True
             hit_snippet = (
                 "JOIN 方向反用 %s<->%s（MDL 声明 %s：一端 %s 先出现，多端 %s 后被 JOIN）+ 聚合 无 DISTINCT/预聚合"
@@ -646,9 +743,10 @@ def _ev_one_to_many_unhandled(ast_stmt, ctx):
             hit_detail = (
                 "MDL 关系 %s 声明为 %s（多端=%s，一端=%s）；SQL 从「一端 %s」发起 JOIN 到「多端 %s」，"
                 "形成一对多放大，且外有聚合又未加 DISTINCT / 未做 FROM 预聚合；"
+                "本次聚合列归属判定：%s（涉及表：%s）；"
                 "请确认是否先在多端侧预聚合或对主键去重，避免计数/求和被放大。"
                 % (r.get("name") or ",".join(r.get("models") or []), jt,
-                   multi_end, one_end, one_end, multi_end)
+                   multi_end, one_end, one_end, multi_end, _why, _agg_txt)
             )
             break
     # (2) 图连通性：N = mdltbl_in_sql；边 = 所有 MDL 已声明 relationship（任意 joinType），

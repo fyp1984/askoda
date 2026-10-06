@@ -1,0 +1,87 @@
+{
+  "suite": "candidate_purity",
+  "purpose": "候选纯度与词条质量判据。来自 B2b 复核暴露的三个门禁盲区缺陷——它们当时门禁 92 项全 PASS 却一条都没覆盖。",
+  "origin": "B2b 复核（2026-10-03），P1-12 / P1-13 / P1-14",
+  "verify_method": "全列扫描 + 基线对照 + 打桩；不写真库",
+  "cases": [
+    {
+      "id": "CP-001",
+      "缺陷": "P1-12",
+      "场景": "时间字段硬判据不得被中文单字正词污染",
+      "判据": "TIME_FIELD_POSITIVE_WORDS 不含任何单字（分/日/周/时/秒）",
+      "反例": ["不可分→分", "直接分组→分", "细分→分", "当日销售额→日", "周末→周", "小时→时"],
+      "expect": "全库逐列扫描，误通过的非时间类型列数 == 0",
+      "基线": "改前 B 库含 8 条非时间列（order_gmv/coupon_amount/coupon_type/category_name/sales_amount/order_cnt/member_cnt/day_type）；A 库 products.category_name（varchar）通过"
+    },
+    {
+      "id": "CP-002",
+      "缺陷": "P1-12",
+      "场景": "类型白名单是唯一硬门槛，取消「正词命中即暂放」弱通路",
+      "判据": "data_type 不属时间白名单（date/timestamp/datetime/timestamptz）→ 直接判 False",
+      "expect": "拒绝理由须写明 data_type=X 不属时间白名单"
+    },
+    {
+      "id": "CP-003",
+      "缺陷": "P1-12",
+      "场景": "兜底扫描不得灌入噪声",
+      "判据": "time_semantics() 兜底只扫已命中的主体表；主体表为空则不兜底",
+      "expect": "slots.time.candidates 回落至个位数且全部为时间列",
+      "基线": "改前膨胀到 17–18 条"
+    },
+    {
+      "id": "CP-004",
+      "缺陷": "P1-12",
+      "场景": "英文时间词的词边界（\\b 在 order_date 被 _ 挡住）",
+      "判据": "英文走 lookaround 正则而非裸子串",
+      "反例": ["order_date 含 date", "update_time 含 time", "load_time 含 time"],
+      "expect": "仅当类型属时间白名单时才通过，不靠英文词单独放行"
+    },
+    {
+      "id": "CP-005",
+      "缺陷": "P1-13",
+      "场景": "time_field 不得跨表取错",
+      "判据": "time_field 先按相关表（chosen_table 优先，否则得分最高候选表）收缩；定不下则留空 + reason",
+      "expect": "NF5O 不得为 ads_coupon_order_di.stat_date；应为 ads_member_repurchase_di.stat_month 或留空+reason",
+      "基线": "该缺陷为既有缺陷（B2b 前后一致），须跑基线对照才可归属"
+    },
+    {
+      "id": "CP-006",
+      "缺陷": "P1-14",
+      "场景": "口径表达式词条必须有质量门槛",
+      "判据": "caliber_expression 优先级低于 enum（prio 数值 > 4）；短语 ≥3 字 + 套话黑名单",
+      "套话黑名单": ["表主键之一", "无其他取值", "联合唯一", "关联", "分析一律用此字段", "装载时间不建模", "无其他", "一律", "不建模", "便于", "冗余"],
+      "expect": "B 库 caliber_expression 词条数 14 → 1（仅「月粒度」）；套话清零"
+    },
+    {
+      "id": "CP-007",
+      "缺陷": "P1-14",
+      "场景": "枚举值不得被升格为字段候选",
+      "判据": "括号内斜杠取值清单（美妆/个护/食品/服饰/家居/数码）按 enum 入词表",
+      "expect": "问「美妆类目的销售额是多少」→ 美妆归 enum，hit_by 不得为 mdl_caliber_expression",
+      "正向不回退": "「月粒度」→ ads_member_repurchase_di.stat_month 仍须命中"
+    },
+    {
+      "id": "CP-008",
+      "缺陷": "P1-15",
+      "场景": "自动取证落库必须幂等",
+      "判据": "幂等键 = demand_id + stage + sha1(内容指纹)；record_citations() 契约一字未改（仍 6 入参）",
+      "expect": "打桩 knowledge.search 连跑 3 次，AUTO_INTERNAL 新增行数 ≤ 4（首次 4，后续 0）",
+      "基线": "改前每次 +4，线性膨胀"
+    },
+    {
+      "id": "CP-009",
+      "缺陷": "P-A",
+      "场景": "业务确认答复必须回填槽位",
+      "判据": "P2 证据项须带 slot；槽位空则用 answer 生成一条候选（conf 0.9）；已有候选不覆盖只记 note",
+      "expect": "答复 Q-TIME-1 并重跑 analysis_first_round 后 slots.time.candidates 非空且 R4 不再 blocking；不答复时行为不变"
+    },
+    {
+      "id": "CP-010",
+      "缺陷": "P-B",
+      "场景": "时间字段候选不得混入整型主键",
+      "判据": "候选必须通过类型守卫或列名本身命中时间词",
+      "expect": "SOO1/ZHAV 的 time_field 均为 ads_member_repurchase_di.stat_month，不得回退成 member_id"
+    }
+  ],
+  "stats": {"total": 10, "from_b2b": 4, "from_pa_pb": 2}
+}

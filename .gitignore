@@ -9,6 +9,16 @@ build/
 dist/
 *.egg-info/
 
+# ---- 前端依赖（B3 · 严禁入库，84MB）----
+# 只入库 package.json / package-lock.json 与源码；
+# 依赖用 `cd web && npm install` 重装，构建产物由 vite 重新生成。
+web/node_modules/
+node_modules/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+
 # ---- Python ----
 __pycache__/
 *.py[cod]
@@ -35,3 +45,21 @@ Thumbs.db
 # ---- 门禁报告（每次跑 tools/gate_all.py 重新生成）----
 gate-report.json
 gate-report.md
+
+# ---- 智能体运行时产物（每次跑都变，不入库）----
+# 入库的是「资产」：batches.json（唯一状态源）+ adversarial/*.json（对抗用例库）
+# 不入库的是「痕迹」：事件流与每次跑出来的证据，会无限增长
+agents/state/events.jsonl
+agents/state/findings/
+agents/state/gate_reports/
+agents/state/task_orders/
+# 状态机运行产物（batches.json 本身要入库，它是被维护的源码级资产）
+
+# ---- 本地 embedding 模型权重（B4b · 严禁入库）----
+# bge-m3 的 onnx 权重 2.27GB，仓库只保留拉取脚本与说明：
+#   .models/fetch_bge_m3.sh   拉取脚本
+#   .models/README.md         目录结构 / 为何固定 bge-m3 / 排障
+# 缺模型时执行 ./fetch_bge_m3.sh "$PWD/bge-m3" 重新拉取。
+.models/bge-m3/
+# 改库前的 mysqldump 备份（含连接配置，不入库）
+.models/backup/

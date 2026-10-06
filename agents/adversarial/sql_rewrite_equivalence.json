@@ -1,0 +1,288 @@
+{
+  "suite": "sql_rewrite_equivalence",
+  "purpose": "谓词下推类 SQL 静态重写的语义等价性判据。用例全部来自 B2a 系列五轮实测暴露的真实缺陷，首现缺陷编号为归属依据。",
+  "origin": "B2a → 补 → 补2 → 补3 → 补4（2026-10-02 ~ 2026-10-03），P1-11 四个口子在补4 收口",
+  "verify_method": "真实 PG 执行「原句 vs 产物」结果集对照；只读 CTE 构造 x/y 双源，不触碰任何业务表",
+  "fixture": {
+    "x": "CREATE TEMP TABLE x AS SELECT * FROM (VALUES (1,10),(2,20),(3,30),(4,40),(5,50),(6,60)) AS t(a,id)",
+    "y": "CREATE TEMP TABLE y AS SELECT * FROM (VALUES (1,100,5),(2,200,15),(3,300,25)) AS t(a,id,b)"
+  },
+  "cases": [
+    {
+      "id": "EQ-001",
+      "场景": "内层多源 JOIN 且两源同名列 → 剥前缀后列名歧义",
+      "sql": "SELECT t.a FROM (SELECT x.a FROM x JOIN y ON x.id=y.id) t WHERE t.a > 5",
+      "expect": "KEEP",
+      "expect_reason": "必须拒绝下推：产物会出现裸 a，内层多源同名 → column reference ambiguous",
+      "首现缺陷": "P1-11 第3口子（B2a-补3 助手自构造）",
+      "归属批次": "B2a-补3"
+    },
+    {
+      "id": "EQ-002",
+      "场景": "隐逗号多源 + 同名列",
+      "sql": "SELECT t.a FROM (SELECT x.a FROM x, y WHERE x.id=y.id) t WHERE t.a > 1",
+      "expect": "KEEP",
+      "expect_reason": "同 EQ-001，须拒绝下推",
+      "首现缺陷": "P1-11 第3口子",
+      "归属批次": "B2a-补3"
+    },
+    {
+      "id": "EQ-003",
+      "场景": "投影来自第二个源的多源 JOIN",
+      "sql": "SELECT t.a FROM (SELECT y.a FROM x JOIN y ON x.id=y.id) t WHERE t.a > 15",
+      "expect": "KEEP",
+      "expect_reason": "须拒绝下推",
+      "首现缺陷": "P1-11 第3口子",
+      "归属批次": "B2a-补3"
+    },
+    {
+      "id": "EQ-004",
+      "场景": "带别名的透传列（a AS b）",
+      "sql": "SELECT t.b FROM (SELECT a AS b FROM x) t WHERE t.b > 5",
+      "expect": "KEEP",
+      "expect_reason": "别名不是基列名，剥前缀后推入 b 在内层不存在",
+      "首现缺陷": "P1-11 第2口子（B2a-补2 助手自构造）",
+      "归属批次": "B2a-补2"
+    },
+    {
+      "id": "EQ-005",
+      "场景": "裸 OFFSET（sqlglot 归入 args[\"offset\"] 而非 args[\"limit\"]）",
+      "sql": "SELECT t.a FROM (SELECT a FROM x OFFSET 5) t WHERE t.a > 5",
+      "expect": "KEEP",
+      "expect_reason": "先偏移后滤 ≠ 先滤后偏移 → 静默错结果",
+      "首现缺陷": "P1-11 第2口子",
+      "归属批次": "B2a-补2"
+    },
+    {
+      "id": "EQ-006",
+      "场景": "ORDER BY + OFFSET 组合",
+      "sql": "SELECT t.a FROM (SELECT a FROM x ORDER BY a OFFSET 3) t WHERE t.a > 5",
+      "expect": "KEEP",
+      "expect_reason": "同 EQ-005",
+      "首现缺陷": "P1-11 第3口子",
+      "归属批次": "B2a-补3"
+    },
+    {
+      "id": "EQ-007",
+      "场景": "内层 LIMIT + 外层过滤",
+      "sql": "SELECT t.a FROM (SELECT a FROM x LIMIT 3) t WHERE t.a > 1",
+      "expect": "KEEP",
+      "expect_reason": "LIMIT 后过滤改变行数",
+      "首现缺陷": "P1-11 第1口子（B2a-补 引入后暴露）",
+      "归属批次": "B2a-补"
+    },
+    {
+      "id": "EQ-008",
+      "场景": "内层 FETCH FIRST n ROWS ONLY（sqlglot 归入 args[\"limit\"] 为 Fetch）",
+      "sql": "SELECT t.a FROM (SELECT a FROM x FETCH FIRST 3 ROWS ONLY) t WHERE t.a > 1",
+      "expect": "KEEP",
+      "expect_reason": "同 EQ-007",
+      "首现缺陷": "P1-11 第1口子",
+      "归属批次": "B2a-补"
+    },
+    {
+      "id": "EQ-009",
+      "场景": "聚合别名 count(*) AS c",
+      "sql": "SELECT t.c FROM (SELECT count(*) AS c FROM x) t WHERE t.c > 1",
+      "expect": "KEEP",
+      "expect_reason": "聚合别名不是基列",
+      "首现缺陷": "P1-11 第1口子",
+      "归属批次": "B2a-补"
+    },
+    {
+      "id": "EQ-010",
+      "场景": "表达式别名 a+1 AS d",
+      "sql": "SELECT t.d FROM (SELECT a+1 AS d FROM x) t WHERE t.d > 3",
+      "expect": "KEEP",
+      "expect_reason": "表达式别名不是基列",
+      "首现缺陷": "P1-11 第1口子",
+      "归属批次": "B2a-补"
+    },
+    {
+      "id": "EQ-011",
+      "场景": "窗口函数列 ROW_NUMBER() AS r",
+      "sql": "SELECT t.r FROM (SELECT a, ROW_NUMBER() OVER (ORDER BY a) AS r FROM x) t WHERE t.r > 1",
+      "expect": "KEEP",
+      "expect_reason": "排名在过滤前后语义不同",
+      "首现缺陷": "P1-11 第1口子",
+      "归属批次": "B2a-补"
+    },
+    {
+      "id": "EQ-012",
+      "场景": "跨表 JOIN 列被外层过滤引用",
+      "sql": "SELECT t.a FROM (SELECT x.a FROM x JOIN y ON x.id=y.id) t JOIN y ON t.a=y.a WHERE y.b > 10",
+      "expect": "KEEP",
+      "expect_reason": "引用到外层另一源，内层不可见",
+      "首现缺陷": "P1-9（B2a 补）",
+      "归属批次": "B2a-补"
+    },
+    {
+      "id": "EQ-013",
+      "场景": "内层 SELECT *",
+      "sql": "SELECT t.a FROM (SELECT * FROM x) t WHERE t.a > 5",
+      "expect": "KEEP",
+      "expect_reason": "无具体列名集合，保守拒绝",
+      "首现缺陷": "P1-9",
+      "归属批次": "B2a-补"
+    },
+    {
+      "id": "EQ-014",
+      "场景": "内层 UNION",
+      "sql": "SELECT t.a FROM (SELECT a FROM x UNION SELECT a FROM y) t WHERE t.a > 5",
+      "expect": "KEEP",
+      "expect_reason": "保守拒绝",
+      "首现缺陷": "P1-9",
+      "归属批次": "B2a-补"
+    },
+    {
+      "id": "EQ-015",
+      "场景": "WHERE 含他表子查询",
+      "sql": "SELECT t.a FROM (SELECT a FROM x) t WHERE t.a IN (SELECT id FROM y)",
+      "expect": "KEEP",
+      "expect_reason": "引用到 y，内层无此源",
+      "首现缺陷": "B2a-补4 回归确认",
+      "归属批次": "B2a-补4"
+    },
+    {
+      "id": "EQ-016",
+      "场景": "内层 DISTINCT + LIMIT 组合",
+      "sql": "SELECT t.a FROM (SELECT DISTINCT a FROM x LIMIT 3) t WHERE t.a > 1",
+      "expect": "KEEP",
+      "expect_reason": "两者各自都足以改变语义",
+      "首现缺陷": "B2a-补4 回归确认",
+      "归属批次": "B2a-补4"
+    },
+    {
+      "id": "EQ-P01",
+      "场景": "裸透传列（无表前缀）",
+      "sql": "SELECT a FROM (SELECT a FROM x) t WHERE a > 5",
+      "expect": "PUSH",
+      "expect_reason": "安全：唯一源、基列、无 LIMIT/OFFSET/窗口",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 正例"
+    },
+    {
+      "id": "EQ-P02",
+      "场景": "带前缀透传列",
+      "sql": "SELECT t.a FROM (SELECT a FROM x) t WHERE t.a > 5",
+      "expect": "PUSH",
+      "expect_reason": "安全",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 正例"
+    },
+    {
+      "id": "EQ-P03",
+      "场景": "子查询别名与内层表同名",
+      "sql": "SELECT x.a FROM (SELECT a FROM x) x WHERE x.a > 5",
+      "expect": "PUSH",
+      "expect_reason": "剥前缀后 a 归属唯一源，安全",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 正例"
+    },
+    {
+      "id": "EQ-P04",
+      "场景": "内层投影自带限定符",
+      "sql": "SELECT t.a FROM (SELECT x.a FROM x) t WHERE t.a > 5",
+      "expect": "PUSH",
+      "expect_reason": "代入内层投影表达式本身后限定符保留",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 正例"
+    },
+    {
+      "id": "EQ-P05",
+      "场景": "内层已有 WHERE，与外层用 AND 合并",
+      "sql": "SELECT t.a FROM (SELECT a FROM x WHERE a < 100) t WHERE t.a > 5",
+      "expect": "PUSH",
+      "expect_reason": "AND 合并，等价",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 回归"
+    },
+    {
+      "id": "EQ-P06",
+      "场景": "GROUP BY + HAVING，过滤的是组键",
+      "sql": "SELECT t.a FROM (SELECT a, count(*) AS c FROM x GROUP BY a HAVING count(*) >= 1) t WHERE t.a > 1",
+      "expect": "PUSH",
+      "expect_reason": "过滤组键先于分组不影响结果集",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 回归"
+    },
+    {
+      "id": "EQ-P07",
+      "场景": "内层 DISTINCT（无 LIMIT）",
+      "sql": "SELECT DISTINCT t.a FROM (SELECT a FROM x) t WHERE t.a > 1",
+      "expect": "PUSH",
+      "expect_reason": "先滤后去重等价",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 回归"
+    },
+    {
+      "id": "EQ-P08",
+      "场景": "OR 条件（外层多条件）",
+      "sql": "SELECT t.a FROM (SELECT a FROM x) t WHERE t.a < 2 OR t.a > 3",
+      "expect": "PUSH",
+      "expect_reason": "sqlglot 会自动补括号，等价",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 回归"
+    },
+    {
+      "id": "EQ-P09",
+      "场景": "列在表达式/函数/IN 中",
+      "sql": "SELECT t.a FROM (SELECT a FROM x) t WHERE abs(t.a) > 2",
+      "expect": "PUSH",
+      "expect_reason": "每次引用独立 fresh copy，等价",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 回归"
+    },
+    {
+      "id": "EQ-P10",
+      "场景": "同列多次引用",
+      "sql": "SELECT t.a FROM (SELECT a FROM x) t WHERE t.a > 1 AND t.a < 4",
+      "expect": "PUSH",
+      "expect_reason": "两处引用各自替换，等价",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 回归"
+    },
+    {
+      "id": "EQ-P11",
+      "场景": "三层嵌套（唯一源 q）",
+      "sql": "SELECT t.a FROM (SELECT q.a FROM (SELECT a FROM x) q) t WHERE t.a > 5",
+      "expect": "PUSH",
+      "expect_reason": "q 是唯一源，无歧义",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 回归"
+    },
+    {
+      "id": "EQ-P12",
+      "场景": "内层含 CTE",
+      "sql": "SELECT t.a FROM (WITH q AS (SELECT a FROM x) SELECT a FROM q) t WHERE t.a > 5",
+      "expect": "PUSH",
+      "expect_reason": "作用域正确",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 回归"
+    },
+    {
+      "id": "EQ-P13",
+      "场景": "恒真条件",
+      "sql": "SELECT t.a FROM (SELECT a FROM x) t WHERE 1=1",
+      "expect": "PUSH",
+      "expect_reason": "无害",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 回归"
+    },
+    {
+      "id": "EQ-P14",
+      "场景": "外层带 COUNT(*) 装饰",
+      "sql": "SELECT count(*) FROM (SELECT a FROM x) t WHERE t.a > 5",
+      "expect": "PUSH",
+      "expect_reason": "外层装饰不影响下推等价性",
+      "首现缺陷": null,
+      "归属批次": "B2a-补4 回归"
+    }
+  ],
+  "reserved_branches": [
+    {"id": "RB-001", "场景": "SELECT DISTINCT * FROM (… GROUP BY a,b) x", "expect": "触发 distinct_after_groupby_removed"},
+    {"id": "RB-002", "场景": "坏 SQL", "expect": "{error:{type:ParseError, message, stage:\"parse\"}}"},
+    {"id": "RB-003", "场景": "空串", "expect": "{error:{type:ValueError, message:\"SQL 为空\"}}"}
+  ],
+  "stats": {"total": 29, "keep": 16, "push": 14, "reserved": 3}
+}

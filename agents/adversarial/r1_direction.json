@@ -1,0 +1,25 @@
+{
+  "suite": "r1_one_to_many_direction",
+  "purpose": "R1 ONE_TO_MANY_UNHANDLED 方向判据的真阳性/真阴性双向判据。B2c 修 P1-8 后由助手独立构造 11 例（其中 T6 混合聚合、S2/S3 多聚合均为交付方用例未覆盖的新维度）。",
+  "origin": "B2c（2026-10-06），P1-8 修复后独立复核",
+  "verify_method": "sqlglot 解析 + rules.evaluate_all（A 库 MDL 索引），断言 R1 命中数",
+  "cases": [
+    {"id": "R1-T1", "类型": "真阳性", "sql": "SELECT o.customer_id, SUM(o.total_amount) FROM orders o JOIN order_items oi ON oi.order_id=o.id GROUP BY o.customer_id", "expect_min_hits": 1, "理由": "聚合直接引用「一端 orders」的列 → 真放大，不许放宽", "覆盖来源": "原 P1-8 正例"},
+    {"id": "R1-T2", "类型": "真阳性", "sql": "SELECT o.customer_id, COUNT(*) FROM orders o JOIN order_items oi ON oi.order_id=o.id GROUP BY o.customer_id", "expect_min_hits": 1, "理由": "COUNT(*) 无法证明安全 → 保守触发", "覆盖来源": "原 P1-8 正例"},
+    {"id": "R1-T3", "类型": "真阳性", "sql": "SELECT p.name, SUM(p.list_price) FROM orders o JOIN order_items oi ON oi.order_id=o.id JOIN products p ON p.id=oi.product_id GROUP BY p.name", "expect_min_hits": 1, "理由": "聚合引用两端之外的第三表列 → 保守触发", "覆盖来源": "原 P1-8 正例"},
+    {"id": "R1-T4", "类型": "真阳性", "sql": "SELECT o.customer_id, MIN(o.total_amount) FROM orders o JOIN order_items oi ON oi.order_id=o.id GROUP BY o.customer_id", "expect_min_hits": 1, "理由": "MIN/MAX 与 SUM 同属 AggFunc，必须一并判定（交付方用例未覆盖非 SUM 聚合）", "覆盖来源": "★ 本次新维度"},
+    {"id": "R1-T5", "类型": "真阳性", "sql": "SELECT o.customer_id, SUM(subtotal) FROM orders o JOIN order_items oi ON oi.order_id=o.id GROUP BY o.customer_id", "expect_min_hits": 1, "理由": "聚合列无限定符 → 归属不可解析 → 保守触发", "覆盖来源": "原 P1-8 正例"},
+    {"id": "R1-T6", "类型": "真阳性", "sql": "SELECT o.customer_id, SUM(o.total_amount), SUM(oi.subtotal) FROM orders o JOIN order_items oi ON oi.order_id=o.id GROUP BY o.customer_id", "expect_min_hits": 1, "理由": "★ 关键边界：同时聚合两端，只要含一端列就必须触发——防止「只聚合多端列」的放行逻辑被扩大适用。这是本次修复最可能被写错的地方。", "覆盖来源": "★ 本次新维度（最关键）"},
+    {"id": "R1-S1", "类型": "真阴性", "sql": "SELECT o.customer_id, SUM(oi.subtotal) FROM orders o JOIN order_items oi ON oi.order_id=o.id GROUP BY o.customer_id", "expect_min_hits": 0, "理由": "只聚合多端列 → 不放大（原误报源）", "覆盖来源": "原 P1-8 缺陷用例"},
+    {"id": "R1-S2", "类型": "真阴性", "sql": "SELECT o.customer_id, COUNT(oi.product_id) FROM orders o JOIN order_items oi ON oi.order_id=o.id GROUP BY o.customer_id", "expect_min_hits": 0, "理由": "★ COUNT(具体多端列) 不等于 COUNT(*)，不应触发——验证门槛对「星号」与「具体列」区分正确", "覆盖来源": "★ 本次新维度"},
+    {"id": "R1-S3", "类型": "真阴性", "sql": "SELECT o.customer_id, SUM(oi.subtotal), MAX(oi.quantity) FROM orders o JOIN order_items oi ON oi.order_id=o.id GROUP BY o.customer_id", "expect_min_hits": 0, "理由": "★ 多个聚合全部归属多端 → 仍不触发（验证不是只判第一个聚合）", "覆盖来源": "★ 本次新维度"},
+    {"id": "R1-S4", "类型": "真阴性", "sql": "SELECT o.customer_id, AVG(oi.subtotal) FROM orders o JOIN order_items oi ON oi.order_id=o.id GROUP BY o.customer_id", "expect_min_hits": 0, "理由": "★ AVG 同样属 AggFunc，归属全在多端 → 放行", "覆盖来源": "★ 本次新维度"},
+    {"id": "R1-S5", "类型": "真阴性", "sql": "SELECT o.customer_id, oi.subtotal FROM orders o JOIN order_items oi ON oi.order_id=o.id GROUP BY o.customer_id, oi.subtotal", "expect_min_hits": 0, "理由": "★ 无聚合 → 无从判断放大，应不触发（验证不会因方向条件成立就空报）", "覆盖来源": "★ 本次新维度"}
+  ],
+  "不变式": [
+    "REGISTRY 条数恒为 11，id/name 不变，severity 恒全 warning",
+    "blocking 标记不变（本批只让误报不产生条目，不改标记）",
+    "梯次(2) BFS 连通性判定不受本批影响"
+  ],
+  "stats": {"total": 11, "真阳性": 6, "真阴性": 5, "本次新维度": 6}
+}

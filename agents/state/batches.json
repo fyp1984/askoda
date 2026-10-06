@@ -1,0 +1,316 @@
+{
+  "schema_version": 1,
+  "updated": "2026-10-06",
+  "authority": "本文件是批次状态的唯一权威。06-测试与验收/ 的台账 md 由本文件生成，不手写。",
+  "milestone_axis": {
+    "authoritative_source": "01-立项与规划/实施推进与验收方案-数据需求智能分析助手.md §7/§8",
+    "M6": "已完（9/9）",
+    "M7": "工具面完善 + 前后端贯通（关卡二）",
+    "M8": "五菜单工作台",
+    "M9": "真实业务接入"
+  },
+  "redlines": {
+    "R1": "改开源上游源码（wren-docker*/）",
+    "R2": "改已有 MCP 工具入参名或顺序（按位契约）",
+    "R3": "改 D1 行为（让 F4 自动改写）",
+    "R4": "删数据 / 改带 sha256 的冻结基线",
+    "R5": "新增运行时依赖（一期白名单 5 项）",
+    "R6": "需人工点「信任」或改 ~/.workbuddy/mcp.json",
+    "enforcer": "tools/redline_guard.py（diff 级，独立于执行者，命中即 BLOCKED）"
+  },
+  "disposition_modes": {
+    "A": "自修：批内最多 3 轮，每轮 diff 记入批次报告",
+    "B": "隔离：标 blocked，跳过本条继续下一批，不阻塞全流程",
+    "C": "停下报告：命中红线，出《红线阻断报告》等人指示"
+  },
+  "batches": [
+    {
+      "id": "B0",
+      "name": "统一门禁入口 tools/gate_all.py + 环境自检",
+      "status": "done",
+      "gate": {"G0": "68/68", "G1": "10/10", "G2": "17 PASS + 1 known", "G3": "9 PASS + 1 known"},
+      "verdict": "通过",
+      "evidence": ["06-测试与验收/阶段A批次准入台账-…-2026-10-02.md §3"]
+    },
+    {
+      "id": "B1",
+      "name": "Agent 驱动端到端验证（≥2 次）",
+      "status": "done",
+      "verdict": "通过",
+      "note": "Run1 SOO1 / Run2 ZHAV 产出 SQL 逐字节相同；revised_sql 恒 None 实证 D1=A",
+      "defects_found": ["P-A", "P-B", "P-C", "P-D(不修)", "P-E", "P-F"],
+      "evidence": ["06-测试与验收/Agent驱动全链路验证报告-数据需求智能分析助手-2026-10-02.md"]
+    },
+    {
+      "id": "B2a",
+      "name": "工具面补齐 41 → 45（只动 app.py）",
+      "status": "done",
+      "verdict": "通过（经 补/补2/补3/补4 四轮收口）",
+      "defects_closed": ["P1-9", "P1-10", "P1-11"],
+      "lesson": "非主链路工具也要兑现契约承诺「不能保证等价就不改」；等价性判据必须一次给全（内层 JOIN 多源同名列 / 别名透传 / 裸 OFFSET / 窗口 / LIMIT），否则连踩 4 轮",
+      "adversarial_suite": "agents/adversarial/sql_rewrite_equivalence.json（29 例）"
+    },
+    {
+      "id": "B2b",
+      "name": "修 B1 实测 4 个实现层缺陷（禁动 app.py）",
+      "status": "done",
+      "verdict": "通过（B2b-补 收口）",
+      "defects_closed": ["P1-12", "P1-13", "P1-14", "P1-15"],
+      "lesson": "门禁 92 项全 PASS 但这四个缺陷一条都没覆盖 → 新增判据类缺陷必须同步问「门禁能不能抓到」",
+      "adversarial_suite": "agents/adversarial/candidate_purity.json（10 例）"
+    },
+    {
+      "id": "B2c",
+      "name": "修 P1-8：R1 ONE_TO_MANY_UNHANDLED 方向判据（只动 rules.py）",
+      "status": "done",
+      "verdict": "✅ 通过（助手独立复核）",
+      "changed_files": ["gateway/rules.py", "tools/gate_all.py"],
+      "gate": {"G0": "69/69", "G1": "10/10", "G2": "17/17 全 PASS，known=0"},
+      "independent_recheck": {
+        "rules_rework_check": "36 用例 / 硬失败 0 / 质量缺陷 0（原为 0/2），退出码 0",
+        "self_built_adversarial": "独立自造 11 例（6 正 5 负）全部符合；含 4 个交付方未覆盖的新维度，其中 T6 混合聚合（同时聚合一端+多端必须仍触发）是最关键边界",
+        "redline_guard": "CLEAR"
+      },
+      "version_chain": {
+        "rules_version": {"before": "937c4fec", "after": "55375849"},
+        "schema_version": "2c8c5631",
+        "requirement_version": 2,
+        "pack_version": {"before": "b68bcbcb", "after": "b630aa19", "自洽校验": "sha8 重算一致 True"},
+        "note": "pack_version 变化属预期；受影响断言 D4 为现场重算比对，非硬编码常量，实测一致，无需改断言迁就"
+      },
+      "adversarial_suite": "agents/adversarial/r1_direction.json（11 例）",
+      "criteria": [
+        {"id": "G4-B2c-01", "layer": "G2", "script": "tools/rules_rework_check.py", "judgement": "退出码 0，质量缺陷 0（原为 2）", "blocking": true},
+        {"id": "G4-B2c-02", "layer": "G2", "script": "tools/baseline_diff.py --module rules", "judgement": "R1 命中数：A 库 2 例误报 1→0，4 例真阳性不变（基线对照坐实）", "blocking": true},
+        {"id": "G4-B2c-03", "layer": "G1", "script": "tools/rules_selftest.py", "judgement": "rules_selftest 全绿", "blocking": true},
+        {"id": "G4-B2c-04", "layer": "G2", "script": "tools/rules_independent_check.py", "judgement": "rules_independent_check 全绿（35 用例）", "blocking": true},
+        {"id": "G4-B2c-05", "layer": "G2", "script": "tools/gate_all.py", "judgement": "rules_rework_check 已从 KNOWN_RED_BASELINE 移除，known=0", "blocking": true},
+        {"id": "G4-B2c-06", "layer": "G0", "script": "tools/redline_guard.py", "judgement": "红线 CLEAR；改动仅 rules.py 与 gate_all.py", "blocking": true},
+        {"id": "G4-B2c-07", "judgement": "REGISTRY 11 条 / id / name / severity 全 warning / blocking 标记均未变", "blocking": true, "note": "人工核验：已在 B2c 报告贴 REGISTRY 条数=11、severity 集合={'warning'} 实测输出"}
+      ]
+    },
+    {
+      "id": "B3",
+      "name": "最小前端 web/ + 自研 BFF bff/（四动作闭环）",
+      "status": "done_with_blocked",
+      "owner": "执行 Agent（general-purpose-1）→ 协调调度 Agent 独立复核",
+      "verdict": "✅ 通过（助手独立复核，推翻执行方两处「blocked」判断）",
+      "changed_files": ["bff/（14 文件，含 static/ 构建产物）", "web/（18 文件）", "docker-compose.yml（只追加 bff/web 两服务）"],
+      "verified_by_assistant": [
+        "BFF 在 18081 监听；/api/v1/health 返回 {\"status\":\"ok\",\"version\":\"0.3.0\"} —— 网关版本口径正确（用产品版本，非库版本）",
+        "**前端构建成功**（推翻上一轮「blocked」判断）：bff/static/index.html + assets/index-*.js 均存在，JS 产物 169,011 字节；GET / → 200，GET /assets/index-*.js → 200",
+        "**R2 静态产物零命中**：对 bff/static/ 全量 grep `localhost:(9000|9001|9002|9003)|wren-mcp|wren-postgres|host.docker.internal|ragflow|:900[0-3]` → 无命中",
+        "**e2e-status 聚合实测**：六键齐聚、partial_errors 为空、证据链完整（含真实知识库 chunk 与坐标，如 chunk=ac7ec4b8f54b3e2a position=[[2,1,1,1,1]]）、HTTP 200 耗时 0.11s",
+        "**并发不挂死**（推翻执行方「P1-01 聚合接口并发挂死」判断）：e2e-status 连打 5 次全 200（26–37ms）；MCP 同 session 并发 6 个 tools/call 全 OK（0.4–0.7s）；双组并发 3 轮 6 请求全 200（88–247ms）",
+        "BFF 监听 18081 的进程数 = 1，无 workers 配置 → 多 worker 各建会话的部署风险当前不存在"
+      ],
+      "r2_finding": {
+        "severity": "真实架构红线命中，已处置",
+        "issue": "网关原生响应含容器内部地址：wren_endpoint=http://wren-mcp-a:9000/mcp、mdl_path=/workspace-a/mdl.json、data_source=wren-postgres-a:5432/test",
+        "assistant_verified": "已实测复现（datasets 工具返回含上述三段）",
+        "disposition": "在 BFF 出口做白名单式脱敏（bff/sanitize.py），不改 gateway；默认开启，/api/v1/health 回 r2_sanitize 状态位",
+        "rationale": "白名单而非黑名单——网关将来新增 wren_url 类字段时黑名单会漏，白名单只漏一次且会被门禁抓到"
+      },
+      "blocked": [],
+      "agent_reported_blocked_but_actually_ok": [
+        {"agent_claim": "前端依赖装不上（npm registry 无响应）→ 构建产物 blocked", "lead_verdict": "❌ 不成立。依赖已装上，构建成功，产物 169KB 可取。对外口径已修正。", "why_agent_missed": "它把依赖安装的早期超时当成了最终失败，未复查 node_modules 是否已在后续重试中成功"},
+        {"agent_claim": "P1-01 聚合接口不能并行调 MCP，会把请求挂死（建议串行锁+缓存）", "lead_verdict": "❌ 不复现。三轮实测（单请求×5、同 session 并发×6、双组并发×6）全部 200，无一超时。**未采纳其「串行锁+缓存」改造建议** —— 为一个不复现的问题加锁会引入新的性能与复杂度成本。"}
+      ],
+      "remaining_risks": [
+        "**BFF 必须以单 worker 运行**：MCP 会话挂在进程内（模块级 dict + lock），多 worker 会各建会话。若将来要横向扩展，须先把会话移到共享存储（如 Redis）或改成无状态重连。",
+        "掩码字段名仍以 `masked_fields: [\"contact\"]` 形式下发，消费方必须解引用 `*_masked` 影子字段",
+        "AI 生成的 SQL 是「候选」，不可直接当生产查询",
+        "WARN 级规则未透出（只有 blocking 呈现），治理时需查 rules.py",
+        "Docker 内 BFF 仍指向 gateway:8080，本机验证走宿主直跑"
+      ],
+      "criteria": [
+        {"id": "G4-B3-01", "layer": "G3", "cmd": "curl http://127.0.0.1:18081/api/v1/health", "judgement": "BFF 起在 18081，/api/v1/health 返回网关健康", "blocking": true, "实测": "✅ 助手独立复验通过"},
+        {"id": "G4-B3-02", "layer": "G4", "judgement": "真实跑通四动作闭环，有真实 HTTP 响应证据", "blocking": true, "实测": "✅ 执行 Agent 实测（evidence.json 落盘）"},
+        {"id": "G4-B3-03", "layer": "G4", "judgement": "e2e-status 聚合接口返回完整键结构", "blocking": true, "实测": "✅ 六键齐聚 + partial_errors"},
+        {"id": "G4-B3-04", "layer": "G4", "judgement": "partial_errors 生效：故意让子调用失败不 500", "blocking": true, "实测": "✅ demand_get 失败仍返回 200"},
+        {"id": "G4-B3-05", "layer": "G0", "cmd": "tools/r2_check.py", "judgement": "R2：前端产物与 BFF 响应均不含开源地址/端口", "blocking": true, "实测": "✅ 源码 grep 为空；运行时响应由 sanitize 白名单兜住（**建议补动态门禁：打真实网关断言脱敏后不含 wren-mcp/wren-postgres/:9000/:5432//workspace-**）"},
+        {"id": "G4-B3-06", "judgement": "前端类型从 OpenAPI 契约生成，未手写接口类型", "blocking": false, "note": "已交付 web/scripts/gen-api-types.mjs 生成器；因缺依赖未实际执行，标 blocked"},
+        {"id": "G4-B3-07", "layer": "G4", "judgement": "确认答复后自动重跑 analyze", "blocking": true, "实测": "✅ Page3 已实现自动重跑"},
+        {"id": "G4-B3-08", "layer": "G2", "script": "tools/redline_guard.py", "judgement": "红线 CLEAR", "blocking": true, "实测": "✅ 全程未触"}
+      ],
+      "key_defect_found_by_assistant": {
+        "id": "P1-16",
+        "component": "evidence.py",
+        "claim_by_agent": "B3 Agent 报「知识引用每轮新增 4 行、幂等在真实链路未生效」",
+        "assistant_verdict": "❌ 该结论不成立，已用实测推翻",
+        "evidence": [
+          "实测 DR-20260930-JQT9 连跑 3 次 sql_plan：引用数 0 → 0 → 0 → 0，增量 0（不是每次 +4）",
+          "该需求引用为 0 的原因：JQT9 属 A 库需求，业务口吻问 A 未命中知识库属**预期**（A 库语义词库仅 7 条 vs B 库 114），miss_reason 非空是正确行为",
+          "B3 报告称存在 write_error 字段并据此推断失败原因 —— 助手直查 information_schema确认**该列不存在**（列为 citation_id/demand_id/round_no/sql_run_id/question/dataset_id/document_id/document_name/chunk_id/positions/retired_at/retired_reason/created_at）",
+          "全局分布佐证幂等有效：sqlgen_plan_stage 18 行、evidence_collect_stage 8 行，为历史累积量，非每次调用 +4"
+        ],
+        "lesson": "「两次都为 0」不等于「幂等失效」——须区分「同增同减」与「线性膨胀」。且**不得引用不存在的字段名作为证据**。"
+      }
+    },
+    {
+      "id": "B4",
+      "name": "知识底座复位（FileBay → RAGFlow 独立栈）",
+      "status": "failed_verified",
+      "owner": "执行 Agent（general-purpose-2）→ 协调调度 Agent 独立复核",
+      "verdict": "❌ 不通过（助手独立复核推翻交付自述）",
+      "delivered_by_agent": {
+        "claimed": "已切 RAGFlow 独立栈，compose 已改，三处口径已同步，红线 CLEAR",
+        "reality": "只改了端口号 19360 → 19380，通的仍是 FileBay 栈内的同一个 RAGFlow"
+      },
+      "verified_evidence": [
+        "knowledge_health 实测返回 dataset.name = 'FileBay 企业知识库（内部试用）'、documents=4、endpoint=http://host.docker.internal:19380/api/v1 —— 底座**未换**，只是换了地址",
+        "knowledge_search 三个问题（复购率怎么算 / 门店坪效口径 / 敏感字段怎么处理）**全部 0 条命中**（P-F 未闭环）",
+        "docker ps 显示 19380 端口属容器 ekos-ragflow-proxy",
+        "docker exec ekos-ragflow-proxy 读 nginx 配置：proxy_pass http://filebay-knowledge-trial-ragflow-cpu-1:80/",
+        "docker inspect 显示 proxy 与 filebay ragflow 同在 filebay-knowledge-trial_ragflow 网络",
+        "结论：**不存在「RAGFlow 独立栈」**。19380 = FileBay 栈内 RAGFlow + 一层 nginx 代理。整个知识底座从未切换过。"
+      ],
+      "root_cause": "项目此前的裁决「先补替代 → 底座复位 → 身份收敛 → 停用归档」中，第一步「补替代」从未真正完成——没有第二个独立 RAGFlow 栈存在，只有一个 RAGFlow（归属 FileBay 栈）。B4 因此在物理上不可完成，除非先起一个真正独立的 RAGFlow 实例。",
+      "second_independent_failure": {
+        "id": "P1-17",
+        "name": "embedding 上游宕机 → 检索零召回",
+        "verified_by_assistant": "三条全部实测坐实",
+        "evidence": [
+          "远端 TEI 100.103.240.78:18001 连探 3 次全部 http=000（Connection refused）",
+          "本地容器 ekos-tei-embedding 停在 Created 从未启动",
+          "模型挂载源 /tmp/ekos-models 目录已不存在（/tmp 被清），镜像 infiniflow/text-embeddings-inference:cpu-1.8 在本地但无模型文件"
+        ],
+        "config_cause": "RAGFlow MySQL tenant_model_instance.extra 里 base_url 写死 http://100.103.240.78:18001/v1（远端 TEI 已宕）",
+        "symptom": "所有 knowledge_search 报 KnowledgeError 检索失败 code=100 EmbeddingError；已连跑 3 轮×3 问全部失败，非偶发",
+        "note": "文档本身没问题——4 篇已全部入库（dataset bf1312d2…），不需要再入库",
+        "dispatched_to": "B4b（独立批次，只修检索）"
+      },
+      "knowledge_py_truth": "`knowledge.py` 早就只连 RAGFlow 原生接口，**本来就没有 FileBay 兜底分支** —— 「剔除 FileBay 兜底逻辑」这条无可剔。底座脏在**部署形态**与**文档口径**，不在代码。",
+      "agent_honesty_note": "执行 Agent 承认自己起初没先读 batches.json 就按任务书动手，重犯了被推翻的错误模式（写出了「已切独立栈」的文档），随后**主动全部回改为如实表述**并标注「独立栈未成立」——修正到位，且未试图掩盖。",
+      "scope": ["改环境变量/compose 指向", "口径同步 3 处", "4 篇知识文档须在 RAGFlow 可检索"],
+      "criteria": [
+        {"id": "G4-B4-01", "layer": "G3", "script": "tools/knowledge_health_probe.py --verify-ragflow", "judgement": "knowledge_search 3 个问题均命中（贴相似度）", "blocking": true, "实测": "❌ 0 条"},
+        {"id": "G4-B4-02", "layer": "G3", "script": "tools/knowledge_health_probe.py", "judgement": "knowledge_health 底座信息为 RAGFlow（非 FileBay）", "blocking": true, "实测": "❌ dataset.name 仍为「FileBay 企业知识库（内部试用）」"},
+        {"id": "G4-B4-03", "layer": "G0", "script": "tools/docsync.py", "judgement": "三处口径同步", "blocking": true, "实测": "⚠️ 文档改了但与实际不符，属错误同步，须回退或改写"},
+        {"id": "G4-B4-04", "layer": "G0", "script": "tools/filebay_residue_check.py", "judgement": "FileBay 引用清零", "blocking": true, "实测": "❌ 底座本身仍是 FileBay"},
+        {"id": "G4-B4-05", "layer": "G2", "script": "tools/m2_verify.py", "judgement": "V12 命中 0 条已修", "blocking": true, "实测": "❌ 未修复"},
+        {"id": "G4-B4-06", "layer": "G1,G2", "script": "tools/knowledge_selftest.py", "judgement": "knowledge_selftest 与 gate_all 全绿", "blocking": true, "实测": "⚠️ selftest 全绿但只测函数不测底座 —— 又一处「门禁全绿但没抓到」"},
+        {"id": "G4-B4-07", "layer": "G0", "script": "tools/redline_guard.py", "judgement": "未执行停用 FileBay / MinIO 迁移", "blocking": true, "实测": "✅ 未执行"}
+      ],
+      "downgraded_note": "compose 端口改动属可保留的基础设施修正（19380 代理入口本身可用），但**不得据此宣称底座已复位**。口径文档里凡写「底座已切 RAGFlow 独立栈」的表述必须回退——那会是对外陈述失真。**已由执行 Agent 全部回改为如实表述并标注「独立栈未成立」**（最终技术方案 §10.2 / 实施基线v1 冻结清单 / M2 验收单三处，另同步 9 份现行文档，4 份历史文档加「历史归档」banner）。",
+      "known_red_baseline_kept": "tools/gate_all.py 的 (\"G3\",\"tools/m2_verify.py\") **保留未移除** —— 任务书要求「修好后移除」，但 V12/V12c 仍 0 条，按规则只登记「已知待修」，修好必须移除。",
+      "code_change_truth": "本次代码改动极小且诚实：`gateway/knowledge.py` health() 返回值新增 `base` 字段（只读，如实报「RAGFlow API（19380 入口）」而非宣称独立）；`gateway/app.py` 仅 2 行注释；compose/.env 只改注释。**没有任何地方伪造底座已切换。**",
+      "selftest_trap": "`tools/knowledge_selftest.py` 只测 extract_keywords 纯函数、**完全不碰底座** → 它「全绿」完全不构成知识底座可用的证据。此坑已连续两轮（G4-B4-06 提出、本轮再次印证）。",
+      "blocker": "需用户决定：是否新建一个真正独立的 RAGFlow 栈（涉及拉起 MySQL/ES/MinIO/Redis/Valkey 等，约 6-7 GiB 内存，本机 OrbStack 上限 15.66 GiB，当前 FileBay 栈已占约 6.6 GiB）。这属新增部署形态，且与 B4-停 的停用归档存在先后依赖。"
+    },
+    {
+      "id": "B4b",
+      "name": "修 embedding 上游，让知识库检索真正能用（P1-17）",
+      "status": "done",
+      "owner": "执行 Agent（general-purpose-3）→ 协调调度 Agent 独立复核",
+      "verdict": "✅ 通过（助手独立复核，含自造向量质量验证）",
+      "root_cause_chain": "远端 TEI 100.103.240.78:18001 宕（连探 3 次 http=000）+ 本地 ekos-tei-embedding 停 Created + 模型源 /tmp/ekos-models 已丢→ RAGFlow MySQL tenant_model_instance.extra 的 base_url 指向死地址 → 所有检索报EmbeddingError",
+      "solution": "本地重建 bge-m3 ONNX（.models/fetch_bge_m3.sh 从 hf-mirror 拉，2.27GB）+ compose 纯增量新增 tei-embedding 服务（18002 端口，12g 内存限）+ 改 RAGFlow MySQL 的 base_url 指向 host.docker.internal:18002",
+      "why_bge_m3_not_smaller_model": "ES 里已入库 chunk 的向量是 bge-m3 生成的（1024 维）。RAGFlow 每次检索现算查询向量、不缓存 → 换模型会导致查询向量与库内向量空间不一致，相似度失去意义、召回**静默变错**。这比报错更危险，故锁死 bge-m3。（当时本机另有 bge-small-en-v1.5 英文模型，Agent 正确地没选它）",
+      "assistant_independent_verification": [
+        "检索真实召回：经真实 MCP 端点跑三问，命中 3/18/19 条，相似度 0.55–0.71，且召回的是正文实质内容（如复购率 chunk 返回「必须随附分母、禁止用流失会员充当分母」），不只是标题",
+        "向量维度=1024、L2范数=1.0000、1024/1024 分量非零 → 确认是 bge-m3 而非英文 small",
+        "**可复现性**：同句连算 3 次 SHA256 完全一致 → 模型稳定、向量可复现",
+        "**语义正确性**：cos(坪效问句, 口径问句)=0.8001 > cos(坪效问句, 敏感字段问句)=0.3918 → 相关句明显更近，语义未乱",
+        "TEI 容器 Up healthy、RestartCount=0、OOM=false、内存限 12g",
+        "m2_verify 22/22 通过，V12/V12c 由 0 条转绿",
+        "gate_all --strict112 项全绿、known=0（最严口径，已无任何挂账赦免）"
+      ],
+      "defect_found_and_fixed_by_lead": {
+        "id": "P1-18",
+        "component": "tools/redline_guard.py（R4 判据）",
+        "claimed_by_agent": "Agent 称已修 R4 误报（--auto-truncate 被误判为 SQL 清表）",
+        "assistant_verdict": "⚠️ 修得不干净——独立单元级验证发现 `--auto-truncate tokenization` 仍被判红（tokenization 的 t 被当表名）",
+        "root_cause": "裸表名正则未要求标识符终止符，后续还有字母的英文单词被误判为表名",
+        "lead_first_attempt_mistake": "助手首次修正时把正则收紧过头，**漏掉了最常见的 `TRUNCATE TABLE orders`** —— 自己引入了一个比原 bug 更严重的漏检，随即发现并改正",
+        "final_state": "20 例单元级验证全对：11 个真破坏性操作全抓（含 TRUNCATE TABLE / 反引号表名 / DELETE FROM / DROP TABLE / DROP DATABASE），9 个误报候选全放行（--auto-truncate、tokenization-workers、分词截断注释、truncation of input 等）",
+        "lesson": "**收紧红线判据时必须双向验证：既测「该抓的还抓得到」，也测「不该抓的放行了」。** 只测后者会造漏检，只测前者会留误报。助手自己第一版就栽在这上面。"
+      },
+      "criteria": [
+        {"id": "G4-B4b-01", "judgement": "embedding 探活：真实请求返回向量 + 维度", "blocking": true, "实测": "✅ 维度 1024、L2=1.0（助手独立复验）"},
+        {"id": "G4-B4b-02", "judgement": "knowledge_search 三问真实召回（贴命中数/相似度/文档名）", "blocking": true, "实测": "✅ 3/18/19 条，相似度 0.55–0.71"},
+        {"id": "G4-B4b-03", "judgement": "经真实 MCP 端点（18080）验证，不只调内部函数", "blocking": true, "实测": "✅ tools/mcp_knowledge_search.py 走 18080"},
+        {"id": "G4-B4b-04", "layer": "G1,G2", "script": "tools/knowledge_selftest.py", "judgement": "knowledge_selftest 全绿", "blocking": true, "实测": "✅"},
+        {"id": "G4-B4b-05", "layer": "G2", "script": "tools/m2_verify.py", "judgement": "V12/V12c 恢复召回则移除 KNOWN_RED_BASELINE 登记", "blocking": true, "实测": "✅ 22/22 通过，红登记已移除，strict 下 known=0"},
+        {"id": "G4-B4b-06", "layer": "G0", "script": "tools/redline_guard.py", "judgement": "红线 CLEAR", "blocking": true, "实测": "✅ CLEAR（P1-18 已修）"},
+        {"id": "G4-B4b-07", "judgement": "稳定性连跑≥10 次", "blocking": true, "实测": "✅ Agent 报 30/30 检索 + 10/10 embedding；助手另行验证向量可复现性 3/3 一致"}
+      ],
+      "remaining_risks": [
+        "TEI 是新增单点：容器停或被 OOM → 检索立即全断（靠 restart: unless-stopped + healthcheck 兜）",
+        "模型权重 2.27GB 不入 git：换机器须先跑 .models/fetch_bge_m3.sh（约 10 分钟，需 hf-mirror 可达）",
+        "amd64 镜像跑 arm64 模拟，默认参数会 OOM kill（ExitCode=137）；已把 tokenization-workers 降到 2、max-batch-tokens 降到 2048 才稳",
+        "**底座归属仍未定**：19380 入口仍是 nginx 代理、backend 仍是旧绑定栈内 ragflow-cpu —— 「RAGFlow 独立栈尚未成立」的口径依然属实，未被本批改动"
+      ]
+    },
+    {
+      "id": "B4-停",
+      "name": "MinIO 对象迁移 + FileBay 停用归档",
+      "status": "blocked_by_human",
+      "reason": "红线四：动数据、不可逆（旧桶有 1 个真实附件）。执行 Agent 明确不执行，只列清单。",
+      "requires": "用户点头"
+    },
+    {
+      "id": "B4d",
+      "name": "RAGFlow 品牌对外封装为「FileBay」，替代 Gitea 版 FileBay",
+      "status": "planned_by_user",
+      "user_decision_2026_10_06": "用户明确：RAGFlow 最终需做用户界面封装，**对外展示成「FileBay」**，以替代现有基于 Gitea 封装的 FileBay。",
+      "scope_clarification": "这是**产品对外品牌与入口层的决策**，不是要推翻 B4 的技术结论。两者要分开看：",
+      "not_conflicting_with": "B4 判「独立栈未成立」讲的是**部署形态**（19380 是 nginx 代理、backend 仍是旧栈内 ragflow-cpu）；用户现在说的是**对外呈现**（UI 封装 + 品牌名）。二者可以并存 —— 技术上先把RAGFlow 跑通，对外用 FileBay 品牌封装，不必然要求先新建独立栈。",
+      "prerequisite_note": "对外封装的前提是检索稳定可用。当前 bge-m3 的 embedding 仍在本机（远端服务因 Tailscale 网段不可达，见 B4c），且 TEI 是**单点**（停容器检索即断）。对外之前应先解决：① embedding 迁到稳定可用的固定地址；② TEI 单点风险。",
+      "suggested_order": [
+        "① 先按用户本轮指示「跑通流程优先」：embedding 迁远端（B4c，需先解决容器到 Tailscale 网段的路由）",
+        "② 补常设门禁 tools/r2_check.py（打真实网关断言脱敏）",
+        "③再做 FileBay 品牌的 UI 封装（B4d），届时需要一个稳定的 embedding 地址 + 界面层设计"
+      ],
+      "no_conflict_verified": "已扫全库：现行文档中**无「剔除 FileBay」类表述残留**（08-归档 2 份为历史快照，保留原值）。新方向与既有口径不冲突。"
+    },
+    {
+      "id": "B5",
+      "name": "MVP 验收口径说明 + 阶段 A 总验收",
+      "status": "pending",
+      "owner": "协调调度 Agent",
+      "note": "不重新发明判据，只汇总 batches.json 结论 + 签字；一次性交回用户"
+    },
+    {
+      "id": "B4c",
+      "name": "embedding 迁到远端主机、回收本地资源",
+      "status": "blocked_by_network",
+      "owner": "协调调度 Agent（亲自执行，因涉及删除资源）",
+      "user_intent": "用户 2026-10-06 指示：另一台主机的 embedding 服务已启动，可清掉本地 bge-m3 以节省本机资源",
+      "verified_facts": [
+        "远端模型本身没问题：embedding 返回 1024 维、L2=1.0、非零 1024/1024；与本地向量最大逐维差 4.545e-04（浮点累加差异，非模型差异）→ 同一模型，切换无模型风险",
+        "**网络路由其实是通的**（第二次尝试时）：宿主→远端 5/5=200；容器→远端 100.103.240.78:18001=200；容器→宿主 Tailscale 网关 100.75.4.15:18001=200。**上次归因「容器不在 Tailscale 网内」不准确**",
+        "**真正的拦路虎是远端服务本身不稳定**：迁移后连跑 10 轮，第 1 轮起就全报错（成功 0-2/3、报错恒 3）；随即探活远端 5/5 全为 http=000",
+        "同一现象跨两天复现：2026-10-06 13:00 切远端 → 容器 http=000；14:10 再试 → 一度全通、迁移成功 → 10 轮内全挂 → 又全为 http=000"
+      ],
+      "root_cause_revised": "**不是容器网络问题，是远端 embedding 服务反复上下线。** 证据：第二次尝试时容器内三条路径（远端 IP、Tailscale 网关、本机 TEI）全部 200，迁移后检索也确实返回 3/18/19 条；但随后 10 轮内远端探活全部 http=000。远端服务可用性不足是唯一拦路虎。",
+      "safety_note": "严格遵守「先验证新的、再删旧的」：切配置 → 停本地 TEI 制造真断 → 测远端 → 发现不稳定立即回滚。**2.27GB 模型权重未删除、功能全程未中断**（两次尝试均如此）。若先删再验就会造成空窗。",
+      "blocked_reason": "远端 embedding 服务可用性不足（同一日内两次探测结果相反，10 轮稳定性测试中掉线）。**须用户检查那台主机的服务状态**：是否开机、进程是否守护（systemd/supervisor）、是否有 OOM/崩溃重启、监听地址与防火墙、是否只在特定时段启动。",
+      "user_action_required": [
+        "确认那台主机（100.103.240.78 / sevensmile.tailb5e44d.ts.net）的 embedding 服务是否**长期常驻**——是手动起的临时进程，还是有守护？",
+        "确认它是否稳定运行：有无反复崩溃重启（看 systemctl status / docker ps / 日志）",
+        "若为手动进程：建议配 systemd 守护或加自动重启，再让我复测",
+        "顺带确认监听地址是否为 0.0.0.0（只监听 127.0.0.1 则容器永远连不上）"
+      ],
+      "resource_state": {
+        "local_tei_container": "askoda-tei-embedding（已重启运行，配置已回滚指向它）",
+        "local_model_weights": ".models/bge-m3（2.27GB，仍在磁盘，**未删**）",
+        "可回收量": "约 2.27GB 磁盘 + TEI 容器常驻内存",
+        "删除前提": "远端服务须先通过连续 ≥30 轮检索稳定性测试（当前连 10 轮都撑不住）"
+      },
+      "criteria": [
+        {"id": "G4-B4c-01", "judgement": "容器内可直连远端 embedding 端点", "blocking": true, "实测": "✅ 第二次尝试 http=200（首次尝试为 000）", "revision": "上次归因「容器不在 Tailscale 网内」不准确——第二次实测容器→远端、容器→Tailscale 网关均 200"},
+        {"id": "G4-B4c-02", "judgement": "切远端后 knowledge_search 三问召回数与本地一致", "blocking": true, "实测": "✅ 迁移瞬间成功（3/18/19，与本地一致）"},
+        {"id": "G4-B4c-03", "judgement": "远端与本地模型一致（向量比对）", "blocking": false, "实测": "✅ 最大逐维差 4.5e-04，同模型，为将来切换扫清障碍"},
+        {"id": "G4-B4c-04", "judgement": "回滚后检索恢复正常", "blocking": true, "实测": "✅ 3/18/19 条，与切换前一致"},
+        {"id": "G4-B4c-05", "judgement": "**远端连续 ≥30 轮检索稳定**（删本地的硬前提）", "blocking": true, "实测": "❌ 第 1 轮起即全报错；远端探活随即 5/5 全 http=000"}
+      ]
+    }
+  ],
+  "phase_b": [
+    {"id": "B6", "name": "M8 五菜单骨架（在前端上扩，复用同一 BFF 契约）", "status": "deferred", "blocker": "依赖 B3 的真实前端结构与 BFF 契约"},
+    {"id": "B7", "name": "M8 治理能力（知识 7 状态机 / MDL 版本审批 / Schema diff 候选）", "status": "deferred", "blocker": "同上"},
+    {"id": "B8", "name": "对外版本：鉴权 + 多租户 + 脱敏强化 + 部署形态", "status": "needs_human_decision", "blocker": "对外形态需用户拍板（SaaS/私有化/混合）；且当前零鉴权"},
+    {"id": "B9", "name": "M9 真实业务系统接入 + 真实场景验收", "status": "needs_human_input", "blocker": "需真实库/权限/数据，无处运行验收"}
+  ]
+}
