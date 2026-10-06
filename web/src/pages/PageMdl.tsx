@@ -110,7 +110,11 @@ export default function PageMdl({ dataset, onNotify }: { dataset: string; onNoti
           </div>
           <div>
             <span className="trace-k">模型数</span>
-            <code>{manifest?.models ?? manifest?.model_count ?? tables.length ?? '-'}</code>
+            <code>
+              {Array.isArray(manifest?.models)
+                ? manifest!.models.length
+                : (manifest?.model_count ?? manifest?.models ?? tables.length ?? '-')}
+            </code>
           </div>
           <div>
             <span className="trace-k">可见字段</span>
@@ -120,7 +124,11 @@ export default function PageMdl({ dataset, onNotify }: { dataset: string; onNoti
           </div>
           <div>
             <span className="trace-k">关系数</span>
-            <code>{manifest?.relationships ?? '-'}</code>
+            <code>
+              {Array.isArray(manifest?.relationships)
+                ? manifest!.relationships.length
+                : (manifest?.relationships ?? '-')}
+            </code>
           </div>
         </div>
 
