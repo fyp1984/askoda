@@ -18,6 +18,7 @@ candidate_sql 作为参数回传给网关；网关只做"收+审+存"。客户�
 两条路径的产出都要立刻过 gates.review()，保证"不管 SQL 从哪来，网关只放行同一套门禁"。
 """
 import db
+import secrets
 import registry
 import sqlpack as sqlpack_mod
 import planner as planner_mod
@@ -623,4 +624,39 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
                    float(candidate_diff.get("threshold") or 0.35))
             )
         out["candidate_diff"] = candidate_diff
+
+    # 落库：把本次生成的初稿写入 sql_runs，使 sql_execute_readonly 在 sql 为空时
+    # 能经 _last_generated_sql 取到「最近一次生成的 SQL」。修复 B3 演示暴露的口径断点：
+    # 此前 generate 只返回 sql_draft、从不落库，导致空 sql 执行报「找不到历史生成 SQL」。
+    # 不改动 out 的键集合（输出契约不变）；DB 不可用时静默跳过，绝不阻断生成。
+    if sql_draft and demand_id:
+        try:
+            _rid = "SR-" + secrets.token_hex(8)
+            db.execute(
+                """
+                INSERT INTO sql_runs
+                    (sql_run_id, demand_id, requirement_version, schema_version, pack_version,
+                     generator_model, generated_sql, review_status, review_detail,
+                     validation_result, final_delivery_sql, actor)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (
+                    _rid,
+                    demand_id,
+                    None,
+                    None,
+                    None,
+                    generator_label,
+                    sql_draft,
+                    (review.get("status") if isinstance(review, dict) else None),
+                    db.dumps(review if isinstance(review, dict) else {}),
+                    db.dumps({}),
+                    None,
+                    "sqlgen",
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            # 落库失败不影响生成结果返回；真实执行环节会再写一条带执行结果的留痕。
+            pass
+
     return out

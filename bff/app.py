@@ -497,7 +497,8 @@ async def sql_generate(demand_id: str, body: SqlIn) -> Any:
 @app.post(f"{API}/demand/{{demand_id}}/sql/execute", tags=["取数"])
 async def sql_execute(demand_id: str, body: SqlExecuteIn) -> Any:
     # 没有显式传 SQL 时，先尝试从已生成的 sql_runs 里取最近一条。
-    # 实测：网关不会自动回填 sql_runs，直接执行会报「待执行 SQL 为空」。
+    # 网关 sql_generate 已落库初稿（见 gateway/sqlgen.generate），此处优先用
+    # final_delivery_sql（若已执行），否则回退 generated_sql（生成初稿）。
     sql_text = (body.sql or "").strip()
     if not sql_text:
         try:
