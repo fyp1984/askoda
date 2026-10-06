@@ -274,7 +274,9 @@
     {
       "id": "B4c",
       "name": "embedding 迁到远端主机、回收本地资源",
-      "status": "blocked_by_network",
+      "status": "done",
+      "owner": "协调调度 Agent（亲自执行，因涉及删除资源）",
+      "final_verdict": "✅ 迁移成功（2026-10-06 18:25）",
       "owner": "协调调度 Agent（亲自执行，因涉及删除资源）",
       "user_intent": "用户 2026-10-06 指示：另一台主机的 embedding 服务已启动，可清掉本地 bge-m3 以节省本机资源",
       "verified_facts": [
@@ -293,10 +295,35 @@
         "顺带确认监听地址是否为 0.0.0.0（只监听 127.0.0.1 则容器永远连不上）"
       ],
       "resource_state": {
-        "local_tei_container": "askoda-tei-embedding（已重启运行，配置已回滚指向它）",
-        "local_model_weights": ".models/bge-m3（2.27GB，仍在磁盘，**未删**）",
-        "可回收量": "约 2.27GB 磁盘 + TEI 容器常驻内存",
-        "删除前提": "远端服务须先通过连续 ≥30 轮检索稳定性测试（当前连 10 轮都撑不住）"
+        "current": "**已迁移完成**：embedding 由 seven smile（100.103.240.78:18001）提供",
+        "local_tei": "已停用。compose 加 `profiles: [\"local-embed\"]` → 默认不启动，需 `docker compose --profile local-embed up -d tei-embedding` 显式启动",
+        "local_model_weights": ".models/bge-m3（2.2G，**保留**供回滚；也可 fetch_bge_m3.sh 重拉）",
+        "已回收": "一个常驻 TEI 容器（约 2.1GiB 内存）",
+        "verified": [
+          "向量交叉比对：三句话余弦相似度**全部 = 1.000000**（逐位一致，同一份权重）",
+          "维度 1024 两侧一致；远端语义抽查 0.8001 vs 0.3918 与本机完全相同",
+          "停本地 TEI 制造真断后，检索仍 3/18/19 与迁移前一致",
+          "**30 轮 × 3 问 = 90 次检索全过，0 异常**（前两次尝试分别止步 12/30 与 5/20）",
+          "m2_verify 22/22；gate_all --strict 111 项全绿 known=0",
+          "远端走 **ORT 加速路径**（日志 `Starting model backend`，无 ORT 报错、无 candle 提示）"
+        ],
+        "teachings": [
+          "不要用 awk 切 docker 的表格输出：新版 Docker 多了 ID/DISK USAGE/CONTENT SIZE/EXTRA 列，按空格切会把 IMAGE ID 拼进镜像名（...:cpu-1.8:5297a804a8eb → invalid reference）。必须用 --format",
+          "排查脚本不可重定向掉被诊断对象的输出：docker run 的真实报错被 >/dev/null 2>&1 吃掉后，只剩 docker logs 的误导性 No such container",
+          "参数调优救不了物料不对：前三轮全在调参数（pooling/workers/batch/内存/重启策略），第四轮才看模型目录，发现挂的是 PyTorch 版没有 onnx。排查应先看输入物料"
+        ]
+      },
+      "failover_added": {
+        "why": "迁移后发现新单点：RAGFlow 的 base_url 是静态字符串，它自己不会切；主服务一挂检索即断",
+        "solution": "tools/embedding_failover.sh（主=seven smile / 备=本机 TEI，按需拉起）+ compose profile 隔离",
+        "verified": "**主备双路均实测通过**：切到备 → 检索 3/18/19；切回主 → 检索 3/18/19",
+        "cooldown": "切换后 300s 冷却期，防主服务抖动导致反复横跳（当天实测主服务掉过两次）",
+        "doc": ".models/EMBEDDING_FAILOVER.md",
+        "three_bugs_found_and_fixed": [
+          "probe() 传了 PRIMARY/BACKUP 标识符而非地址 → 永远探不通",
+          "set_url 只REPLACE 端口号 → 远端地址被改成 100.103.240.78:18002（不存在的组合，**检索静默全断**）。教训：「半改」比「不改」更危险",
+          "改用 REPLACE 匹配已知串仍匹配不到坏地址 → 最终用 REGEXP_SUBSTR 抓出 host:port 整体替换，与当前值长什么样无关"
+        ]
       },
       "criteria": [
         {"id": "G4-B4c-01", "judgement": "容器内可直连远端 embedding 端点", "blocking": true, "实测": "✅ 第二次尝试 http=200（首次尝试为 000）", "revision": "上次归因「容器不在 Tailscale 网内」不准确——第二次实测容器→远端、容器→Tailscale 网关均 200"},

@@ -186,7 +186,25 @@ services:
   # 2.27GB fp32 权重 + 8 个 tokenization worker 在 15.66GiB 的 VM 里会被 OOM
   # kill（实测 ExitCode=137 OOMKilled=true）。降并发后可稳定常驻，实测 /health 200。
   # ------------------------------------------------------------------
+  # ------------------------------------------------------------------
+  # 【已停用 2026-10-06】本机 embedding 已迁至 seven smile 主机
+  #   地址：http://100.103.240.78:18001/v1（Tailscale 节点 sevensmile.tailb5e44d.ts.net）
+  #   切换依据：交叉比对三句话余弦相似度全部 = 1.000000（同一份权重），
+  #            30 轮 × 3 问 = 90 次检索全过，召回 3/18/19 与迁移前一致，
+  #            m2_verify 22/22、gate_all --strict 111 项全绿。
+  #   停用原因：本机 TEI 仅占 2.1GiB/15.66GiB、CPU 1.77%，不是资源瓶颈；
+  #            而远端是 x86_64 原生（本机是 amd64 模拟），性能更好且不占本机资源。
+  #
+  #   ⚠️ 保留本段定义以便回滚。若要回退到本机：
+  #      1) 用 profile 启动：docker compose --profile local-embed up -d tei-embedding
+  #      2) 把 RAGFlow 的 base_url 改回 http://host.docker.internal:18002/v1
+  #         （备份在 .models/backup/）
+  #      3) 模型权重需先拉取：./.models/fetch_bge_m3.sh "$PWD/bge-m3"
+  #
+  #   正常使用无需启动本机 TEI；embedding 由远端提供。
+  # ------------------------------------------------------------------
   tei-embedding:
+    profiles: ["local-embed"]          # 默认不启动，需显式 --profile local-embed
     image: infiniflow/text-embeddings-inference:cpu-1.8
     container_name: askoda-tei-embedding
     restart: unless-stopped
