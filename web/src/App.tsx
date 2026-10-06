@@ -1,26 +1,46 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type E2eStatus } from './api/client'
+import PageMdl from './pages/PageMdl'
+import PageKnowledge from './pages/PageKnowledge'
+import PageDatasource from './pages/PageDatasource'
 import PageSubmit from './pages/PageSubmit'
 import PageAnalysis from './pages/PageAnalysis'
 import PageConfirm from './pages/PageConfirm'
 import PageSql from './pages/PageSql'
+import PageDelivery from './pages/PageDelivery'
 
-const TABS = [
-  { key: 'submit', label: '① 提交需求' },
-  { key: 'analysis', label: '② 查看分析' },
-  { key: 'confirm', label: '③ 口径确认' },
-  { key: 'sql', label: '④ 看 SQL 与结果' },
+/**
+ * 工作台五个一级菜单（PRD §12.7），按「语义先行、知识准入、受控生成、联调交付」动线组织。
+ * 菜单① 语义层 · MDL 字典 为默认首页。
+ */
+const MENUS = [
+  { key: 'mdl', label: '① 语义层 · MDL 字典' },
+  { key: 'knowledge', label: '② 知识储备' },
+  { key: 'datasource', label: '③ 数据源接入' },
+  { key: 'demand', label: '④ 需求分析 · SQL 生成' },
+  { key: 'delivery', label: '⑤ SQL 联调 · 交付' },
 ] as const
 
-type TabKey = (typeof TABS)[number]['key']
+/** 菜单④ 内部的八步链路分步（提交 → 分析 → 确认 → 生成）。 */
+const STEPS = [
+  { key: 'submit', label: '提交需求' },
+  { key: 'analysis', label: '语义分析' },
+  { key: 'confirm', label: '口径确认' },
+  { key: 'sql', label: 'SQL 生成' },
+] as const
+
+type MenuKey = (typeof MENUS)[number]['key']
+type StepKey = (typeof STEPS)[number]['key']
 
 export default function App() {
-  const [tab, setTab] = useState<TabKey>('submit')
+  const [menu, setMenu] = useState<MenuKey>('mdl')
+  const [step, setStep] = useState<StepKey>('submit')
   const [demandId, setDemandId] = useState<string | null>(null)
   const [dataset, setDataset] = useState('B')
   const [status, setStatus] = useState<E2eStatus | null>(null)
   const [health, setHealth] = useState<string>('检查中…')
   const [token, setToken] = useState(0)
+  const [notice, setNotice] = useState('')
 
   useEffect(() => {
     api
@@ -30,8 +50,12 @@ export default function App() {
   }, [])
 
   const refresh = useCallback(() => setToken((t) => t + 1), [])
+  const notify = useCallback((msg: string) => {
+    setNotice(msg)
+    window.setTimeout(() => setNotice(''), 4000)
+  }, [])
 
-  // 核心聚合接口：四个页面共用一次状态快照，缺哪块由 partial_errors 说明
+  // 核心聚合接口：需求链路各页共用一次状态快照，缺哪块由 partial_errors 说明
   useEffect(() => {
     if (!demandId) {
       setStatus(null)
@@ -53,7 +77,8 @@ export default function App() {
 
   const onSubmitted = (id: string) => {
     setDemandId(id)
-    setTab('analysis')
+    setMenu('demand')
+    setStep('analysis')
     refresh()
   }
 
@@ -65,44 +90,73 @@ export default function App() {
       <header className="top">
         <div className="brand">
           <h1>数据需求智能分析助手</h1>
-          <span className="tagline">提交 · 分析 · 口径确认 · 取数结果</span>
+          <span className="tagline">语义先行 · 知识准入 · 受控生成 · 联调交付</span>
         </div>
         <div className="top-right">
+          {notice ? <span className="notice">{notice}</span> : null}
           <span className={`health ${health === '后端正常' ? 'ok' : 'bad'}`}>{health}</span>
           {demandId ? <code className="did">{demandId}</code> : null}
         </div>
       </header>
 
       <nav className="tabs">
-        {TABS.map((t) => (
+        {MENUS.map((m) => (
           <button
-            key={t.key}
-            className={`tab${tab === t.key ? ' active' : ''}`}
-            onClick={() => setTab(t.key)}
+            key={m.key}
+            className={`tab${menu === m.key ? ' active' : ''}`}
+            onClick={() => setMenu(m.key)}
           >
-            {t.label}
-            {t.key === 'confirm' && openConf > 0 ? <span className="badge-n">{openConf}</span> : null}
-            {t.key === 'analysis' && blocking > 0 ? <span className="badge-r">{blocking}</span> : null}
+            {m.label}
+            {m.key === 'demand' && openConf > 0 ? <span className="badge-n">{openConf}</span> : null}
+            {m.key === 'demand' && blocking > 0 ? <span className="badge-r">{blocking}</span> : null}
           </button>
         ))}
-        {demandId ? (
-          <label className="ds-pick">
-            数据集
-            <select value={dataset} onChange={(e) => setDataset(e.target.value)}>
-              <option value="B">B 库 · 零售会员域</option>
-              <option value="A">A 库 · 电商域</option>
-            </select>
-          </label>
-        ) : null}
+        <label className="ds-pick">
+          数据集
+          <select value={dataset} onChange={(e) => setDataset(e.target.value)}>
+            <option value="B">B 库 · 零售会员域</option>
+            <option value="A">A 库 · 电商域</option>
+          </select>
+        </label>
       </nav>
 
+      {menu === 'demand' ? (
+        <nav className="tabs sub">
+          {STEPS.map((s) => (
+            <button
+              key={s.key}
+              className={`tab small${step === s.key ? ' active' : ''}`}
+              onClick={() => setStep(s.key)}
+            >
+              {s.label}
+              {s.key === 'confirm' && openConf > 0 ? <span className="badge-n">{openConf}</span> : null}
+              {s.key === 'analysis' && blocking > 0 ? <span className="badge-r">{blocking}</span> : null}
+            </button>
+          ))}
+        </nav>
+      ) : null}
+
       <main className="main">
-        {tab === 'submit' ? <PageSubmit onSubmitted={onSubmitted} demandId={demandId} /> : null}
-        {tab === 'analysis' ? (
+        {menu === 'mdl' ? <PageMdl dataset={dataset} onNotify={notify} /> : null}
+        {menu === 'knowledge' ? <PageKnowledge demandId={demandId} /> : null}
+        {menu === 'datasource' ? (
+          <PageDatasource dataset={dataset} demandId={demandId} onNotify={notify} />
+        ) : null}
+        {menu === 'demand' && step === 'submit' ? (
+          <PageSubmit onSubmitted={onSubmitted} demandId={demandId} />
+        ) : null}
+        {menu === 'demand' && step === 'analysis' ? (
           <PageAnalysis demandId={demandId} dataset={dataset} status={status} onRefresh={refresh} />
         ) : null}
-        {tab === 'confirm' ? <PageConfirm demandId={demandId} status={status} onRefresh={refresh} /> : null}
-        {tab === 'sql' ? <PageSql demandId={demandId} dataset={dataset} status={status} onRefresh={refresh} /> : null}
+        {menu === 'demand' && step === 'confirm' ? (
+          <PageConfirm demandId={demandId} status={status} onRefresh={refresh} />
+        ) : null}
+        {menu === 'demand' && step === 'sql' ? (
+          <PageSql demandId={demandId} dataset={dataset} status={status} onRefresh={refresh} />
+        ) : null}
+        {menu === 'delivery' ? (
+          <PageDelivery demandId={demandId} dataset={dataset} status={status} onRefresh={refresh} />
+        ) : null}
       </main>
 
       <footer className="foot">
