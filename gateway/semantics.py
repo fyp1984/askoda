@@ -285,8 +285,10 @@ def understand(bundle):
         )
     subj.sort(key=lambda x: (-x["confidence"], -x["hit_count"]))
 
-    # ---- 输出字段候选：来自字段类命中 ----
-    field_hits = _hits_by_kind(hits, ["column", "glossary", "glossary_phrase"])
+    # ---- 输出字段候选：来自字段类命中 + 口径表达式命中 ----
+    field_hits = _hits_by_kind(
+        hits, ["column", "glossary", "glossary_phrase", "caliber_expression"]
+    )
     fields = []
     seen = set()
     for h in field_hits:
@@ -295,10 +297,58 @@ def understand(bundle):
             continue
         seen.add(loc)
         cited = _ev_for_term(by_level, h) or _p1_cite(by_level)
-        fields.append(
-            _cand("fields", h["term"], cited, matched_terms=[h["matched"]],
-                  field_ref=loc, kind=h["kind"])
+        k = h["kind"]
+        # hit_by 用来区分：字段直接名命中 / 口径术语命中 / 口径表达式短语命中
+        if k == "caliber_expression":
+            hit_by = ["mdl_caliber_expression"]
+            note_line = "命中口径表达式：%s" % (h.get("source_caliber") or h.get("definition") or "")[:80]
+        elif k.startswith("glossary"):
+            hit_by = ["business_glossary"]
+            note_line = ""
+        else:
+            hit_by = ["column_label_or_name"]
+            note_line = ""
+        cand = _cand(
+            "fields", h["term"], cited, matched_terms=[h["matched"]],
+            field_ref=loc, kind=k, hit_by=hit_by,
         )
+        if note_line:
+            cand["note"] = note_line
+        fields.append(cand)
+
+    # ---- P-C · fields 空候选必须给出非空、归因清楚的 miss_reason ----
+    fields_miss_reason = None
+    if not fields:
+        # 归因：需要主体表列表（按 subject_candidates）
+        subj_tables = [s.get("value") for s in subj if s.get("value")]
+        text_tokens = sorted({
+            seg for seg in __import__("re").split(
+                r"[，。；、（）()=＝/／\+\-\*：:\s]+", text or ""
+            ) if 2 <= len(seg) <= 12 and any("\u4e00" <= ch <= "\u9fa5" for ch in seg)
+        })
+        if not subj_tables:
+            mr_code = "F-MISS-NO-SUBJECT"
+            mr_detail = (
+                "字段候选为空（先无主体表 → 无对应字段全集）。"
+                "需求分词=%s；当前主体候选为空，请先确认分析主题（订单/会员/门店…）。"
+            ) % ("、".join(text_tokens[:12]) or "无")
+        else:
+            mr_code = "F-MISS-NO-CALIBER"
+            mr_detail = (
+                "字段候选为空（F-MISS-NO-CALIBER）：需求词既未命中字段列名/中文名，"
+                "也未在当前主体表的 MDL 口径表达式中匹配到业务词条。"
+                "主体表范围=%s；需求分词=%s；"
+                "请检查：① 对应字段的 MDL description 是否显式包含口径；② 业务词是否为同义词需加进别名表。"
+            ) % (
+                "、".join(subj_tables[:6]) or "空",
+                "、".join(text_tokens[:15]) or "无",
+            )
+        fields_miss_reason = {
+            "code": mr_code,
+            "detail": mr_detail,
+            "subject_tables_checked": subj_tables,
+            "text_tokens_checked": text_tokens,
+        }
 
     # ---- 时间候选 ----
     periods = sorted(set(m.group(0).strip() for m in PERIOD_RE.finditer(text)))
@@ -333,6 +383,7 @@ def understand(bundle):
         "time_candidates": time_c,
         "scope_candidates": scope_c,
         "field_candidates": fields,
+        "fields_miss_reason": fields_miss_reason,
         "aggregation_intent": agg,
         "business_purpose": purpose,
     }
@@ -453,6 +504,9 @@ def time_semantics(bundle):
     text = bundle["text"]
     by_level = bundle["by_level"]
     hits = bundle["matched"]
+    dataset = bundle.get("dataset") or "B"
+
+    import metadata as _md  # noqa: E402
 
     kinds = []
     for label, words in TIME_SEMANTICS.items():
@@ -460,10 +514,73 @@ def time_semantics(bundle):
             kinds.append({"semantics": label, "matched_terms": [w for w in words if w in text][:5]})
 
     fields = []
+    filtered = []
     for label, loc in TIME_FIELD_INDEX:
         if label in text:
+            # P-B · 硬判据：TIME_FIELD_INDEX 命中的列必须过时间类型/语义检查
+            eligible, reason = _md.is_eligible_time_field(loc, dataset=dataset, label_hint=label)
+            if not eligible:
+                filtered.append({"label": label, "locator": loc, "why": reason})
+                continue
             cited = [t for t in by_level.get("P6", []) if t.get("locator") == loc][:1] or _p1_cite(by_level)
-            fields.append(_cand("time", label, cited, field_ref=loc))
+            fields.append(
+                _cand(
+                    "time", label, cited, field_ref=loc,
+                    time_eligibility_reason=reason,
+                    hit_by=["time_index_label"],
+                )
+            )
+
+    # P-B · 兜底：TIME_FIELD_INDEX 未覆盖所有表（或用户没写明 label）时，
+    # 补扫**本次命中的主题表**的时间列。
+    #
+    # 作用域为什么收窄到主题表（P1-12 修复要点）
+    # ----------------------------------------
+    # 旧实现全库扫 column_docs，把 dws_store_daily_agg.sales_amount（当日销售额）、
+    # ads_coupon_order_di.coupon_amount（券面额）这类名字里蹭到「日/月」的列也
+    # 灌进 slots.time.candidates——实测候选从个位数涨到 17–18 条。
+    # 没有主题表就不兜底：宁可留空让人确认，也不让别的业务域的列混进来。
+    subj_tables = []
+    for s in (bundle.get("subject_candidates") or []):
+        v = s.get("value")
+        if isinstance(v, str) and v:
+            subj_tables.append(v)
+    subj_tables = list(dict.fromkeys(subj_tables))
+    existing_refs = {f.get("field_ref") for f in fields}
+    if subj_tables:
+        import db as _db_sem  # noqa: E402
+        # ORDER BY 保证候选顺序稳定可复现（不依赖数据库的返回顺序）
+        fallback_rows = _db_sem.query(
+            "SELECT table_name, column_name, column_label, data_type, is_primary_key "
+            "FROM column_docs WHERE dataset=%s AND table_name = ANY(%s) "
+            "ORDER BY table_name, column_name",
+            (dataset, subj_tables),
+        )
+    else:
+        fallback_rows = []
+    for r in fallback_rows:
+        loc = "%s.%s" % (r["table_name"], r["column_name"])
+        if loc in existing_refs:
+            continue
+        lbl = (r.get("column_label") or r["column_name"]).strip()
+        dtype = r.get("data_type") or ""
+        # 不再做"正词放行"的粗筛——类型白名单由 is_eligible_time_field 一处把关
+        eligible, reason = _md.is_eligible_time_field(
+            loc, dataset=dataset, label_hint=lbl,
+            data_type_hint=dtype, is_pk_hint=bool(r.get("is_primary_key")),
+        )
+        if not eligible:
+            # 不进 filtered（数量多会太吵），只在 time_candidates_filtered 放前 5
+            continue
+        cited = [t for t in by_level.get("P6", []) if t.get("locator") == loc][:1] or _p1_cite(by_level)
+        c = _cand(
+            "time", lbl, cited, field_ref=loc,
+            time_eligibility_reason=reason,
+            hit_by=["table_time_fallback", "subject_table_scope"],
+        )
+        c["table"] = r["table_name"]
+        fields.append(c)
+        existing_refs.add(loc)
 
     risks = []
     if not kinds:
@@ -484,11 +601,21 @@ def time_semantics(bundle):
              "detail": "需求提到装载/入库时间；装载日期不能替代业务日期",
              "evidence": _p1_cite(by_level)}
         )
+    if filtered:
+        risks.append(
+            {
+                "type": "time_field_filtered",
+                "detail": "以下 TIME_FIELD_INDEX 命中列因非时间类型/主键黑词被过滤：%s"
+                % "；".join("%s(%s)->%s" % (x["label"], x["locator"], x["why"]) for x in filtered[:5]),
+                "evidence": _p1_cite(by_level),
+            }
+        )
 
     needs = not kinds or len(kinds) > 1
     return {
         "time_semantics": kinds,
         "time_field_candidates": fields,
+        "time_field_filtered": filtered,
         "time_risks": risks,
         "need_confirmation": needs,
     }
@@ -810,6 +937,9 @@ def _technical_hits(text, tech_terms):
 def first_round(bundle, region_label="B"):
     """把六个槽位 + 规则 + 问题组装成第一轮分析结果。"""
     u = understand(bundle)
+    # P-B · 把主体候选挂回 bundle，time_semantics() 扫 column_docs 时按主题表优先
+    bundle = dict(bundle)
+    bundle["subject_candidates"] = u["subject_candidates"]
     g = granularity(bundle, u["subject_candidates"])
     t = time_semantics(bundle)
 
@@ -825,9 +955,13 @@ def first_round(bundle, region_label="B"):
             "candidates": u["time_candidates"] + t["time_field_candidates"],
             "semantics": t["time_semantics"],
             "needs_confirmation": t["need_confirmation"],
+            "time_field_filtered": t.get("time_field_filtered"),
         },
         "scope": {"candidates": u["scope_candidates"]},
-        "fields": {"candidates": u["field_candidates"]},
+        "fields": {
+            "candidates": u["field_candidates"],
+            "miss_reason": u.get("fields_miss_reason"),  # P-C · 非空归因
+        },
         "risks": {"candidates": []},
     }
     state["slots"] = slots

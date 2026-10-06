@@ -121,9 +121,28 @@ def plan(demand_id, dataset="B"):
         key=lambda t: (-float(t.get("score", 0) or 0), (t.get("table") or t.get("model") or ""))
     )
     join_candidates = [] if not pack else list(pack.get("join_candidates") or [])
-    time_candidates = [] if not pack else list(
+    _raw_time_candidates = [] if not pack else list(
         (pack.get("time_constraints") or {}).get("candidate_columns") or []
     )
+    # P-B · 最终 time_field 强判据：先过一遍 is_eligible_time_field 再选
+    import metadata as _md_sg  # noqa: E402
+    time_candidates = []
+    time_candidates_filtered = []
+    for _tc in _raw_time_candidates:
+        _model = _tc.get("model") or ""
+        _name = _tc.get("name") or ""
+        _loc = "%s.%s" % (_model, _name) if _model and _name else _name
+        _label = _tc.get("label") or _name
+        _type = _tc.get("type") or ""
+        _eligible, _why = _md_sg.is_eligible_time_field(
+            _loc, dataset=dataset, label_hint=_label, data_type_hint=_type
+        )
+        if _eligible:
+            time_candidates.append({**_tc, "_time_eligibility": _why})
+        else:
+            time_candidates_filtered.append(
+                {"loc": _loc, "label": _label, "type": _type, "why": _why}
+            )
     requirement_version = None if not pack else pack.get("requirement_version")
     schema_version = None if not pack else pack.get("schema_version")
     agg_constraints = [] if not pack else list(pack.get("aggregation_constraints") or [])
@@ -231,27 +250,76 @@ def plan(demand_id, dataset="B"):
     elif not chosen_table:
         join_path_reason = "chosen_table 未确定，跳过关联路径选择"
 
+    # P1-13 · time_field 必须落在"本次需求相关的表"里
+    # ------------------------------------------------
+    # 旧实现在主题表没敛到唯一解时退化成「按候选顺序取首项」，实测把
+    # 「会员复购率月度分析」的时间字段选到了 ads_coupon_order_di.stat_date
+    # （券订单表，与会员复购主题无关）。
+    # 修法：候选先收缩到相关表（chosen_table 优先，否则取得分最高的候选表）；
+    # 相关表都定不下来就**留空**并在 reason 里写清楚，绝不跨业务域取列。
+    _scope_models = []
+    if chosen_table:
+        _scope_models = [chosen_table]
+    elif table_candidates:
+        _m = table_candidates[0].get("table") or table_candidates[0].get("model")
+        if _m:
+            _scope_models.append(_m)
+    time_field_scope_models = _scope_models
+    if _scope_models:
+        _out_scope = [c for c in time_candidates if (c.get("model") or "") not in _scope_models]
+        if _out_scope:
+            time_candidates = [c for c in time_candidates if (c.get("model") or "") in _scope_models]
+            draft_gate_detail_chunks.append(
+                "P1-13 · 时间字段候选限定在本次相关表（%s）内，跨表列 %d 条已剔除：%s"
+                % ("、".join(_scope_models), len(_out_scope),
+                   "、".join("%s.%s" % (c.get("model"), c.get("name")) for c in _out_scope[:5]))
+            )
+    else:
+        draft_gate_detail_chunks.append(
+            "P1-13 · 未确定本次相关表，跳过时间字段选取（不跨业务域猜列）"
+        )
+
     # 4. time_field：time_constraints.candidate_columns 里选 1 条
     time_field = ""
-    time_field_reason = "time_candidates=%d 列" % len(time_candidates)
+    time_field_reason = "time_candidates=%d 列（前置过滤剔除 %d 列：%s）" % (
+        len(time_candidates), len(time_candidates_filtered),
+        "；".join("%s(%s)" % (x["loc"], x["why"][:40]) for x in time_candidates_filtered[:3]) or "无"
+    )
+    if time_candidates_filtered:
+        draft_gate_detail_chunks.append(
+            "P-B · 时间字段硬判据前置过滤剔除 %d 列：%s"
+            % (len(time_candidates_filtered),
+               "；".join("%s->%s" % (x["loc"], x["why"]) for x in time_candidates_filtered[:5]))
+        )
     if len(time_candidates) == 0:
-        draft_gate_detail_chunks.append("时间字段候选为空：TIME_WORDS 命中未命中任何列")
+        if time_field_scope_models:
+            draft_gate_detail_chunks.append(
+                "时间字段候选为空：相关表 %s 内无通过类型/语义硬判据的列"
+                % "、".join(time_field_scope_models)
+            )
+        else:
+            draft_gate_detail_chunks.append(
+                "时间字段待人工确认：本次未确定相关表，不跨业务域猜时间列"
+            )
     elif len(time_candidates) == 1:
         c = time_candidates[0]
         time_field = "%s.%s" % (c.get("model"), c.get("name"))
-        time_field_reason = "唯一命中：%s.%s（中文名=%s，hit_by=%s）" % (
+        time_field_reason = "唯一命中：%s.%s（中文名=%s，hit_by=%s，eligibility=%s）" % (
             c.get("model"), c.get("name"), c.get("label"), c.get("hit_by"),
+            c.get("_time_eligibility") or "",
         )
     else:
         # 多列：优先选列级名字直接含 date/dt/日期/时间 的第一列，列但标需人工
         c0 = time_candidates[0]
         time_field = "%s.%s" % (c0.get("model"), c0.get("name"))
-        time_field_reason = "time_candidates=%d 列，取首项（需人工确认）：%s.%s" % (
+        time_field_reason = "time_candidates=%d 列，取首项（需人工确认）：%s.%s（eligibility=%s）" % (
             len(time_candidates), c0.get("model"), c0.get("name"),
+            c0.get("_time_eligibility") or "",
         )
         draft_gate_detail_chunks.append(
             "时间字段不唯一：候选列 %s" % "、".join(
-                "%s.%s" % (c.get("model"), c.get("name")) for c in time_candidates[:5]
+                "%s.%s[%s]" % (c.get("model"), c.get("name"), c.get("_time_eligibility") or "")
+                for c in time_candidates[:5]
             )
         )
 
@@ -344,6 +412,9 @@ def plan(demand_id, dataset="B"):
         "join_path_reason": join_path_reason,
         "time_field": time_field,
         "time_field_reason": time_field_reason,
+        "time_candidates": time_candidates,
+        "time_candidates_filtered": time_candidates_filtered,
+        "time_field_scope_models": time_field_scope_models,
         "aggregate_fields": aggregate_fields,
         "field_mapping": field_mapping,
         "draft_gate": {
@@ -353,6 +424,51 @@ def plan(demand_id, dataset="B"):
         "table_candidates": table_candidates,
         "key_candidates": key_candidates,
     }
+
+    # P-E · SQL 生成阶段取证检索落 knowledge_citations（覆盖"SQL 这一时期的实际取证动作"）
+    # 与 analysis 阶段同契约：AUTO_INTERNAL 开头作审计标记，不伪装用户可见引用
+    _rq_title, _rq_desc = _demand_title_desc(demand_id)
+    if demand_id and (chosen_table or str(_rq_title or "").strip() or str(_rq_desc or "").strip()):
+        try:
+            import knowledge as _k_sg  # noqa: E402
+            if hasattr(_k_sg, "search") and hasattr(_k_sg, "record_citations_once"):
+                q_sg = "SQL_PLAN 选表=%s 时间=%s 颗粒度=%s 需求=%s" % (
+                    chosen_table or "",
+                    time_field or "",
+                    granularity or "",
+                    (str(_rq_title) + " " + str(_rq_desc))[:100].strip() or "",
+                )
+                ks_sg = _k_sg.search(q_sg[:200], top_k=4)
+                cits_sg = ks_sg.get("citations") if isinstance(ks_sg, dict) else []
+                if cits_sg:
+                    # P1-15 · 幂等键：本次 plan 的关键结论 + 命中引用 id 集合
+                    _fp_ids = "|".join(
+                        sorted(
+                            str(c.get("chunk_id") or c.get("document_id") or idx)
+                            for idx, c in enumerate(cits_sg)
+                        )
+                    )
+                    _fp_sg = "ct=%s;tf=%s;gr=%s;mods=%s;cits=%s" % (
+                        chosen_table or "", time_field or "", granularity or "",
+                        ",".join(time_field_scope_models or []) or "", _fp_ids,
+                    )
+                    rc_res = _k_sg.record_citations_once(
+                        demand_id,
+                        q_sg[:140],
+                        cits_sg,
+                        stage="sqlgen_plan_stage",
+                        actor="sqlgen_plan",
+                        fingerprint=_fp_sg,
+                        round_no=None,
+                        sql_run_id=None,
+                        dataset_id="sqlgen_plan_stage",
+                    )
+                    if isinstance(rc_res, dict):
+                        out["_sql_plan_citations_written"] = rc_res.get("inserted", 0)
+                        out["_sql_plan_citations_skipped"] = rc_res.get("skipped")
+        except Exception:  # noqa: BLE001
+            out["_sql_plan_citations_write_error"] = True
+
     return out
 
 

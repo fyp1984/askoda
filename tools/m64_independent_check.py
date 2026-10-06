@@ -156,13 +156,14 @@ def part_a_identity(sample):
 def part_b_list(sample):
     print("\n[B] sql_run_list —— 独立重算比对（total / adopted / 截断 / 筛选）")
 
-    out = mcp_call("sql_run_list", {"limit": 1000})
+    total0 = db.query_one("SELECT count(*) AS n FROM sql_runs")["n"]
+    out = mcp_call("sql_run_list", {"limit": int(total0) + 10})
     if not isinstance(out, dict) or "items" not in out:
         expect("B0 sql_run_list 可调用且返回 items", False, out)
         return
     total = out.get("total")
     items = out.get("items") or []
-    db_total = db.query_one("SELECT count(*) AS n FROM sql_runs")["n"]
+    db_total = total0
     expect("B1 total 与独立 count(*) 相符（limit 足够大时）",
            int(total or -1) == int(db_total), "接口=%s 独立=%s" % (total, db_total))
     expect("B2 items 长度 == total（未被静默截断）",

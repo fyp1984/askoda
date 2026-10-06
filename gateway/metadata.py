@@ -17,22 +17,219 @@
 `lookup(table="dwd_order_di", dataset="B")` 返回表中文名、颗粒度、字段清单
 （含中文名 / 口径 / 类型 / 是否对 AI 可见 / 敏感标记）与关联路径。
 """
+import re
+
 import db
 import registry
 
 # 口径分隔符：MDL description 里用「；口径：」把"中文名(单位)"与"计算口径"分开
 CALIBER_MARKERS = ["；口径：", "; 口径：", "；口径:", "口径："]
 
+# 括号类兜底：MDL 里也常见"中文名（备注）"这种非标准写法，括号内当 caliber 草稿
+PAREN_MARKERS_L = [("（", "）"), ("(", ")")]
+
+# 时间类型白名单（PostgreSQL + MDL 缩写）——这些类型的列才允许被当 time_field
+TIME_TYPE_WHITELIST = {
+    "date", "timestamp", "timestamptz", "timestamp without time zone",
+    "timestamp with time zone", "time", "timetz", "time without time zone",
+    "time with time zone", "interval",
+    "DATE", "TIMESTAMP", "TIMESTAMPTZ", "TIME", "INTERVAL",
+}
+
+# 黑词：label/name 里只要出现这些且不是真正时间描述 → 直接排除 time_field 候选
+TIME_FIELD_NAME_BLACKLIST = [
+    # 主键/ID 类
+    "_id", "_ID", "id", "ID", "编号", "编码", "代号", "主键", "序列",
+    # 金额/数值类
+    "元", "￥", "$", "金额", "价格", "成本", "费用", "收入", "利润",
+    "销量", "数量", "件数", "份数", "比例", "率", "折扣",
+    # 枚举/状态类
+    "类型", "状态", "级别", "等级", "分类", "标签", "标志", "标识", "说明", "渠道", "来源",
+    # 主体类（member_id/store_id 最容易被"月份"字样误伤）
+    "会员", "门店", "商品", "订单", "用户", "客户", "店铺",
+]
+# 主体类黑词需要与"是否确实是时间列"组合判断，不全杀
+TIME_FIELD_STRONG_BLACK = {"_id", "_ID", "编号", "编码", "代号", "主键"}
+
+# 时间描述正词（辅助判断——有正词可以减弱**弱黑词**，不能单独用来放行列）
+#
+# 为什么一个单字都不留（P1-12 事故根因）
+# -------------------------------------
+# 早先这里放了单字「日 / 时 / 分 / 秒 / 周」，中文子串命中几乎没有门槛：
+#   · "…便于免 JOIN 直接分析"      —— 含「分」→ 當作时间词
+#   · "当日销售额 / 当日订单数"      —— 含「日」→ 金额列被放行
+#   · "日期类型；枚举：工作日/周末/节假日" —— 含「周」→ 枚举列被放行
+# 实测后果：真需求的 time_candidates_filtered = 0（硬判据一列都没拦住），
+# A 库 products.category_name 这种纯英文思念也"通过"。所以正词一律 ≥2 字。
+TIME_FIELD_POSITIVE_WORDS = {
+    "日期", "时间", "月份", "月度", "季度", "年度", "年份", "年月",
+    "星期", "会计期", "财年", "财月", "期间",
+}
+
+# 英文时间词走词边界正则，避免 "update_by" 里的 date 子串误命中。
+# 不能用 \b —— "order_date" 里 `_` 也是词字符，\bdate 匹配不到；这里显式把
+# 字母/数字/下划线都排除在边界之外，让 order_date / created_at 能正确识别。
+_ASCII_TIME_WORD_RE = re.compile(
+    r"(?<![A-Za-z0-9])(date|datetime|dt|time|timestamp|month|year|period|quarter|day)"
+    r"(?![A-Za-z0-9])", re.I
+)
+
 
 def split_label_caliber(desc):
-    """把 MDL 的 description 拆成 (中文名, 口径)。"""
+    """把 MDL 的 description 拆成 (中文名, 口径)。
+
+    为什么要做兜底切分
+    ------------------
+    MDL 实际写作时存在非标准格式：
+      - "会员注册时间（按订单完成日期取最早一条）"——用中文括号当口径分隔
+      - "订单月份 (统计维度：按月)"——用英文括号
+    无「口径：」标记时，若检测到成对括号，括号内内容也算 caliber。
+    这样 P-B 里把"月份"+"member_id"标签错混成时间列的几率会大幅下降，
+    因为括号里若写着"会员维度唯一编码"，这些黑词会被正确识别到 caliber 里。
+    """
     if not desc:
         return None, None
+    text = desc.strip()
+    # 优先走正式口径分隔符
     for mk in CALIBER_MARKERS:
-        if mk in desc:
-            head, tail = desc.split(mk, 1)
+        if mk in text:
+            head, tail = text.split(mk, 1)
             return head.strip(), tail.strip()
-    return desc.strip(), None
+    # 兜底：成对括号
+    caliber_parts = []
+    label = text
+    for lp, rp in PAREN_MARKERS_L:
+        if lp in label and rp in label:
+            li = label.index(lp)
+            ri = label.rindex(rp)
+            if ri > li:
+                caliber_parts.append(label[li + 1:ri].strip())
+                label = (label[:li] + label[ri + 1:]).strip()
+    if caliber_parts:
+        return label, "；".join(p for p in caliber_parts if p)
+    return label, None
+
+
+def get_column_meta(dataset, table_name, column_name):
+    """查 column_docs 返回 {data_type, is_primary_key, column_label}。
+
+    纯查库函数；查不到就返回空字段，不抛错。
+    """
+    try:
+        r = db.query_one(
+            """
+            SELECT data_type, is_primary_key, column_label
+            FROM column_docs
+            WHERE dataset=%s AND table_name=%s AND column_name=%s
+            """,
+            (dataset, table_name, column_name),
+        )
+        if r:
+            return {
+                "data_type": (r.get("data_type") or "").strip(),
+                "is_primary_key": bool(r.get("is_primary_key")),
+                "column_label": (r.get("column_label") or "").strip(),
+            }
+    except Exception:
+        pass
+    return {"data_type": "", "is_primary_key": False, "column_label": ""}
+
+
+def _is_time_blacklisted_by_name(name_or_label, strong_only=False):
+    s = str(name_or_label or "")
+    for w in TIME_FIELD_STRONG_BLACK:
+        if w in s:
+            return True, "strong_black(%s)" % w
+    if strong_only:
+        return False, None
+    # 主体类 + 非时间列：member_id / 门店名称 这种需要更小心
+    any_black = False
+    why = None
+    for w in TIME_FIELD_NAME_BLACKLIST:
+        if w in s:
+            any_black = True
+            why = "weak_black(%s)" % w
+            break
+    if any_black:
+        # 如果同时有明确的日期/时间正词，弱黑词不杀——否则「会员注册月份」这种
+        # 会因为含「会员」被误杀。但主键 ID 等强黑词已在上方杀完。
+        for p in TIME_FIELD_POSITIVE_WORDS:
+            if p in s:
+                return False, None
+        return True, why
+    return False, None
+
+
+def _has_positive_time_word(*texts):
+    """是否出现明确的时间正词（中文 >=2 字词，或英文独立时间单词）。"""
+    for t in texts:
+        s = str(t or "")
+        for p in TIME_FIELD_POSITIVE_WORDS:
+            if p in s:
+                return True
+        if _ASCII_TIME_WORD_RE.search(s):
+            return True
+    return False
+
+
+def is_eligible_time_field(locator, dataset="B", label_hint=None,
+                           data_type_hint=None, is_pk_hint=None):
+    """TIME_FIELD 硬判据入口：综合类型 + 语义 + 名字三层过滤。
+
+    返回 (eligible, reason)；reason 用于 time_field_reason 的可解释性。
+    """
+    # locator = "table.column"
+    if "." not in locator:
+        return False, "locator 格式不符（需 table.column）：%s" % locator
+    table, col = locator.rsplit(".", 1)
+
+    meta = get_column_meta(dataset, table, col)
+    data_type = (data_type_hint or meta.get("data_type") or "").strip()
+    is_pk = bool(is_pk_hint if is_pk_hint is not None else meta.get("is_primary_key"))
+    label = label_hint or meta.get("column_label") or col
+
+    reasons = []
+
+    # 1. 主键强杀——但只杀「非时间类型的主键」：stat_month/stat_date 这种时间分区列
+    #    是复合主键之一，不该被杀。真正应该被杀的是 member_id 等 ID 型主键。
+    #    判据：pk=True 且 (列名含强黑词 或 类型不在时间白名单)
+    if is_pk:
+        pk_nb, _ = _is_time_blacklisted_by_name(col, strong_only=True)
+        norm_type = (data_type.split("(")[0].strip().lower()) if data_type else ""
+        pk_type_ok = any(norm_type == wt.lower() for wt in TIME_TYPE_WHITELIST) if norm_type else False
+        if pk_nb or not pk_type_ok:
+            return False, "PK 排除：%s 是 ID 型或非时间型主键（col=%s type=%s）" % (
+                locator, col, data_type or "未知"
+            )
+        else:
+            reasons.append("复合主键时间列（pk=True 但属于时间分区列，不杀）")
+    # 2. 名字强黑词（_id / 编号 / 编码 / 主键）——只看列名本身，不把 column_label
+    #    里的"表主键之一""关联 xx 主键（ID）"这类人类描述也当黑词杀。
+    nb, why_nb = _is_time_blacklisted_by_name(col, strong_only=True)
+    if nb:
+        return False, "名称黑词排除：%s @ %s" % (why_nb, locator)
+    # 3. 类型白名单 —— 这是 P-B 最核心的硬门槛
+    type_ok = False
+    if data_type:
+        # 规范化比较：去掉括号、空白
+        norm = data_type.split("(")[0].strip().lower()
+        for wt in TIME_TYPE_WHITELIST:
+            if norm == wt.lower():
+                type_ok = True
+                reasons.append("type=%s" % data_type)
+                break
+    # 3. 类型白名单是**硬门槛**：不在白名单里直接排除。
+    #    P1-12 修掉了原来「正词命中就暂放待复核」的弱通路——那条通路让
+    #    "当日销售额"（numeric）、"日期类型"（varchar 枚举）这类列一路绿灯。
+    if not type_ok:
+        return False, "类型未命中时间白名单：data_type=%s, label=%s" % (
+            data_type or "未知", label
+        )
+    # 4. 弱黑词最后一道（金额/枚举/类型 列即便时间格式也杀；明确时间正词可抵消）
+    wb, why_wb = _is_time_blacklisted_by_name(label, strong_only=False)
+    if wb and not _has_positive_time_word(col, label):
+        return False, "弱语义黑词排除：%s @ %s（label=%s）" % (why_wb, locator, label)
+    return True, "；".join(reasons) or "通过"
 
 
 # ---------------------------------------------------------------------------

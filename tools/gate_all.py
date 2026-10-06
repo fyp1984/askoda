@@ -60,16 +60,23 @@ PER_SCRIPT_ENV = {
 #              该脚本将来**别的**失败也一并赦免）
 # 加 --strict 可忽略本表（所有红项一律阻塞，用于总验收）。
 KNOWN_RED_BASELINE = {
-    ("G3", "tools/m2_verify.py"): {
-        "reason": "① 段知识底座未复位：知识检索命中 0 条（B1 报告的 P-F），待 B4 修复",
-        "match": "可召回且引用可追溯",
-    },
-    ("G2", "tools/rules_rework_check.py"): {
-        "reason": ("R1 方向判据过宽：A 库『从一端发起 JOIN 到多端』仍误报 2 例"
-                   "（聚合的是多端列，不放大），待 B2c 细化后移除"),
-        "match": "质量缺陷",
-    },
 }
+# 历史沿革（本表当前为空，说明所有曾登记的已知红项都已真修好）：
+#
+# · ("G2", "tools/rules_rework_check.py") —— B2c 已移除。R1 梯次(1) 细化为
+#   「方向 + 聚合列归属」两级判据，只聚合多端列不再误报，退出码转 0。
+#
+# · ("G3", "tools/m2_verify.py") —— **B4b 已移除**（原指纹「可召回且引用可追溯」）。
+#   当时红因是 embedding 上游断供：RAGFlow 的 `tenant_model_instance.extra.base_url`
+#   写死远端 TEI `100.103.240.78:18001`（已宕），而 RAGFlow 每次检索都现调
+#   embedding、不缓存查询向量，于是 knowledge_search 全量
+#   `EmbeddingError('Connection error.')`、命中恒为 0。
+#   修法见 `.models/README.md`：本地起 bge-m3 TEI（compose 服务 `tei-embedding`），
+#   把 base_url 改为 host.docker.internal:18002。实测 m2_verify 22/22 通过、
+#   退出码 0，V12「可召回且引用可追溯」与 V12c「口语化问句可召回」均转绿。
+#   规则是「只登记已知待修，修好必须移除」，故此处不再保留。
+#
+# 留着的危害：known-red 长期挂账，会把真实红项一并赦免。
 
 
 # ---------------------------------------------------------------------------
