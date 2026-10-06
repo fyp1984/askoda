@@ -159,6 +159,34 @@ def _term_variants(raw):
     return out
 
 
+# P1-14 · 口径表达式词条质量门槛
+#
+# 列的 description 里除了业务口径，还有大量**说明性套话**。把它们切开当词条会
+# 造成两类误命中（均已实测）：
+#   · 套话被需求文本命中 → 无关列被拉成字段候选（"表主键之一"→stat_date、
+#     "联合唯一"→member_id、"关联"→store_id、"分析一律用此字段"→order_date）
+#   · 两字词沦为噪声（"关联"）；且会顶掉枚举身份，把「美妆」这种过滤值升成字段
+_CALIBER_MIN_LEN = 3
+_CALIBER_STOPWORDS = (
+    "主键", "唯一", "无其他", "一律", "不建模", "未建模", "便于", "冗余", "取值", "之一",
+    "同上", "详见", "参考", "假设", "示例", "本字段", "该字段", "待补", "禁用", "禁止",
+    "存当月", "快照", "退化", "免 JOIN",
+)
+
+
+def _is_quality_caliber_phrase(p):
+    """这段短语值不值得当词表词条？只放真正的业务词。"""
+    p = (p or "").strip()
+    if len(p) < _CALIBER_MIN_LEN:
+        return False
+    if not re.search(r"[\u4e00-\u9fa5]", p):
+        return False
+    for w in _CALIBER_STOPWORDS:
+        if w in p:
+            return False
+    return True
+
+
 def build_lexicon(dataset="B"):
     """从元数据字典 + 口径词表构建中文领域词表。
 
@@ -202,6 +230,8 @@ def build_lexicon(dataset="B"):
                 }
             )
 
+    import metadata as _md_ev  # noqa: E402
+
     # 字段中文名 + 口径
     for c in db.query(
         "SELECT table_name, column_name, column_label, data_type, is_sensitive, description "
@@ -212,6 +242,7 @@ def build_lexicon(dataset="B"):
         descr = (c["description"] or "").strip()
         if c["is_sensitive"]:
             continue  # 未建模字段不进词表：它们对 AI 本就不可见
+        _lbl, _cal = _md_ev.split_label_caliber(descr)
         for t in _term_variants(label):
             terms.append(
                 {
@@ -223,11 +254,63 @@ def build_lexicon(dataset="B"):
                     "column": c["column_name"],
                     "data_type": c["data_type"],
                     "definition": descr,
+                    "caliber": _cal or "",
                     "level": "P6",
                     "source": "column_docs",
                     "locator": "%s.%s" % (c["table_name"], c["column_name"]),
                 }
             )
+        # P-C · 口径表达式里的业务词条也作为命中源
+        # 典型：description = "会员消费金额；口径：近30天完成支付的订单金额合计，按支付日期统计"
+        # → 口径里的「近30天」「订单金额」「支付日期」这些会被识别到本字段，而非仅 label "会员消费金额"
+        if _cal:
+            # 括号里是「美妆/个护/食品/…」这种**取值清单**时，按枚举值入词表，
+            # 而不是当口径短语：取值是过滤条件，不是字段名（P1-14）。
+            # 只认**斜杠分隔的纯取值清单**（美妆/个护/食品…）。若还夹别的描述
+            # （如 "月粒度，存当月1日"）就不是清单，仍按口径短语处理。
+            _parts = [clean_label(p) for p in re.split(r"[/／]", _cal)]
+            _as_enum = (
+                len(_parts) >= 2
+                and all(2 <= len(p) <= 6 for p in _parts)
+                and all(re.search(r"[\u4e00-\u9fa5]", p) for p in _parts)
+                and len(_cal.strip()) <= sum(len(p) for p in _parts) + len(_parts) + 2
+            )
+            if _as_enum:
+                for v in _parts:
+                    terms.append(
+                        {
+                            "term": v,
+                            "kind": "enum",
+                            "canonical": "%s.%s=%s" % (c["table_name"], c["column_name"], v),
+                            "label": v,
+                            "table": c["table_name"],
+                            "column": c["column_name"],
+                            "definition": "取值清单（来自列口径括号）",
+                            "level": "P6",
+                            "source": "column_docs_caliber_enum",
+                            "locator": "%s.%s=%s" % (c["table_name"], c["column_name"], v),
+                        }
+                    )
+            else:
+                for phrase in _phrases_from_text(_cal):
+                    if not _is_quality_caliber_phrase(phrase):
+                        continue
+                    terms.append(
+                        {
+                            "term": phrase,
+                            "kind": "caliber_expression",
+                            "canonical": "%s.%s" % (c["table_name"], c["column_name"]),
+                            "label": label,
+                            "table": c["table_name"],
+                            "column": c["column_name"],
+                            "data_type": c["data_type"],
+                            "definition": _cal,
+                            "source_caliber": _cal,
+                            "level": "P6",
+                            "source": "column_docs_caliber",
+                            "locator": "%s.%s" % (c["table_name"], c["column_name"]),
+                        }
+                    )
         # 枚举值（门店类型/会员等级/订单状态…）
         m = ENUM_RE.search(label or "") or ENUM_RE.search(descr)
         if m:
@@ -285,8 +368,17 @@ def build_lexicon(dataset="B"):
     return sorted(best.values(), key=lambda x: -len(x["term"]))
 
 
-# 词条种类优先级：口径类 > 字段类 > 表类 > 枚举。用于同名词条去重。
-_KIND_PRIO = {"glossary": 0, "glossary_phrase": 1, "column": 2, "table": 3, "enum": 4}
+# 词条种类优先级：口径术语 > 口径短语 > 字段名 > 表 > 枚举 > 字段口径表达式
+#
+# 为什么 caliber_expression 现在垫底（P1-14）
+# ------------------------------------------
+# 早先把它排在 column(2) 之后、enum(4) 之前，结果 description 里写着的枚举取值
+# （"美妆/个护/食品…"）被同源的 caliber_expression 顶掉 enum 身份，
+# 于是问句里出现「美妆」时被当成**字段候选**（hit_by=mdl_caliber_expression），
+# 而它其实是「过滤值」。字段的身份只应由 glossary / column / table 决定，
+# 口径表达式只能做最后的补充说明，因此排在枚举之后（数值最大）。
+_KIND_PRIO = {"glossary": 0, "glossary_phrase": 1, "column": 2, "table": 3,
+              "enum": 4, "caliber_expression": 5}
 
 
 def _kind_prio(t):
@@ -432,6 +524,7 @@ def collect(demand=None, demand_id=None, dataset="B", lexicon=None, knowledge_mo
 
     # ---- P4 / P5 知识库文档 ----
     n4 = n5 = 0
+    citations_recorded_result = None
     if knowledge_mod is not None and text:
         try:
             ks = knowledge_mod.search(text[:200], top_k=6)
@@ -459,6 +552,58 @@ def collect(demand=None, demand_id=None, dataset="B", lexicon=None, knowledge_mo
                 "fallback_query": ks.get("fallback_query"),
                 "documents": ks.get("source_names") or [],
             }
+            # P-E · 主链路内部取证检索必须落 knowledge_citations 审计表
+            # 「不伪装用户可见引用」实现方式：
+            #   1) question 字段显式以 "AUTO_INTERNAL" 开头作 audit 语义解释
+            #   2) dataset_id 写 "evidence_collect_stage"，round_no 未确定时 NULL
+            #   3) 当且仅当 demand_id 真的传了（非 None 非空）才落表
+            cits_auto = ks.get("citations") or []
+            if demand_id and cits_auto and hasattr(knowledge_mod, "record_citations"):
+                # P1-15 · 幂等：同一需求、同一检索结果只落一次审计行。
+                # 指纹含 query + 命中引用 id 集合；内容没变就跳过，避免重跑线性膨胀。
+                try:
+                    _fp_ev = "q=%s;cits=%s" % (
+                        (text or "")[:120],
+                        "|".join(
+                            sorted(
+                                str(c.get("chunk_id") or c.get("document_id") or i)
+                                for i, c in enumerate(cits_auto)
+                            )
+                        ),
+                    )
+                    if hasattr(knowledge_mod, "record_citations_once"):
+                        citations_recorded_result = knowledge_mod.record_citations_once(
+                            demand_id,
+                            (text or "")[:120],
+                            cits_auto,
+                            stage="evidence_collect_stage",
+                            actor="analysis_pipeline",
+                            fingerprint=_fp_ev,
+                            round_no=None,
+                            sql_run_id=None,
+                            dataset_id="evidence_collect_stage",
+                        )
+                    else:  # 注入的知识模块只有老接口时退回原写法
+                        qtext = (
+                            "AUTO_INTERNAL_EVIDENCE_COLLECT"
+                            " · actor=analysis_pipeline"
+                            " · stage=build_evidence_collect_P4P5"
+                            " · query=%s"
+                        ) % ((text or "")[:140])
+                        citations_recorded_result = knowledge_mod.record_citations(
+                            demand_id, qtext, cits_auto,
+                            round_no=None, sql_run_id=None,
+                            dataset_id="evidence_collect_stage",
+                        )
+                    status["P4/P5"]["citations_written"] = (
+                        citations_recorded_result.get("inserted", 0)
+                        if isinstance(citations_recorded_result, dict) else 0
+                    )
+                    if isinstance(citations_recorded_result, dict) and citations_recorded_result.get("skipped"):
+                        status["P4/P5"]["citations_skipped"] = citations_recorded_result.get("skipped")
+                except Exception:  # noqa: BLE001
+                    # 审计表写入失败不影响主链路取证
+                    status["P4/P5"]["citations_write_error"] = True
         except Exception as e:  # noqa: BLE001
             status["P4/P5"] = {"ok": False, "count": 0, "error": str(e)[:160]}
     else:
