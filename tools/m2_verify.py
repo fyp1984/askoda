@@ -289,8 +289,9 @@ def main():
     kh = mcp.call("knowledge_health")
     rep.add("V11", "RAGFlow 与网关连通",
             kh.get("ok") is True and bool(kh.get("dataset")),
-            "数据集=%s 文档=%s 嵌入=%s"
-            % ((kh.get("dataset") or {}).get("name"),
+            "底座=%s endpoint=%s 文档=%s 嵌入=%s"
+            % (kh.get("base"),
+               kh.get("endpoint"),
                (kh.get("dataset") or {}).get("documents"),
                (kh.get("dataset") or {}).get("embedding_model")))
 
