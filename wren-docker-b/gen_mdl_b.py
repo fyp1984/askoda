@@ -66,6 +66,7 @@ models = [
             col("stat_date", "date", "统计日期（表主键之一）", pk=True),
             col("store_id", "integer", "门店ID（关联 dim_store）"),
             col("sales_amount", "numeric", "当日销售额（元）"),
+            col("sales_qty", "integer", "当日销售件数（件）；口径：销量≠销售额(金额)≠订单数(笔数)"),
             col("order_cnt", "integer", "当日订单数"),
             col("member_cnt", "integer", "当日下单会员数"),
             col("area_sqm", "numeric", "门店经营面积（平方米）；口径：坪效=销售额/面积"),

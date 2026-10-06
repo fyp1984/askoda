@@ -160,6 +160,11 @@
           "description": "当日销售额（元）"
         },
         {
+          "name": "sales_qty",
+          "type": "integer",
+          "description": "当日销售件数（件）；口径：销量≠销售额(金额)≠订单数(笔数)"
+        },
+        {
           "name": "order_cnt",
           "type": "integer",
           "description": "当日订单数"
