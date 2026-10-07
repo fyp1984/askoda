@@ -266,6 +266,8 @@ askoda/
 - Docker (OrbStack / Docker Desktop 4.28+ recommended)
 - Python 3.11+ (only for running local tool scripts; not needed to operate the server)
 - Docker Compose V2 (`docker compose` subcommand available)
+- **Tailscale** (only for knowledge retrieval, see 5.3; without it that capability is fully down)
+- **Node.js 18+ / npm** (only if you modify `web/src/`, see 5.2; not needed to just run the stack)
 
 ### 5.2 3-Step Boot
 
@@ -276,9 +278,30 @@ cp .env.example .env
 # 2. One-click start all services (first run builds the gateway image, ~1–3 min)
 docker compose up -d
 
-# 3. Check status — all 7 services must be healthy
+# 3. Check status
 docker compose ps
 ```
+
+**How to read step 3**: the `STATUS` column only shows `(healthy)` for services that **have a
+healthcheck**. In this project **`wren-mcp-a`, `wren-mcp-b` and `assistant-minio` have no
+healthcheck** (not defined in compose, and the images don't ship one), so they only ever show
+`Up x days` — **that is normal and does not mean they failed to start**.
+To check readiness, look at these instead: `gateway`, `bff`, `assistant-postgres`,
+`wren-postgres-a` and `wren-postgres-b` should show `(healthy)`, and neither `gateway` nor
+`bff` should be `Restarting`.
+
+A more reliable check is to hit the gateway health endpoint directly (it actually walks both
+dataset connections):
+
+```bash
+curl -s http://127.0.0.1:18080/healthz
+```
+
+`status=ok` means both datasets are reachable; if you get `degraded`, inspect the `components`
+field to find which one is down.
+
+> The service count varies with the profile in use (trust `docker compose config --services`):
+> 8 by default; 9 with `--profile local-embed` (adds `tei-embedding`, the local backup embedding).
 
 Rebuild after changing `gateway/` source:
 
@@ -291,7 +314,171 @@ docker compose up -d --build
 > BUILDX_CONFIG="$PWD/.buildx" docker compose build gateway
 > ```
 
-### 5.3 Interfaces
+> **Frontend build artifacts are committed, so a fresh clone works out of the box — but any
+> change under `web/src/` requires a rebuild to take effect.**
+>
+> The Vite output in `bff/static/` **is tracked in git** (`index.html` + `assets/*`), so you can
+> open the frontend right after cloning without building anything. However, BFF only serves
+> `bff/static/` verbatim — **it cannot and does not compile TypeScript**. Anything you change
+> under `web/src/` stays invisible until you rebuild and overwrite `bff/static/` (the symptom is
+> "I edited the code and the page didn't change").
+>
+> After editing `web/src/`:
+>
+> ```bash
+> cd web && npm install && npm run build
+> ```
+>
+> Vite writes the output into `bff/static/`; then just refresh the browser (in non-dev mode run
+> `docker compose restart bff` so BFF re-reads the mount; in dev mode the whole directory is
+> mounted, so a refresh is enough). This is why Node.js 18+ and npm are required locally —
+> **but you don't need Node at all if you only run the stack without touching the frontend**.
+
+### 5.3 External Dependencies & Known Limitations
+
+**Read this before deploying on a new machine.** This project is *not* self-contained: the
+knowledge-retrieval path depends on **an external host**, and **the knowledge backend is not yet
+deployed as an independent stack**. Skipping this section leaves you with a system where
+everything works except retrieval, which is fully down — with no error telling you what's missing.
+
+#### 5.3.1 Remote embedding service (a hard dependency of knowledge retrieval)
+
+| Item | Value |
+|---|---|
+| Address | `http://100.103.240.78:18001/v1` |
+| Tailscale node | `sevensmile.tailb5e44d.ts.net` |
+| Model | `bge-m3` (fixed, not swappable) |
+| Consumed by | RAGFlow, which calls it per retrieval to embed the query |
+
+**What happens when it's down**: knowledge retrieval is **fully down**, not degraded. RAGFlow
+does not cache query vectors — it calls the embedding service on every `/api/v1/retrieval`
+request — so if this address is unreachable, every retrieval request fails with
+`EmbeddingError code=100` (surfacing as a total `knowledge_search` failure).
+
+**Tailscale is a prerequisite**: this is a Tailscale-internal address, so **without a logged-in
+Tailscale client it simply cannot be reached**. If a new machine has Tailscale installed but not
+logged in, retrieval is guaranteed to fail — that's a network-layer problem, not a config typo.
+
+Check connectivity first (depends on nothing in this project):
+
+```bash
+curl -s -m 8 --noproxy '*' -o /dev/null -w "HTTP=%{http_code}\n" \
+  -X POST "http://100.103.240.78:18001/v1/embeddings" \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"health probe","model":"/models/bge-m3"}'
+# expect: HTTP=200
+```
+
+#### 5.3.2 Local backup embedding and primary/standby switching
+
+A local TEI instance is kept as a **standby**, but it carries `profiles: ["local-embed"]` in
+compose, so it **does not start by default** — seeing **0** `tei-embedding` entries in
+`docker compose config --services` is expected.
+
+When you need it (primary is down, or you want to run locally):
+
+```bash
+# start the local standby (first run must fetch the model: ./.models/fetch_bge_m3.sh "$PWD/bge-m3")
+docker compose --profile local-embed up -d tei-embedding
+```
+
+> The host port is controlled by `TEI_EMBEDDING_PORT` (default `18002`). The amd64 image runs
+> emulated on arm64, and **model load + warm up takes roughly 40–180s in practice** — `/health`
+> being unreachable during that window is normal, don't declare failure too early.
+
+Use `tools/embedding_failover.sh` to switch between primary and standby (it rewrites `base_url`
+in RAGFlow's MySQL; **verified to take effect immediately, no RAGFlow restart required**):
+
+| Command | Effect |
+|---|---|
+| `bash tools/embedding_failover.sh status` | Show which one is active + probe both |
+| `bash tools/embedding_failover.sh check` | Probe only, primary and standby, **changes nothing** |
+| `bash tools/embedding_failover.sh auto` | Decide automatically: fall back to standby if primary is down, back to primary if standby is down (300s cooldown against flapping) |
+| `bash tools/embedding_failover.sh switch-back` | primary → standby (starts the local TEI for you) |
+| `bash tools/embedding_failover.sh switch-main` | standby → primary (back to the remote host) |
+
+> This script depends on the RAGFlow MySQL container `filebay-knowledge-trial-mysql-1`, which
+> belongs to the "legacy bound stack" described below — **if that stack isn't running, the script
+> can't read the current target and `status` will report "read failed"**.
+
+#### 5.3.3 ⚠️ The knowledge backend is NOT yet independently deployed (no sugar-coating)
+
+**This is the most important item in this section: RAGFlow is currently not an independent
+stack. That has not been achieved physically yet.**
+
+The actual situation:
+
+- The `127.0.0.1:19380` entry point is served by an **nginx proxy** (`ekos-ragflow-proxy`);
+- its **backend is still the `ragflow-cpu` container inside the legacy bound stack (FileBay
+  stack)**, together with its MySQL / Elasticsearch / Redis / MinIO, all still under
+  `filebay-knowledge-trial-*`;
+- in other words: **RAGFlow is not part of this project's `docker compose` orchestration.**
+  There is **no** RAGFlow among the 8 services this repo starts — `docker compose up -d`
+  **will not** bring it up.
+
+Current state:
+
+| Capability | Status |
+|---|---|
+| Dual mock datasets via Wren, metadata collection, requirement intake, attachments, semantic analysis | ✅ self-contained in this stack; `docker compose up -d` is enough |
+| Knowledge retrieval `knowledge_search` / `knowledge_citation_list` | ⚠️ **depends on the external stack** — it must be started separately or these tools are unavailable |
+
+To make knowledge retrieval work on a new machine, **you must first bring up that legacy bound
+stack (FileBay stack) on the host**. Running only this repo's `docker compose up -d` is
+**not enough**.
+
+> This is tracked internally as tech debt P1-1. The gateway side is implemented with **no
+> fallback branch**: when RAGFlow is unavailable it reports the error honestly and **never
+> silently degrades into fake results** — a deliberate choice, since an honest error beats
+> plausible-looking wrong data for business users.
+
+### 5.4 Data Preparation Before First Run (required for business users)
+
+**On a fresh machine both the metadata tables and the knowledge base are empty.** You must
+collect / ingest first, otherwise:
+
+- semantic analysis gets no slot candidates at all (it doesn't know which tables or fields exist);
+- knowledge citations are always empty (nothing has been ingested to retrieve);
+- the UI loads and you can submit a requirement, but **every result comes back empty** — easily
+  misdiagnosed as "the system is broken".
+
+The repo ships **4 ready-made knowledge documents** under `knowledge/` (metric definitions, data
+security policy, table structure & granularity notes, requirement intake procedure), so ingesting
+them takes one command.
+
+**Step 1: collect metadata** (introspect both mock databases into the metadata dictionary)
+
+```bash
+# collect from dataset A + B, and seed the business glossary along the way
+python tools/collect_metadata.py --dataset A --dataset B --seed-glossary
+```
+
+> `--dataset` is repeatable (`A` / `B`, the two mock databases). `--seed-glossary` seeds the
+> business glossary — recommended, otherwise glossary Q&A hit rate suffers. A non-zero exit code
+> means the consistency self-check failed; the output lists the physically missing fields.
+> Default `--engine native` (via `information_schema`, no extra dependencies); add
+> `--engine schemacrawler` to cross-check with the SchemaCrawler backend (requires local docker).
+
+**Step 2: ingest the knowledge base** (upload `knowledge/*.md` into RAGFlow and trigger parsing)
+
+```bash
+# ingest every .md under knowledge/ and wait for parsing to finish
+python tools/ingest_knowledge.py
+
+# inspect current ingestion/parse status without uploading (for troubleshooting)
+python tools/ingest_knowledge.py --status
+```
+
+> Preconditions: the legacy bound stack from 5.3.3 must be up, and `KNOWLEDGE_API_KEY` /
+> `KNOWLEDGE_DATASET_ID` must be **filled in** in `.env` (otherwise the script exits with
+> "未配置 KNOWLEDGE_API_KEY"). Parsing is asynchronous; the script waits up to 180s by default
+> (`--wait` to change it). Note this script runs on the **host**, so `host.docker.internal` in
+> `.env` is rewritten back to `127.0.0.1`.
+
+After both steps, `/healthz` and semantic analysis have complete data. Skipping them still
+leaves the rest of the stack usable — only the knowledge-related capabilities are empty.
+
+### 5.7 Interfaces
 
 | Item | URL | Notes |
 |---|---|---|
@@ -305,7 +492,7 @@ docker compose up -d --build
 
 Gateway host port is `18080` (not `8080`) because port `8080` is reserved for the local demo server `demo/demo-server.py`.
 
-### 5.4 Troubleshooting FAQ
+### 5.8 Troubleshooting FAQ
 
 | Symptom | Root Cause | Fix |
 |---|---|---|
@@ -314,10 +501,14 @@ Gateway host port is `18080` (not `8080`) because port `8080` is reserved for th
 | Knowledge API reports `host.docker.internal` unreachable | RAGFlow not running on host or different network | Set actual reachable `KNOWLEDGE_API_URL` in `.env`, or leave blank — `degraded_sources` will report honestly |
 | Volume `wren-pgdata` says `external volume not found` | Fresh host, no legacy volume from single-stack era | Change `WREN_PG_VOLUME=askoda_wren-pgdata` in `.env` or drop `external: true` to let compose manage it |
 | `tools/*_selftest.py` raises ModuleNotFoundError | Some self-tests import gateway internals | Pure offline self-tests (`gates` / `rules` / `masking` / `knowledge` / `evidence` / `semantics`) run directly on the host; those that genuinely need internals: `docker cp` into container + run with `PYTHONPATH=/app` per the script header |
+| Knowledge retrieval reports `未配置知识库 API Key` | `KNOWLEDGE_API_KEY` is empty in `.env`. After `cp .env.example .env` this key is **empty by default**, and `knowledge.py` in the gateway hard-fails on it | Put a real `KNOWLEDGE_API_KEY` (obtained from the RAGFlow side) in `.env`, then `docker compose up -d gateway` to recreate the container so the env var takes effect; `tools/ingest_knowledge.py` reads the same key |
+| Knowledge retrieval reports `EmbeddingError` (code=100) | The remote embedding service `100.103.240.78:18001` is unreachable. RAGFlow doesn't cache query vectors and calls the embedding service per retrieval, so an unreachable address kills all retrieval | Follow 5.3.1 to confirm Tailscale is logged in; `curl` the probe above expecting HTTP 200; if it fails run `bash tools/embedding_failover.sh auto` to fall back to the local standby (requires the legacy bound stack from 5.3.3) |
+| Frontend 404 / static assets (`/assets/*.js`) fail to load | `bff/static/` is missing or stale. If you changed `web/src/` without rebuilding, the page references hash filenames that don't exist | First confirm there are files under `bff/static/assets/`; then run `cd web && npm install && npm run build` to regenerate, followed by `docker compose restart bff` |
+| Wren MCP not ready on cold start, first call fails | Wren Engine needs 30–60s to boot, and the gateway's `depends_on` only waits for `service_started` (neither service has a healthcheck, so readiness can't be detected) | `docker compose restart gateway` to make the gateway re-handshake; or wait a minute and retry, and watch `docker compose logs wren-mcp-a` for progress |
 
 ---
 
-### 5.5 MCP Capability Map (41 Tools · 9 Domains)
+### 5.9 MCP Capability Map (41 Tools · 9 Domains)
 
 <a id="mcp-tools"></a>
 
@@ -481,20 +672,20 @@ curl -s -X POST http://127.0.0.1:18080/mcp \
 
 ---
 
-### 5.6 MCP Operations & Version-Upgrade Guide
+### 5.10 MCP Operations & Version-Upgrade Guide
 
 <a id="mcp-ops"></a>
 
-#### 5.6.1 Pre/post-integration self-check (3 steps)
+#### 5.10.1 Pre/post-integration self-check (3 steps)
 
 1. `curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool` → `status` should be `ok` (the knowledge base is reported separately; if down it degrades honestly without taking the gateway down);
 2. Client `tools/list` → should be **41**;
 3. Smoke test: call `datasets` and confirm both datasets (A / B) are registered.
 
-#### 5.6.2 Common operations
+#### 5.10.2 Common operations
 
 ```bash
-docker compose ps                 # are all 7 services healthy?
+docker compose ps                 # check status (wren-mcp-a/b and assistant-minio have no healthcheck — plain "Up" is normal, see 5.2)
 docker compose up -d --build      # rebuild after changing gateway/
 python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # dual liveness (HTTP + MCP, also calls gateway_health for real)
 python3 tools/mcp_acceptance_check.py                                 # verify all 41 tools one by one
@@ -502,7 +693,7 @@ python3 tools/mcp_acceptance_check.py                                 # verify a
 
 > ⚠️ Container code is flattened to `/app`, but `tools/` is not in the build context — `docker cp` before running in-container scripts. HTTP-based scripts **must run on the host**; inside the container they get connection refused.
 
-#### 5.6.3 Version identifiers (the table people mix up during upgrades)
+#### 5.10.3 Version identifiers (the table people mix up during upgrades)
 
 | Identifier | Where it appears | Meaning | When it changes |
 |---|---|---|---|
@@ -516,7 +707,7 @@ python3 tools/mcp_acceptance_check.py                                 # verify a
 
 > Key reminder: the `4.0.10` reported in the MCP handshake is the **FastMCP library version, not the gateway version**. Use `gateway_health.version` (currently `0.3.0`) whenever you talk about the gateway version.
 
-#### 5.6.4 Upgrade checklist (mandatory when the tool surface changes)
+#### 5.10.4 Upgrade checklist (mandatory when the tool surface changes)
 
 After editing `gateway/app.py` (adding/removing `@mcp.tool`), do the following in order:
 
@@ -530,7 +721,7 @@ After editing `gateway/app.py` (adding/removing `@mcp.tool`), do the following i
 
 ---
 
-### 5.7 Manual MCP Verification
+### 5.11 Manual MCP Verification
 
 To manually verify all 41 tools at the lowest cost, follow the steps in the project documentation workspace (MCP Manual Verification Plan). Fastest path: run `tools/mcp_acceptance_check.py` once for a machine-level verdict, then walk the 8-step chain in 5.5 with **a single** requirement record (covering ~30 tools), and finally fill in the dependency-free probes and negative checks.
 

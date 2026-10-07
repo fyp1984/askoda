@@ -64,6 +64,15 @@ export const api = {
     post<SimilarPrecheckResp>('/demand/similar-precheck', body),
 
   createDemand: (body: Record<string, unknown>) => post<Record<string, unknown>>('/demand', body),
+  demandList: (args: { status?: string; limit?: number; offset?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (args.status) q.set('status', args.status)
+    q.set('limit', String(args.limit ?? 20))
+    q.set('offset', String(args.offset ?? 0))
+    return request<DemandListResp>(`/demand?${q.toString()}`)
+  },
+  setDemandStatus: (demandId: string, body: { status: string; note?: string; actor?: string }) =>
+    post<Record<string, unknown>>(`/demand/${encodeURIComponent(demandId)}/set-status`, body),
   analyze: (demandId: string, dataset: string, actor: string) =>
     post<Record<string, unknown>>(`/demand/${encodeURIComponent(demandId)}/analyze`, { dataset, actor }),
   e2eStatus: (demandId: string, dataset = 'B') =>
@@ -80,6 +89,15 @@ export const api = {
   citations: (demandId: string) =>
     request<{ ok: boolean; source?: string; total?: number; items?: unknown[]; degraded_reason?: string }>(
       `/demand/${encodeURIComponent(demandId)}/citations`,
+    ),
+
+  // ---- 审计回放（技术人员视角的完整判断链）----
+  // version 传 0 取最近一次；传 n 取第 n 次执行（从 1 起）。
+  // BFF 已把「第 n 次」与列表项的对应关系算好（versions[].version_idx），
+  // 前端直接回传该项的 version_idx 即可，不要自己拿数组下标推。
+  sqlRunReplay: (demandId: string, version = 0) =>
+    request<SqlRunReplayResp>(
+      `/demand/${encodeURIComponent(demandId)}/replay?version=${version}`,
     ),
 
   // ---- M8 菜单① 语义层 · MDL 字典 ----
@@ -184,6 +202,34 @@ export type SimilarPrecheckResp = {
   items: Array<{ demand_id: string; title?: string; similarity: number; status?: string }>
 }
 
+/** 需求列表项（跟随网关 demand_list 实盘返回）。 */
+export type DemandListItem = {
+  demand_id: string
+  title?: string
+  status?: string
+  created_at?: string
+  attachment_count?: number
+  version?: number
+}
+
+export type DemandListResp = {
+  total?: number
+  returned?: number
+  status_filter?: string | null
+  items?: DemandListItem[]
+}
+
+/** 需求状态机取值，与 gateway/demand.py STATUSES 一致（服务端会再校验一次）。 */
+export const DEMAND_STATUSES = [
+  '待分析',
+  '分析中',
+  '待业务确认',
+  '待补充修改',
+  '待审核通过',
+  '已通过',
+  '已退回',
+] as const
+
 export type PartialError = {
   block: string
   tool: string
@@ -257,4 +303,69 @@ export type SqlExecResp = {
   deliverable?: boolean
   deliverable_reason?: string
   adopted?: boolean
+}
+
+// ---- 审计回放 ----
+/** 一次执行的版本清单项（由 BFF 按「第 N 次」编号，前端直接回传 version_idx 即可回放）。 */
+export type ReplayVersion = {
+  version_idx: number
+  sql_run_id: string
+  created_at?: string
+  review_status?: string
+  adopted?: boolean
+  generator_model?: string
+  actor?: string
+  requirement_version?: number | null
+  schema_version?: string
+  pack_version?: string | null
+  generated_sql_preview?: string
+}
+
+/** 单个版本的完整判断链快照（网关 sql_run_replay 实盘返回）。 */
+export type ReplaySnapshot = {
+  demand_id: string
+  sql_run_id: string
+  version_idx: number
+  created_at?: string
+  actor?: string
+  input?: {
+    structured_requirement?: unknown
+    structured_requirement_version_resolved?: number | null
+    pack_version?: string | null
+    schema_version?: string
+    requirement_version?: number | null
+  }
+  sql?: {
+    generated_sql?: string
+    final_delivery_sql?: string
+    adopted?: boolean
+  }
+  review?: {
+    status?: string
+    detail?: { layers?: GateLayer[]; review_notes?: string } | null
+  }
+  result?: {
+    row_count?: number
+    validation_result?: Record<string, any>
+    suspicious_signals?: unknown[]
+  }
+  knowledge_citations?: Array<{
+    citation_id: string
+    document_name?: string
+    chunk_id?: string
+    question?: string
+    similarity?: number
+    retired_at?: string | null
+    retired_reason?: string | null
+  }>
+  gaps?: string[]
+}
+
+export type SqlRunReplayResp = {
+  ok: boolean
+  demand_id: string
+  total: number
+  versions: ReplayVersion[]
+  replay: ReplaySnapshot | null
+  notice?: string
 }

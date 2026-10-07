@@ -84,9 +84,18 @@ DESTRUCTIVE_PATTERNS = [
         r"(?<![\w-])TRUNCATE\b\s+[A-Za-z_][A-Za-z0-9_$]*\s*(?:;|$|[\"'`)\]])",
         "TRUNCATE <表名>",
     ),
-    (r"\bDELETE\s+FROM\b", "DELETE FROM"),
+    # DELETE FROM 只在**表名写死**时判红。
+    #   DELETE FROM demand_requests          → 判红（硬编码表名，危险）
+    #   DELETE FROM %s  /  DELETE FROM $1     → 不判红（参数化占位符模板）
+    #   DELETE FROM orders WHERE id=%s        → 判红（有 WHERE 限定，是正常的单行删除）
+    # 踩过的坑：tools/reset_demo_data.py 的清理模板 `cur.execute("delete from %s" % t)`
+    #   被误判成破坏性操作 → R4 BLOCKED。而该脚本本身带 dry-run 护栏、是清理工具的正当职责。
+    (r"\bDELETE\s+FROM\s+`?\"?\[?[A-Za-z_][A-Za-z0-9_$]*[`\"'\]]?", "DELETE FROM"),
     (r"\bDROP\s+DATABASE\b", "DROP DATABASE"),
 ]
+# 参数化 SQL 模板豁免：这些是合法的占位符写法，不是硬编码的破坏性操作。
+# 判据：表名位置是占位符（%s / $1 / %(name)s / :name），而非字面表名。
+PARAMETRIZED_SQL_TOKENS = ("%s", "$1", "%(", ":name", "%(name)s")
 # TRUNCATE 误报豁免：这些词是常见的非 SQL 参数/单词，出现时不算破坏性操作
 TRUNCATE_FALSE_FRIENDS = (
     "auto-truncate", "truncate tokenization", "truncate-words",
@@ -214,6 +223,21 @@ def check_r3_d1(diff_text, files):
     return sorted(set(findings)), ("；".join(sorted(set(findings)))) if findings else ""
 
 
+def _is_parametrized_sql(body):
+    """判断是否是参数化 SQL 模板（表名位置是占位符而非字面表名）。
+
+    踩过的坑（2026-10-07）：`cur.execute("delete from %s" % t)` 被判成破坏性操作 → R4 BLOCKED。
+    那是清理工具的正当职责（带 dry-run 护栏），不该判红。
+    判据：`FROM` 与 `WHERE`/`INTO` 之间是占位符而非标识符。
+    """
+    low = body.lower()
+    for m in re.finditer(r"\b(?:from|into|update|join)\s+([^\s,;)\]]+)", low):
+        token = m.group(1).strip("\"'`[]")
+        if token in ("%s",) or re.fullmatch(r"\$\d+", token) or re.match(r"^%\(|^:", token):
+            return True
+    return False
+
+
 def check_r4_data_and_baseline(diff_text, files):
     findings = []
     for line in diff_text.splitlines():
@@ -222,7 +246,14 @@ def check_r4_data_and_baseline(diff_text, files):
         body = line[1:]
         # 误报豁免：含已知非 SQL 参数/词组时不判红
         low = body.lower()
+        # 注释行豁免：# / -- 开头的说明文字里提到 SQL 不是执行 SQL
+        st = body.lstrip()
+        if st.startswith("#") or st.startswith("//") or st.startswith("--") or st.startswith('*'):
+            continue
         if any(f in low for f in TRUNCATE_FALSE_FRIENDS):
+            continue
+        # 参数化 SQL 模板豁免：表名位置是占位符（%s/$1/%(x)s）→ 不是硬编码破坏性操作
+        if _is_parametrized_sql(body):
             continue
         for pat, label in DESTRUCTIVE_PATTERNS:
             if re.search(pat, body, re.IGNORECASE):

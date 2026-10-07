@@ -13,8 +13,14 @@
 安全设计
 --------
 - **默认 dry-run**：不带 `--apply` 时只报告将要删除什么，一个字都不改。
-- **只删两类东西**：元数据库的 `demand_requests` / `demand_events`（业务表一律不碰），
-  以及知识库中名称匹配夹具前缀的文档。
+  也可显式写 `--dry-run`（与不写等价），便于在脚本里表达意图。
+- **只删两类东西**：元数据库的**需求域派生表**（`demand_requests` 及其
+  6 张下游表）与知识库中名称匹配夹具前缀的文档。
+- **元数据域默认不碰**：`table_docs` / `column_docs` / `business_glossary` /
+  `schema_snapshots` 没有 demand_id 列，与需求单无关联，也不是「现场痕迹」——
+  它们是语义层的地基（B 库字段描述覆盖 100% 靠的就是 column_docs）。
+  清掉不会产生孤儿，只会让环境不可用。确需重置用 `--reset-metadata`，
+  且事后必须重跑 `tools/collect_metadata.py --dataset A --dataset B --seed-glossary`。
 - **不清附件**：MinIO 里的附件对象保留（对象键含随机段，无法从需求单反推，且无害）。
   如需一并清理，用 `--purge-attachments` 显式指定。
 
@@ -22,6 +28,7 @@
 ----
     # 1) 先看会删什么（默认，不改动）
     python3 tools/reset_demo_data.py
+    python3 tools/reset_demo_data.py --dry-run      # 与上等价，显式声明
 
     # 2) 确认后执行
     python3 tools/reset_demo_data.py --apply
@@ -31,6 +38,9 @@
 
     # 4) 只清需求单，保留知识库夹具
     python3 tools/reset_demo_data.py --apply --keep-fixtures
+
+    # 5) 连元数据域一起重置（会清空字段描述！事后必须重跑 collect_metadata.py）
+    python3 tools/reset_demo_data.py --apply --reset-metadata
 
 依赖：`psycopg`（宿主机需装，见 README 的隔离虚拟环境说明）。
 """
@@ -46,6 +56,38 @@ ROOT = os.path.dirname(HERE)
 
 # 夹具文档的识别前缀。命中即视为「可清的测试文件」，正式治理文档不在此列。
 FIXTURE_PREFIXES = ("kb-e2e-test", "kb-smoke-", "test-fixture-")
+
+
+# --------------------------------------------------------------------------
+# 清理清单（按删除顺序排列，**顺序不可随意调整**）
+# --------------------------------------------------------------------------
+# 需求域派生表：都带 demand_id 列，靠 demand_id 挂在需求单上。
+# 顺序 = 删除顺序（子表在前、主表在后）：
+#   · knowledge_citations 同时引用 demand_id 与 sql_run_id，必须排在 sql_runs 之前，
+#     否则它自己会变成指向已删 sql_run 的孤儿；
+#   · 其余表直接引用 demand_id，只要排在 demand_requests 之前即可。
+DEMAND_SCOPED_TABLES = (
+    ("knowledge_citations", "知识引用留痕"),
+    ("confirmations", "口径确认答复"),
+    ("analysis_rounds", "分析轮次"),
+    ("demand_events", "需求事件"),
+    ("sql_runs", "SQL 执行记录"),
+    ("structured_requirements", "结构化技术需求"),
+    ("demand_requests", "需求单（主表）"),
+)
+
+# 元数据域资产：实测确认这四张表**没有 demand_id 列**，与需求单不存在任何关联。
+# 它们是演示的**地基**而不是现场痕迹——B 库「字段描述覆盖 100%（51/51）」、
+# 「business_glossary 5 条」都靠它们。清掉它们不会产生孤儿（没有孤儿可产生），
+# 只会让语义层退化成「不认识任何字段」，演示当场跑不动。
+# 因此默认一律不动；确需重置时用 --reset-metadata 显式开启，
+# 且必须事后重跑 tools/collect_metadata.py 重建，否则环境不可用。
+METADATA_TABLES = (
+    ("table_docs", "表文档"),
+    ("column_docs", "字段文档"),
+    ("business_glossary", "业务术语表"),
+    ("schema_snapshots", "Schema 快照"),
+)
 
 
 def load_env(path=None):
@@ -83,68 +125,118 @@ def _conn():
     return psycopg.connect(db_dsn(), connect_timeout=10)
 
 
-def survey_db():
-    """盘点元数据库里现存的需求单与事件（含 M3 的分析轮次与确认问答）。"""
-    with _conn() as con, con.cursor() as cur:
-        cur.execute("select count(*) from demand_requests")
-        n_req = cur.fetchone()[0]
-        cur.execute("select count(*) from demand_events")
-        n_evt = cur.fetchone()[0]
-        cur.execute("select status, count(*) from demand_requests group by status order by 2 desc")
-        by_status = cur.fetchall()
-        cur.execute("select event_type, count(*) from demand_events group by event_type order by 2 desc")
-        by_event = cur.fetchall()
-        cur.execute("select demand_id, title from demand_requests order by created_at desc limit 5")
-        sample = cur.fetchall()
-        # M3 两张表按需创建，老库上可能还不存在——取不到就记 None，不当作错误
-        n_rounds = n_conf = None
-        try:
-            cur.execute("select count(*) from analysis_rounds")
-            n_rounds = cur.fetchone()[0]
-            cur.execute("select count(*) from confirmations")
-            n_conf = cur.fetchone()[0]
-        except Exception:  # noqa: BLE001
-            pass
-    return {"requests": n_req, "events": n_evt, "rounds": n_rounds, "confirmations": n_conf,
-            "by_status": by_status, "by_event": by_event, "sample": sample}
+def _table_exists(cur, name):
+    cur.execute("select to_regclass(%s)", ("public." + name,))
+    return cur.fetchone()[0] is not None
 
 
-def clear_db(keep_events=True):
-    """清空需求单及其派生数据。
+def _count(cur, name):
+    """取行数；表不存在返回 None（老库上这些表可能尚未建）。"""
+    if not _table_exists(cur, name):
+        return None
+    cur.execute("select count(*) from %s" % name)
+    return cur.fetchone()[0]
 
-    清理顺序有讲究：`confirmations` / `analysis_rounds` / `demand_events` 都是
-    以 demand_id 关联的**派生数据**，必须先删，否则会留下指向已删需求单的孤儿行。
-    2026-09-30 实测踩到过——清理只删了 demand_requests 与 demand_events，
-    留下 5 条分析轮次和 10 条确认记录挂在已不存在的需求单上，
-    表规模统计因此失真，下一轮验收也从脏状态起跑。
+
+def survey_db(reset_metadata=False):
+    """盘点元数据库：需求域派生表 + （可选）元数据域资产。
+
+    2026-10-07 补测发现原实现只盘 demand_requests/demand_events 两张表，
+    漏掉了 sql_runs（3112 行）/ structured_requirements（834 行）/
+    knowledge_citations（1947 行）——而这三张表都带 demand_id，
+    删掉需求单后就是数千行孤儿。实测库里当时已存在：
+      · structured_requirements 1 行孤儿（demand DR-20261007-L70G）
+      · knowledge_citations 6 行孤儿（同一 demand）
+    本函数因此改为按 DEMAND_SCOPED_TABLES 全量盘点并顺带检出既有孤儿。
     """
     with _conn() as con, con.cursor() as cur:
-        cur.execute("select count(*) from demand_events")
-        n_evt = cur.fetchone()[0]
-        cur.execute("select count(*) from demand_requests")
-        n_req = cur.fetchone()[0]
-        n_rounds = n_conf = 0
-        try:
-            cur.execute("select count(*) from analysis_rounds")
-            n_rounds = cur.fetchone()[0]
-            cur.execute("select count(*) from confirmations")
-            n_conf = cur.fetchone()[0]
-        except Exception:  # noqa: BLE001
-            pass
+        counts = {}
+        for t, _label in DEMAND_SCOPED_TABLES:
+            counts[t] = _count(cur, t)
+        meta = {}
+        if reset_metadata:
+            for t, _label in METADATA_TABLES:
+                meta[t] = _count(cur, t)
+
+        # 分组统计与样本（这两项只对主表有意义，缺失时降级为空）
+        by_status, by_event, sample = [], [], []
+        if counts.get("demand_requests") is not None:
+            cur.execute("select status, count(*) from demand_requests group by status order by 2 desc")
+            by_status = cur.fetchall()
+        if counts.get("demand_events") is not None:
+            cur.execute("select event_type, count(*) from demand_events group by event_type order by 2 desc")
+            by_event = cur.fetchall()
+        if counts.get("demand_requests") is not None:
+            cur.execute("select demand_id, title from demand_requests order by created_at desc limit 5")
+            sample = cur.fetchall()
+
+        # 既有孤儿体检：本次清理**之前**库里就已经有的孤儿，用来判断
+        # 「清理后仍不为 0」到底是清漏了还是本来就有。
+        orphans = {}
+        if counts.get("demand_requests") is not None:
+            for t in ("sql_runs", "structured_requirements", "knowledge_citations",
+                      "analysis_rounds", "confirmations", "demand_events"):
+                if counts.get(t) is None:
+                    continue
+                cur.execute(
+                    "select count(*) from %s s where not exists "
+                    "(select 1 from demand_requests d where d.demand_id = s.demand_id)" % t)
+                n = cur.fetchone()[0]
+                if n:
+                    orphans[t] = n
+    return {
+        "counts": counts,
+        "meta": meta,
+        "orphans_before": orphans,
+        "by_status": by_status,
+        "by_event": by_event,
+        "sample": sample,
+    }
+
+
+def clear_db(reset_metadata=False):
+    """清空需求单及其全部派生数据。
+
+    清理顺序有讲究：所有以 demand_id 关联的**派生数据**必须先删，
+    否则会留下指向已删需求单的孤儿行。2026-09-30 实测踩到过——
+    清理只删了 demand_requests 与 demand_events，留下 5 条分析轮次和 10 条
+    确认记录挂在已不存在的需求单上，表规模统计因此失真。
+
+    2026-10-07 补：原先也漏了 sql_runs / structured_requirements /
+    knowledge_citations 三张表（合计约 5900 行）。这三张表同样带 demand_id，
+    漏删的后果更严重——`sql_run_replay` 按 demand_id 查执行记录，
+    孤儿行会让「审计回放」列出根本不属于任何需求单的版本。
+
+    删除顺序见 DEMAND_SCOPED_TABLES：knowledge_citations 引用了 sql_run_id，
+    必须排在 sql_runs 之前。
+    """
+    with _conn() as con, con.cursor() as cur:
         # 先把 demand_id 收下来：附件对象键以 demand_id 打头，
         # 需求单一旦删除就再也推不出它对应哪些对象了。
         cur.execute("select demand_id from demand_requests")
         demand_ids = [r[0] for r in cur.fetchall()]
+
+        before = {t: _count(cur, t) for t, _ in DEMAND_SCOPED_TABLES}
+        deleted = {}
         # 派生数据先删（引用方），再删 requests（被引用方）
-        for t in ("confirmations", "analysis_rounds", "demand_events"):
-            try:
+        for t, _label in DEMAND_SCOPED_TABLES:
+            if _table_exists(cur, t):
                 cur.execute("delete from %s" % t)
-            except Exception:  # noqa: BLE001
-                pass
-        cur.execute("delete from demand_requests")
+                deleted[t] = cur.rowcount
+            else:
+                deleted[t] = None
+        meta_deleted = {}
+        if reset_metadata:
+            for t, _label in METADATA_TABLES:
+                if _table_exists(cur, t):
+                    cur.execute("delete from %s" % t)
+                    meta_deleted[t] = cur.rowcount
+                else:
+                    meta_deleted[t] = None
         con.commit()
-    return {"requests": n_req, "events": n_evt, "rounds": n_rounds,
-            "confirmations": n_conf, "demand_ids": demand_ids}
+    return {"before": before, "deleted": deleted,
+            "meta_deleted": meta_deleted, "demand_ids": demand_ids}
+
 
 
 # --------------------------------------------------------------------------
@@ -280,11 +372,32 @@ def purge_attachments(info):
 def main():
     ap = argparse.ArgumentParser(description="演示环境重置（默认 dry-run）")
     ap.add_argument("--apply", action="store_true", help="真正执行清理；不加则只报告")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="显式声明只报告不改动（默认行为，此参数仅供脚本里表达意图，"
+                         "与 --apply 同时给出时以 --apply 为准）")
     ap.add_argument("--keep-demands", action="store_true", help="保留需求单，只清知识库夹具")
     ap.add_argument("--keep-fixtures", action="store_true", help="保留知识库夹具，只清需求单")
     ap.add_argument("--purge-attachments", action="store_true",
                     help="同时删除这些需求单在对象存储中的附件（默认保留）")
+    ap.add_argument("--reset-metadata", action="store_true",
+                    help="连元数据域（table_docs/column_docs/business_glossary/"
+                         "schema_snapshots）一起清空。⚠ 这些表是语义层地基，"
+                         "清空后必须重跑 tools/collect_metadata.py 重建")
     args = ap.parse_args()
+
+    # --apply 与 --dry-run 同时给出 = 调用方自相矛盾，**直接拒绝执行**。
+    #
+    # 2026-10-07 实测踩过：原实现只打印一行告警然后「以 --apply 为准」，
+    # 结果一次只想验证参数组合的调用，真的把 1438 条需求单及其约 1.6 万行
+    # 派生数据清空了，且本机 postgres 未开 archive_mode，无法时间点恢复。
+    #
+    # 同一个命令行里同时要求「真删」和「别删」，唯一正确的解释是调用方搞错了。
+    # 猜意图并执行破坏性操作，是这类工具最不该做的事——宁可拒绝，不能赌。
+    if args.apply and args.dry_run:
+        print("[x] 同时给了 --apply 和 --dry-run，二者含义相反，已拒绝执行。")
+        print("    只想看会删什么 → 去掉 --apply")
+        print("    真的要执行清理 → 去掉 --dry-run")
+        return 2
 
     load_env()
     mode = "执行" if args.apply else "试运行（dry-run，不改动任何数据）"
@@ -299,19 +412,40 @@ def main():
         print("  按 --keep-demands 跳过")
         db_info = None
     else:
-        db_info = survey_db()
-        print("  需求单 %d 条 / 事件 %d 条" % (db_info["requests"], db_info["events"]))
-        if db_info.get("rounds") is not None:
-            print("  分析轮次 %d 条 / 确认问答 %d 条（M3，随需求单一起清）"
-                  % (db_info["rounds"], db_info["confirmations"]))
+        db_info = survey_db(reset_metadata=args.reset_metadata)
+        counts = db_info["counts"]
+        print("  将按下列顺序清理（子表 → 主表），括号内为**将要删除的行数**：")
+        for t, label in DEMAND_SCOPED_TABLES:
+            n = counts.get(t)
+            mark = "  (主表)" if t == "demand_requests" else ""
+            print("      %-26s %-14s %s%s"
+                  % (t, label, "表不存在" if n is None else n, mark))
+        if args.reset_metadata:
+            print("  元数据域（--reset-metadata 已开启，⚠ 清空后需重跑 collect_metadata.py）：")
+            for t, label in METADATA_TABLES:
+                n = db_info["meta"].get(t)
+                print("      %-26s %-14s %s"
+                      % (t, label, "表不存在" if n is None else n))
+        else:
+            print("  元数据域（默认保留，是语义层地基）：%s"
+                  % "、".join(t for t, _ in METADATA_TABLES))
+        total_rows = sum(v for v in counts.values() if v)
+        print("  合计将删除 %d 行需求域数据" % total_rows)
         for s, n in db_info["by_status"]:
             print("      状态 %-10s %d" % (s, n))
         for e, n in db_info["by_event"]:
             print("      事件 %-18s %d" % (e, n))
         if db_info["sample"]:
-            print("  最近 5 条：")
+            print("  最近 5 条需求单（将被删除）：")
             for did, title in db_info["sample"]:
                 print("      %s  %s" % (did, (title or "")[:34]))
+        if db_info["orphans_before"]:
+            print("  \033[33m[!] 清理前已存在孤儿行（引用了不存在的需求单）："
+                  "%s\033[0m"
+                  % "、".join("%s %d 行" % (t, n)
+                              for t, n in db_info["orphans_before"].items()))
+        else:
+            print("  清理前孤儿自检：无孤儿")
 
     # --- 知识库 ---
     print()
@@ -354,7 +488,7 @@ def main():
 
     if not args.apply:
         print()
-        print("以上为试运行结果。确认无误后加 --apply 执行。")
+        print("以上为试运行结果。**未删除任何数据。** 确认无误后加 --apply 执行。")
         return 0
 
     # --- 执行 ---
@@ -362,28 +496,48 @@ def main():
     print("-" * 68)
     done = []
     if db_info is not None:
-        got = clear_db()
-        done.append("需求单 %d 条 / 事件 %d 条 / 分析轮次 %d 条 / 确认问答 %d 条"
-                    % (got["requests"], got["events"], got["rounds"], got["confirmations"]))
+        got = clear_db(reset_metadata=args.reset_metadata)
+        parts = []
+        for t, label in DEMAND_SCOPED_TABLES:
+            parts.append("%s %s 行" % (label, got["deleted"].get(t)))
+        done.append("需求域：" + " / ".join(parts))
+        if args.reset_metadata:
+            mparts = ["%s %s 行" % (label, got["meta_deleted"].get(t))
+                      for t, label in METADATA_TABLES]
+            done.append("元数据域：" + " / ".join(mparts))
+            done.append("⚠ 请立即重跑 tools/collect_metadata.py --dataset A "
+                        "--dataset B --seed-glossary 重建元数据，否则环境不可用")
         if args.purge_attachments:
             n_att, aerr = purge_attachments(att_info)
             done.append(("附件 %d 个" % n_att) if not aerr else ("附件清理失败：%s" % aerr))
     if scope and not args.keep_fixtures:
         n = clear_kb(scope)
         done.append("知识库夹具 %d 份" % n)
-    print("已清理：" + ("；".join(done) if done else "（无）"))
+    print("已清理：")
+    for d in done:
+        print("      · %s" % d)
 
     # --- 复核 ---
     print()
     print("【复核】")
     if db_info is not None:
-        after = survey_db()
-        print("  需求单 %d 条 / 事件 %d 条" % (after["requests"], after["events"]))
-        if after.get("rounds") is not None:
-            print("  分析轮次 %d 条 / 确认问答 %d 条" % (after["rounds"], after["confirmations"]))
-            orphan = (after["rounds"] or 0) + (after["confirmations"] or 0)
-            if after["requests"] == 0 and orphan > 0:
-                print("  \033[31m[!] 仍有 %d 条孤儿派生数据，清理不完整\033[0m" % orphan)
+        after = survey_db(reset_metadata=args.reset_metadata)
+        for t, label in DEMAND_SCOPED_TABLES:
+            n = after["counts"].get(t)
+            print("  %-26s %-14s %s" % (t, label, "表不存在" if n is None else n))
+        if args.reset_metadata:
+            for t, label in METADATA_TABLES:
+                n = after["meta"].get(t)
+                print("  %-26s %-14s %s" % (t, label, "表不存在" if n is None else n))
+        # 关键复核：清理后不得残留任何孤儿。原实现只看 analysis_rounds +
+        # confirmations 两张表，漏掉了行数最多的 sql_runs / structured_requirements /
+        # knowledge_citations——正是这三张表撑出了「清完留下数千行孤儿」的问题。
+        if after["orphans_before"]:
+            print("  \033[31m[!] 仍有孤儿行：%s —— 清理不完整\033[0m"
+                  % "、".join("%s %d 行" % (t, n)
+                              for t, n in after["orphans_before"].items()))
+        else:
+            print("  孤儿自检：0 行（全部派生表均无悬挂引用）")
     if scope and not args.keep_fixtures:
         s2, e2 = survey_kb()
         if not e2:
@@ -392,6 +546,7 @@ def main():
     print()
     print("完成。")
     return 0
+
 
 
 if __name__ == "__main__":
