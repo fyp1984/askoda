@@ -1,0 +1,93 @@
+# 开发期代码热挂载覆盖（临时验证用，不入 git）
+#
+# 为什么是逐文件挂载，而不是整个 `./gateway:/app`
+# ------------------------------------------------
+# 容器镜像里的 `/app` 比宿主 `gateway/` 多两类东西：
+#   · tools/（50 项，验收与复扫脚本）—— 仓库瘦身时已从 git 删除，宿主没有
+#   · contracts/（JSON schema）
+# 整个目录挂载会把它们一起遮没，容器内 tools/ 消失、
+# `python -m tools.xxx` 之类命令直接失败。所以只挂 .py 模块本身。
+#
+# 为什么不整目录挂 + 另挂 tools 回来
+# ------------------------------
+# 可以，但那样容器内跑的就是宿主内容，与「镜像即交付物」的口径脱节，
+# 开发期与交付期行为不一致。逐文件挂载改动面最小，且新增模块仍需 rebuild
+# （见 README 说明），符合开发测试期的实际需要。
+#
+# 用法：
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --force-recreate gateway
+# 改完 .py 后：
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml restart gateway
+#
+# 代价（必须知道）：
+#   · FastMCP 4.x 的 mcp.run() **没有 reload 参数**（实测 fastmcp 4.0.10），
+#     改代码后必须 restart 容器，没有热重载。
+#   · 新增 .py 文件不生效（没挂载），仍需去掉本文件重建一次镜像。
+#
+# bff 为什么可以真热重载，而 gateway 不行
+# --------------------------------------
+# gateway 是 FastMCP，`mcp.run()` 没有 reload 参数，只能 restart。
+# bff 是纯 uvicorn HTTP 服务，uvicorn 自带 `--reload`（watchfiles 已在
+# uvicorn[standard] 里），改 .py 自动重起子进程 —— 改代码不用 rebuild、不用 restart。
+#
+# bff 的挂载为什么用整目录，而 gateway 用逐文件（实测结论，别照抄 gateway）
+# ------------------------------------------------------------------------
+# gateway 逐文件，是因为镜像 /app 里有宿主没有的 tools/ 与 contracts/，
+# 整目录挂会把它们遮没。bff 没这个问题：镜像 /app 的内容就是 bff/ 目录的内容
+# （含 static/），整目录挂不丢任何东西。
+#
+# 而整目录挂是热重载能工作的**前提**（实测 OrbStack）：
+#   · 逐文件挂载（./bff/app.py:/app/app.py）→ 容器内能看到新内容，
+#     但 WatchFiles **收不到 inotify 事件**，reload 永不触发（日志里没有
+#     "WatchFiles detected changes"）。文件级 bind mount 不跨挂载边界传事件。
+#   · 整目录挂载（./bff:/app）→ WatchFiles 立刻触发，日志出现
+#     "WatchFiles detected changes in 'app.py'. Reloading..."，接口行为随之变化。
+# 所以 bff 必须整目录挂。这与 gateway 的选择不矛盾，是两个服务的不同约束。
+#
+# 代价（必须知道）：
+#   · 开发期容器内跑的是宿主 bff/ 的全部内容，含 static/。若你在宿主删了
+#     static/，容器内前端会变成「产物未构建」的 503 提示 —— 那是真实反映，
+#     不是 bug（重新 npm run build 即可）。
+#   · 新增 .py 文件直接生效（已整目录挂），不像 gateway 需 rebuild。
+#
+# 用法：
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d bff
+# 改完 bff 的 .py 后：什么都不用做，等 1~2 秒直接 curl 即可（uvicorn 自动重起）。
+services:
+  gateway:
+    volumes:
+      - ./wren-docker/workspace/mdl.json:/workspace-a/mdl.json:ro
+      - ./wren-docker-b/workspace/mdl.json:/workspace-b/mdl.json:ro
+      # 业务模块（逐文件）
+      - ./gateway/analysis.py:/app/analysis.py:ro
+      - ./gateway/app.py:/app/app.py:ro
+      - ./gateway/attachments.py:/app/attachments.py:ro
+      - ./gateway/collect.py:/app/collect.py:ro
+      - ./gateway/db.py:/app/db.py:ro
+      - ./gateway/demand.py:/app/demand.py:ro
+      - ./gateway/evidence.py:/app/evidence.py:ro
+      - ./gateway/fallback.py:/app/fallback.py:ro
+      - ./gateway/gates.py:/app/gates.py:ro
+      - ./gateway/healthcheck.py:/app/healthcheck.py:ro
+      - ./gateway/knowledge.py:/app/knowledge.py:ro
+      - ./gateway/masking.py:/app/masking.py:ro
+      - ./gateway/metadata.py:/app/metadata.py:ro
+      - ./gateway/planner.py:/app/planner.py:ro
+      - ./gateway/registry.py:/app/registry.py:ro
+      - ./gateway/requirement.py:/app/requirement.py:ro
+      - ./gateway/rules.py:/app/rules.py:ro
+      - ./gateway/schema_scan.py:/app/schema_scan.py:ro
+      - ./gateway/semantics.py:/app/semantics.py:ro
+      - ./gateway/sqlgen.py:/app/sqlgen.py:ro
+      - ./gateway/sqlpack.py:/app/sqlpack.py:ro
+      - ./gateway/sqlrun.py:/app/sqlrun.py:ro
+      - ./gateway/wren.py:/app/wren.py:ro
+
+  bff:
+    # 只改启动命令：加 --reload。其余（app:app / 端口 / 环境变量）沿用交付形态，
+    # 保证开发期与交付期跑的是同一份代码、同一套配置。
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "18081", "--reload"]
+    volumes:
+      # 整目录挂载（不是逐文件）—— 热重载生效的前提，见文件头实测说明。
+      # 只读：容器不会改宿主代码。
+      - ./bff:/app:ro
