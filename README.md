@@ -268,6 +268,8 @@ askoda/
 - Docker（推荐 OrbStack / Docker Desktop 4.28+）
 - Python 3.11+（仅本地跑工具脚本时用，服务端运行不需要）
 - `docker compose` V2（`docker compose` 命令可用）
+- **Tailscale**（仅「知识检索」需要，见 5.3；不登录则该能力全断）
+- **Node.js 18+ / npm**（仅改了 `web/src/` 需要，见 5.2；只是跑起服务则不需要）
 
 ### 5.2 三步启动
 
@@ -278,9 +280,26 @@ cp .env.example .env
 # 2. 一键起停全部服务（首次会构建 gateway + bff 镜像，约 1–3 分钟）
 docker compose up -d
 
-# 3. 检查状态（8 个服务全部 healthy 才算就绪）
+# 3. 检查状态
 docker compose ps
 ```
+
+**第 3 步怎么看结果**：`docker compose ps` 的 `STATUS` 列只会对**带 healthcheck 的服务**显示 `(healthy)`。
+本项目 8 个服务里 **`wren-mcp-a`、`wren-mcp-b`、`assistant-minio` 三个没有 healthcheck**
+（compose 未定义、镜像也没自带），它们永远只显示 `Up x days`，**这是正常状态，不代表没起来**。
+所以判断就绪请看这 5 个：`gateway` / `bff` / `assistant-postgres` / `wren-postgres-a` / `wren-postgres-b`
+显示 `(healthy)`，且 `gateway`、`bff` 不是 `Restarting`。
+
+更可靠的判据是直接打网关健康检查（会真正走一遍双库连通性）：
+
+```bash
+curl -s http://127.0.0.1:18080/healthz
+```
+
+返回 `status=ok` 即双库都通；`degraded` 时看 `components` 字段定位是哪一项。
+
+> 服务数会随 profile 变化（以 `docker compose config --services` 为准）：
+> 默认 8 个；加 `--profile local-embed` 为 9 个（多出 `tei-embedding`，本机备用 embedding）。
 
 起栈后**直接用浏览器打开前端**：
 
@@ -290,6 +309,24 @@ http://127.0.0.1:18081/
 
 这一条命令即可拿到完整应用（前端 + BFF + 网关 + 双模拟库 + 元数据库 + 附件存储），
 无需在宿主机手工起任何进程。前端构建产物随 BFF 镜像交付（见 `bff/Dockerfile`）。
+
+> **前端产物已入库，clone 后可直接用；但改了 `web/src/` 必须重新构建才生效。**
+>
+> `bff/static/` 下的构建产物**已提交进 git**（`index.html` + `assets/*`），
+> 所以刚 clone 下来不做任何构建也能打开前端。
+> 但 BFF 只负责把 `bff/static/` 原样发出去，**它不会、也没有能力编译 TypeScript**。
+> 你在 `web/src/` 里改的任何东西，在重新构建并覆盖 `bff/static/` 之前，
+> 浏览器看到的永远是旧产物（表现为「代码明明改了，页面没变」）。
+>
+> 改了 `web/src/` 之后执行：
+>
+> ```bash
+> cd web && npm install && npm run build
+> ```
+>
+> 产物由 Vite 输出到 `bff/static/`，随后刷新浏览器即可（非 dev 形态需
+> `docker compose restart bff` 让 BFF 重新挂载；dev 形态整目录已挂载，刷新即生效）。
+> 因此本机需要 Node.js 18+ 与 npm；**只跑服务、不改前端则完全不需要 Node**。
 
 > ⚠️ **当前无鉴权，仅限本机访问**
 >
@@ -312,7 +349,137 @@ docker compose up -d --build
 > BUILDX_CONFIG="$PWD/.buildx" docker compose build gateway
 > ```
 
-### 5.3 开发期热重载
+### 5.3 外部依赖与已知限制
+
+这一节是**换机器部署前必读**。本项目不是全自包含的：知识检索这条链路依赖
+**一台外部主机**，且**知识底座尚未独立部署**。不了解这一节，照 README 做完会得到一个
+「其他功能都正常、唯独知识检索全断」的系统，且没有任何报错提示你缺了什么。
+
+#### 5.3.1 远端 embedding 服务（知识检索的硬依赖）
+
+| 项 | 值 |
+|---|---|
+| 地址 | `http://100.103.240.78:18001/v1` |
+| Tailscale 节点名 | `sevensmile.tailb5e44d.ts.net` |
+| 模型 | `bge-m3`（固定，不可换） |
+| 谁在用 | RAGFlow 每次检索时现调它算查询向量 |
+
+**断了会怎样**：知识检索**全断**，不是降级。RAGFlow 不缓存查询向量，
+每次 `/api/v1/retrieval` 都要现调 embedding，所以这个地址一挂，
+所有检索请求直接报 `EmbeddingError code=100`（表现为 `knowledge_search` 整条失败）。
+
+**Tailscale 是前置条件**：这个地址是 Tailscale 内网地址，**不登录 Tailscale 就根本连不上**。
+换机器部署时若本机没装/没登录 Tailscale，知识检索一定是不通的 —— 这不是配置错，是网络层不通。
+
+先自查连通性（不依赖本项目任何容器）：
+
+```bash
+curl -s -m 8 --noproxy '*' -o /dev/null -w "HTTP=%{http_code}\n" \
+  -X POST "http://100.103.240.78:18001/v1/embeddings" \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"探活","model":"/models/bge-m3"}'
+# 期望：HTTP=200
+```
+
+#### 5.3.2 本机备用 embedding 与主备切换
+
+本机保留了一份 TEI 作为**备用**，但在 compose 里挂了 `profiles: ["local-embed"]`，
+**默认不启动** —— `docker compose config --services` 里 `tei-embedding` 数量为 **0** 是正常的。
+
+需要它时（主挂了、或者想在本机跑）：
+
+```bash
+# 启动本机备用（首次需拉模型：./.models/fetch_bge_m3.sh "$PWD/bge-m3"）
+docker compose --profile local-embed up -d tei-embedding
+```
+
+> 宿主机端口由 `TEI_EMBEDDING_PORT` 控制，默认 `18002`。
+> amd64 镜像在 arm64 上模拟运行，**模型加载 + warm up 实测约 40～180 秒**，
+> 期间 `/health` 不通属正常，不要过早判定启动失败。
+
+切换主备用 `tools/embedding_failover.sh`（改 RAGFlow MySQL 里的 `base_url`，
+**实测改完立即生效，无需重启 RAGFlow**）：
+
+| 命令 | 作用 |
+|---|---|
+| `bash tools/embedding_failover.sh status` | 看当前指向哪个 + 主备各自探活结果 |
+| `bash tools/embedding_failover.sh check` | 只探活，主备都探，**不改任何东西** |
+| `bash tools/embedding_failover.sh auto` | 自动判断：主不通则切备，备不通则切回主（带 300s 冷却防抖） |
+| `bash tools/embedding_failover.sh switch-back` | 主 → 备（切本机 TEI，会自动把它拉起来） |
+| `bash tools/embedding_failover.sh switch-main` | 备 → 主（切回远端） |
+
+> 该脚本依赖 RAGFlow 的 MySQL 容器 `filebay-knowledge-trial-mysql-1`。
+> 这个容器属于下面的「旧绑定栈」—— **如果那个栈没起，脚本读不到当前指向，`status` 会显示「读取失败」**。
+
+#### 5.3.3 ⚠️ 知识底座尚未独立部署（请勿粉饰）
+
+**这一条是本节最重要的内容：RAGFlow 底座目前不是一个独立栈，物理上尚未独立部署。**
+
+实际情况是：
+
+- `127.0.0.1:19380` 这个入口由一个 **nginx 代理**（`ekos-ragflow-proxy`）提供；
+- 它的 **backend 仍然是旧绑定栈（FileBay 栈）内的 `ragflow-cpu` 容器**，
+  连同它的 MySQL / Elasticsearch / Redis / MinIO，全都还挂在 `filebay-knowledge-trial-*` 这一套里；
+- 也就是说：**RAGFlow 并不在本项目 `docker compose up -d` 的编排范围内**。
+  本仓库起的 8 个服务里**没有** RAGFlow，`docker compose up -d` **不会**把它带起来。
+
+因此当前状态是：
+
+| 能力 | 状态 |
+|---|---|
+| 双模拟库 Wren 语义层、元数据采集、需求单、附件、语义分析 | ✅ 本栈内自包含，`docker compose up -d` 即可用 |
+| 知识检索 `knowledge_search` / `knowledge_citation_list` | ⚠️ **依赖外部栈**，需先单独把旧绑定栈拉起，否则不可用 |
+
+换机器部署时，知识检索要能用，**必须先在宿主机上把那套旧绑定栈（FileBay 栈）起起来**；
+只跑本仓库的 `docker compose up -d` 是**不够**的。
+
+>这一项在项目内部记为 P1-1技术债。网关侧已按「无兜底分支」实现：
+> RAGFlow 不可用就如实报错，**不会静默降级成假结果** —— 这是刻意的设计，
+> 宁可报错也不要让业务人员拿到看似正常的错数据。
+
+### 5.4 首次运行前的数据准备（业务人员必读）
+
+**新机器上元数据表和知识库都是空的**，必须先采集 / 灌入，否则：
+
+- 语义分析拿不到任何槽位候选（不知道有哪些表、哪些字段可用）；
+- 知识引用恒为空（检索不到任何已入库文档）；
+- 界面能打开、能提需求，但**结果全是空的**，容易被误判成「系统坏了」。
+
+仓库自带 `knowledge/` 下 **4篇现成知识文档**（指标口径说明书、数据安全管理办法、
+表结构与颗粒度说明、需求受理与口径确认规程），入库命令一行即可。
+
+**第 1 步：采集元数据**（从两个模拟库 introspect 出表/字段/关系，写入元数据字典）
+
+```bash
+# 采集库 A + 库 B，并顺便播种业务口径词表
+python tools/collect_metadata.py --dataset A --dataset B --seed-glossary
+```
+
+> `--dataset` 可重复传（`A` / `B`，两个键对应两套模拟库）。
+> `--seed-glossary` 播种业务口径词表，建议加上，否则口径问答命中会差。
+> 返回码非 0 表示一致性自检没通过，看输出里的「物理缺失」字段名。
+> 默认 `--engine native`（走 `information_schema`，无需额外依赖）；
+> 想换 SchemaCrawler 后端交叉校验加 `--engine schemacrawler`（需本机 docker）。
+
+**第 2 步：灌知识库**（把 `knowledge/*.md` 上传进 RAGFlow 并触发解析建索引）
+
+```bash
+# 入库 knowledge/ 下全部 .md，并等待解析完成
+python tools/ingest_knowledge.py
+
+# 只看当前入库与解析状态，不上传（排查用）
+python tools/ingest_knowledge.py --status
+```
+
+> 前置条件：5.3.3 说的旧绑定栈必须已起来，且 `.env` 里
+> `KNOWLEDGE_API_KEY` / `KNOWLEDGE_DATASET_ID` **已填写**（否则脚本直接报「未配置 KNOWLEDGE_API_KEY」）。
+> 解析是异步的，脚本默认最多等 180秒（`--wait` 可调）。
+> 注意本脚本在**宿主机**跑，`.env` 里的 `host.docker.internal` 会自动换回 `127.0.0.1`。
+
+两步都完成后，`/healthz` 与语义分析才有完整数据。跳过这两步的话，
+本栈其它部分仍可正常使用，只是知识相关能力是空的。
+
+### 5.5 开发期热重载
 
 开发时用 `docker-compose.dev.yml` 覆盖，它只改「代码从哪来、怎么启动」，不改任何业务配置：
 
@@ -349,7 +516,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml restart gateway
 > 因为逐文件挂载实测**收不到 inotify 事件、reload 永不触发**（详见
 > `docker-compose.dev.yml` 文件头注释）。
 
-### 5.4 接入面
+### 5.6 接入面
 
 | 项 | 地址 | 说明 |
 |---|---|---|
@@ -363,7 +530,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml restart gateway
 | **前端应用** | `http://127.0.0.1:18081/` | 由 BFF 同源托管前端产物 + 代理 `/api/v1/...` |
 | **BFF 接口契约** | `http://127.0.0.1:18081/docs` | OpenAPI（23 个接口，统一前缀 `/api/v1`） |
 
-### 5.5 ⚠️ 当前无鉴权，仅限本机访问
+### 5.7 ⚠️ 当前无鉴权，仅限本机访问
 
 **这套编排没有做任何鉴权与授权。** BFF 的 23 个接口、前端应用本身，
 只要能连上 `18081` 就能直接调用，包括会触发只读 SQL 执行与落库的接口。
@@ -377,7 +544,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml restart gateway
 
 鉴权与多租户隔离是明确的后续项，不在当前开发期范围内。
 
-### 5.6 常见问题排错
+### 5.8 常见问题排错
 
 宿主机网关端口用 `18080` 而非 `8080`：`8080` 留给本地演示服务 `demo/demo-server.py`。
 
@@ -391,10 +558,14 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml restart gateway
 | `18081` 端口被占用、`bff` 起不来 | 宿主机上还有手工起的 BFF 进程（容器化之前的老习惯） | 停掉它（`lsof -ti :18081 \| xargs kill`），再用 compose 起；两者不能同时占同一端口 |
 | 开发期改 `bff/*.py` 没反应 | 只用了 `docker compose up -d`，没叠加 dev 覆盖 | 叠加 `-f docker-compose.dev.yml up -d bff`，并确认日志出现 `Started reloader process ... using WatchFiles` |
 | `tools/e2e_verify.py` 报 `未安装 psycopg` | `persist` 阶段在**宿主** `import db`，需要宿主装 psycopg | 与容器化无关；`pip install "psycopg[binary]"` 后重跑，或按脚本头部注释在 gateway 容器内执行该阶段 |
+| 知识检索报 `未配置知识库 API Key` | `.env` 里 `KNOWLEDGE_API_KEY` 是空值。`cp .env.example .env` 后该键**默认为空**，网关 `knowledge.py` 会直接硬失败 | 在 `.env` 填入真实 `KNOWLEDGE_API_KEY`（RAGFlow 侧获取），`docker compose up -d gateway` 重建容器使环境变量生效；`tools/ingest_knowledge.py` 同样读这个键 |
+| 知识检索报 `EmbeddingError`（code=100） | 远端 embedding `100.103.240.78:18001`不可达。RAGFlow 不缓存查询向量，每次检索都现调embedding，地址一挂检索全断 | 按 5.3.1 确认本机已登录 Tailscale；`curl` 探活确认返回 200；不通则 `bash tools/embedding_failover.sh auto` 切到本机备用（需旧绑定栈已起，见 5.3.3） |
+| 前端 404 / 静态资源（`/assets/*.js`）加载失败 | `bff/static/` 缺失或产物陈旧。改了 `web/src/` 但没重新构建时，页面会引用不存在的 hash 文件 | 先确认 `bff/static/assets/` 下有文件；执行 `cd web && npm install && npm run build` 重新产出，再 `docker compose restart bff` |
+| Wren MCP 冷启动未就绪，首次调用失败 | Wren Engine 首次启动要 30–60s，`gateway` 的 `depends_on` 只等 `service_started`（这两个服务无 healthcheck，等不到 ready） | `docker compose restart gateway` 让网关重新握手；或等 1 分钟后再试，`docker compose logs wren-mcp-a` 看启动进度 |
 
 ---
 
-### 5.7 MCP 能力视图（45 个工具 · 九个域）
+### 5.9 MCP 能力视图（45 个工具 · 九个域）
 
 <a id="mcp-tools"></a>
 
@@ -558,20 +729,20 @@ curl -s -X POST http://127.0.0.1:18080/mcp \
 
 ---
 
-### 5.8 MCP 操作指引与版本升级对照
+### 5.10 MCP 操作指引与版本升级对照
 
 <a id="mcp-ops"></a>
 
-#### 5.6.1 接入前后自查（3 步）
+#### 5.10.1 接入前后自查（3 步）
 
 1. `curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool` → `status` 应为 `ok`（知识库单独展示，不可用不拖垮整体，会如实进 `degraded`）；
 2. 客户端 `tools/list` → 应为 **45 个**；
 3. 冒烟：调 `datasets` 看双库（A / B）是否都在册。
 
-#### 5.6.2 常用运维动作
+#### 5.10.2 常用运维动作
 
 ```bash
-docker compose ps                 # 7 服务是否全 healthy
+docker compose ps                 # 看状态（wren-mcp-a/b、assistant-minio 无 healthcheck，只显示 Up 是正常的，见 5.2）
 docker compose up -d --build      # 改过 gateway/ 后重建
 python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # 双探活（HTTP + MCP，含真调一次 gateway_health）
 python3 tools/mcp_acceptance_check.py                                 # 工具面 45 个逐条核对
@@ -579,7 +750,7 @@ python3 tools/mcp_acceptance_check.py                                 # 工具�
 
 > ⚠️ 容器内代码平铺 `/app`，但 `tools/` 不在 build context —— 跑容器内脚本前需 `docker cp`；走 HTTP 的脚本**必须在宿主跑**，容器内会 connection refused。
 
-#### 5.6.3 版本标识对照（升级时最易搞混的一张表）
+#### 5.10.3 版本标识对照（升级时最易搞混的一张表）
 
 | 版本标识 | 出现在哪 | 含义 | 何时变 |
 |---|---|---|---|
@@ -593,7 +764,7 @@ python3 tools/mcp_acceptance_check.py                                 # 工具�
 
 > 关键提醒：**MCP 握手报的 `4.0.10` 是 FastMCP 库版本，不是网关版本**；对外讲版本请以 `gateway_health.version`（当前 `0.3.0`）为准。
 
-#### 5.6.4 升级操作清单（工具面变更必做）
+#### 5.10.4 升级操作清单（工具面变更必做）
 
 改 `gateway/app.py`（增删 `@mcp.tool`）后，按序执行：
 
@@ -607,7 +778,7 @@ python3 tools/mcp_acceptance_check.py                                 # 工具�
 
 ---
 
-### 5.9 MCP 人工验证
+### 5.11 MCP 人工验证
 
 要按「最低成本、逐个确认可用」手工验一遍全部 45 个工具，步骤见项目文档工作空间的《MCP 服务人工验证方案》。最快路径：先跑一次 `tools/mcp_acceptance_check.py` 拿到机器级结论，再沿 5.5 的八步链路建**一个**需求单走通主干（覆盖约 30 个工具），最后补齐无依赖探针与负向抽查。
 
