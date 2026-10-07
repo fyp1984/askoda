@@ -234,13 +234,17 @@ def _is_derived_hit(h):
     return bool(lbl) and h.get("term") != lbl
 
 
-def _tables_of(hits):
+def _tables_of(hits, with_strength=False):
     """把命中折算到"涉及哪张表"，并剔除只靠泛化词支撑的表。
 
     踩过的坑：字段「归属门店」会派生变体「门店」，业务文本里"各门店"一出现，
     该字段所属的表就被拉成主体——于是"门店坪效"这种需求会莫名多出
     `ads_member_repurchase_di`。判据：泛化命中单独出现不足以确立主体，
     需 ≥2 个不同泛化词才作数。
+
+    `with_strength=True` 时额外带回 `{表: {"strong": n, "weak": m}}` 的强弱结构。
+    这是排序需要的关键信息：一张靠 2 个泛化词凑够下限入围的表，证据强度
+    低于一张有实词命中的表（详见 `understand()` 的主体排序）。
     """
     per = {}
     for h in hits:
@@ -255,10 +259,83 @@ def _tables_of(hits):
         d["hits"].append(h)
 
     out = {}
+    strength = {}
     for t, d in per.items():
         if d["strong"] or len(d["weak"]) >= GENERIC_ONLY_MIN:
             out[t] = d["hits"]
+            strength[t] = {"strong": len(d["strong"]), "weak": len(d["weak"])}
+    return (out, strength) if with_strength else out
+
+
+def _dedup_hits(hits):
+    """去掉完全重复的命中（同 term + 同 kind + 同 locator + 同表 + **同位置**）。
+
+    2026-10-07 实测根因：匹配层会把「门店 → ads.store_id」这条**完全相同**的命中
+    重复产出多次，使 hit_count虚高（2 → 6）。主体排序按 hit_count 时，
+    重复灌水的那张表就会压过只命中一次的区分词表（选错主体）。
+    这里按「命中四元组 + 出现位置」去重，不改变命中集合本身，只消除计数噪声。
+
+    位置必须参与去重键：同一个词在需求里出现多次是**真实信息**
+    （「所有门店」vs 只出现一次），去掉位置会让"在诉求字段里出现 3 次"
+    和"只出现 1 次"塌缩成同一条，`demand_field_hits` 就再也分不开。
+    """
+    seen = set()
+    out = []
+    for h in hits:
+        key = (
+            h.get("matched"),
+            h.get("kind"),
+            h.get("locator"),
+            h.get("table") or (h.get("canonical") or "").split(".")[0],
+            tuple(h.get("span") or ()),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(h)
     return out
+
+
+def _term_table_freq(hits):
+    """每个命中词覆盖多少张表。词越常见 → 区分度越低。
+
+    实测根因（2026-10-07）：主体候选原按 `hit_count`（原始命中**次数**）排序，
+    于是「订单数/门店」这类泛用词在多张表里重复命中，次数压过
+    「销售件数/销售额」这类只命中一张表的区分词，导致主体选错。
+    """
+    freq = {}
+    for h in hits:
+        t = h.get("table")
+        if not t:
+            canon = h.get("canonical") or ""
+            t = canon.split(".")[0] if "." in canon else None
+        if not t:
+            continue
+        freq.setdefault(h.get("matched") or "", set()).add(t)
+    return {k: len(v) for k, v in freq.items()}
+
+
+def _discriminative_score(terms, freq):
+    """区分度 = Σ(1 / 该词命中的表数)。
+
+    只命中一张表的词权重 1.0（强证据）；到处都有的词权重趋近 0（弱证据）。
+    """
+    return round(sum(1.0 / max(1, freq.get(t, 1)) for t in terms), 4)
+
+
+def _demand_field_weight(hs):
+    """这张表上有多少**不同诉求字段**（title/description/expected_output）里出现过命中词。
+
+    用途仅限冲突消解的 tiebreak 与说明，不参与主体排序的主导权重——
+    「门店」在诉求里出现 4 次并不代表门店维表就该当主体（实测 DR-20261006-17YP：
+    ads靠「门店」多出场压过真正持有 `sales_qty` 的 dws，见 `understand()` 注释）。
+    """
+    return len({
+        f
+        for h in hs
+        if h.get("in_demand_text")
+        for f in (h.get("demand_fields") or ())
+    })
 
 
 def understand(bundle):
@@ -268,22 +345,72 @@ def understand(bundle):
     by_level = bundle["by_level"]
 
     # ---- 主体候选：由命中折算出的表 ----
+    # 排序键：置信度 → 实词命中数 → 区分度 → 命中次数。
+    #
+    # 「实词命中数」接回排序键（2026-10-07）：`_tables_of` 一直在算 strong/weak
+    # 却没有出口，靠 2 个泛化派生词凑够 `GENERIC_ONLY_MIN` 才入围的表，
+    # 证据强度低于有一条例实词命中的表。区分度排在命中数之前——泛用词在多表
+    # 重复命中时，次数会被灌水（`_dedup_hits` 只消除了完全重复的那部分）。
+    #
+    # 这里**刻意不加**「诉求字段命中数」权重。实测 DR-20261006-17YP
+    # （门店累计销量）试过：诉求是"按门店分组算销量"，"门店"在 title/description/
+    # expected_output 里出现 4 次，而度量词"销售件数"只在 description 出现 1 次。
+    # 按诉求字段数加权会让门店维表 `ads_member_repurchase_di` 压过真正持有
+    # `sales_qty` 的 `dws_store_daily_agg`——**更错**。频次反映的是用词习惯，
+    # 不是主体倾向，这类权重不该主导。
+    #
+    # 两候选在这些信号上打平时**不再静默择一**（见下方 `ambiguous` 标注）：
+    # 按 R4「未确认关键口径不得进入高置信输出」，应交业务确认。
+    # 另注：主体候选只影响给业务看的建议与冲突提示，不决定实际 SQL——
+    # 生成走 `candidate_sql`（业务/Agent 传入）+ 五层门禁。
+    term_freq = _term_table_freq(hits)
+    subj_tables, subj_strength = _tables_of(_dedup_hits(hits), with_strength=True)
     subj = []
-    for table, hs in _tables_of(hits).items():
+    for table, hs in subj_tables.items():
         cited = [b for h in hs[:3] for b in _ev_for_term(by_level, h)]
         cited = _dedup_cited(cited) or _p1_cite(by_level)
         terms = sorted({h["matched"] for h in hs})
-        subj.append(
-            _cand(
-                "subject",
-                table,
-                cited,
-                conf=confidence([c["level"] for c in cited], extra=0.05 if len(terms) > 1 else 0.0),
-                matched_terms=terms,
-                hit_count=len(hs),
-            )
+        st = subj_strength.get(table, {"strong": 0, "weak": 0})
+        c = _cand(
+            "subject",
+            table,
+            cited,
+            conf=confidence([x["level"] for x in cited], extra=0.05 if len(terms) > 1 else 0.0),
+            matched_terms=terms,
+            hit_count=len(hs),
         )
-    subj.sort(key=lambda x: (-x["confidence"], -x["hit_count"]))
+        c["discriminative_score"] = _discriminative_score(terms, term_freq)
+        c["strong_hits"] = st["strong"]
+        c["weak_hits"] = st["weak"]
+        c["demand_field_hits"] = _demand_field_weight(hs)
+        subj.append(c)
+    subj.sort(
+        key=lambda x: (
+            -x["confidence"],
+            -x.get("strong_hits", 0),
+            -x.get("discriminative_score", 0.0),
+            -len(x.get("matched_terms") or ()),
+            -x["hit_count"],
+        )
+    )
+    # 打平即歧义：排序键（不含 hit_count）完全相同说明证据分不出高下，
+    # 按 R4 标为需业务确认，而不是靠列表顺序静默定一个赢家——那正是本次修复的
+    # 原始缺陷（实测主体槽位选中门店维表，而真正持有销量列的是另一张表）。
+    #
+    # hit_count 不参与判平：它是"命中在需求里出现了几次"，反映用词频次而非
+    # 证据强度。实测中 ads 的「门店」在诉求里出现 4 次、hit 6，
+    # 而持有 sales_qty 的 dws 只命中 1 次、hit 2——按 hit 判胜负恰好选反。
+    if len(subj) >= 2:
+        k = lambda c: (  # noqa: E731
+            c["confidence"],
+            c.get("strong_hits", 0),
+            c.get("discriminative_score", 0.0),
+            len(c.get("matched_terms") or ()),
+        )
+        if k(subj[0]) == k(subj[1]):
+            for c in subj[:2]:
+                c["ambiguous"] = True
+            subj[0]["ambiguous_with"] = [subj[1]["value"]]
 
     # ---- 输出字段候选：来自字段类命中 + 口径表达式命中 ----
     field_hits = _hits_by_kind(

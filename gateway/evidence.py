@@ -167,6 +167,14 @@ def _term_variants(raw):
 #     "联合唯一"→member_id、"关联"→store_id、"分析一律用此字段"→order_date）
 #   · 两字词沦为噪声（"关联"）；且会顶掉枚举身份，把「美妆」这种过滤值升成字段
 _CALIBER_MIN_LEN = 3
+
+# `business_glossary` 里 source='mdl' 的行以字段 locator 作 term（如 `表.列`）。
+# 用点号 + 两侧均为标识符来识别，避免把真术语（中文或含空格的英文短语）误判。
+_MDL_CALIBER_LOCATOR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$")
+
+# 需求的**诉求字段**——业务真正在要什么的字段。命中的词落在这里，
+# 比只落在 business_context/contact 这类背景说明里，更能代表主体表倾向。
+DEMAND_TEXT_FIELDS = frozenset({"title", "description", "expected_output"})
 _CALIBER_STOPWORDS = (
     "主键", "唯一", "无其他", "一律", "不建模", "未建模", "便于", "冗余", "取值", "之一",
     "同上", "详见", "参考", "假设", "示例", "本字段", "该字段", "待补", "禁用", "禁止",
@@ -201,6 +209,62 @@ def build_lexicon(dataset="B"):
         (dataset,),
     ):
         text = g["definition"] or ""
+        # source='mdl' 的行不是术语词条，而是 **MDL 口径表达式的镜像**：
+        # term 形如 `表.列`（如 `dws_store_daily_agg.area_sqm`），value 是该列的口径句
+        # （如「坪效=销售额/面积」），由 `metadata_collect` 从 MDL 灌进来。
+        #
+        # 踩过的坑（2026-10-07 实测 DR-20261006-17YP）：原先不分来源一律按 glossary
+        # 处理，于是
+        #   ① `_term_variants` 把 `dws_store_daily_agg.area_sqm` 派生的「门店经营面积」等
+        #      变体当**术语**入词表；其中「门店」又把 ads 表拽进主体候选。
+        #   ② `_phrases_from_text('坪效=销售额/面积')` 抽出「销售额」，挂在 **area_sqm**
+        #      的 locator 上 → 字段候选输出「销售额 -> dws_store_daily_agg.area_sqm」，
+        #      把「销售额」指向了**面积**字段，属实打实的误导。
+        # 正确的身份是 `caliber_expression`（字段身份的补充说明，P1-14 已定其垫底），
+        # 且必须经 `_is_quality_caliber_phrase` 过滤，不能直接当字段。
+        if (g["source"] or "") == "mdl" and _MDL_CALIBER_LOCATOR_RE.match(str(g["term"] or "")):
+            # 这行的 term 本身就是 `表.列`，据此拆出归属，指标名才能挂到表上
+            # （否则 `_tables_of` 反查不到表，这条命中会被丢掉）。
+            _loc_table, _loc_col = str(g["term"]).split(".", 1)
+            _metric_names = _metric_names_from_text(text)
+            for name in _metric_names:
+                terms.append(
+                    {
+                        "term": name,
+                        "kind": "glossary",
+                        "canonical": g["term"],
+                        "label": name,
+                        "table": _loc_table,
+                        "column": _loc_col,
+                        "definition": text,
+                        "formula": g["formula"],
+                        "level": "P6",
+                        "source": "business_glossary",
+                        "locator": g["term"],
+                    }
+                )
+            # 其余词组只是口径里的成分说明，身份是 caliber_expression（垫底），
+            # 且要过噪声过滤。
+            for phrase in _phrases_from_text(text):
+                if phrase in _metric_names:
+                    continue  # 指标名已按 glossary 入表，不重复
+                if _is_quality_caliber_phrase(phrase):
+                    terms.append(
+                        {
+                            "term": phrase,
+                            "kind": "caliber_expression",
+                            "canonical": g["term"],
+                            "label": str(g["term"]).split(".")[-1],
+                            "table": _loc_table,
+                            "column": _loc_col,
+                            "definition": text,
+                            "source_caliber": text,
+                            "level": "P6",
+                            "source": "mdl_caliber_expression",
+                            "locator": g["term"],
+                        }
+                    )
+            continue
         for t in _term_variants(g["term"]):
             terms.append(
                 {
@@ -292,7 +356,32 @@ def build_lexicon(dataset="B"):
                         }
                     )
             else:
+                # 指标名（如「坪效=销售额/面积」里的「坪效」）是真业务词，身份是
+                # glossary；其余成分词走 caliber_expression 且要过噪声阈值。
+                _metric_names = _metric_names_from_text(_cal)
+                for name in _metric_names:
+                    terms.append(
+                        {
+                            "term": name,
+                            "kind": "glossary",
+                            # canonical 必须带表.列，否则 `_tables_of` 取不到表名
+                            # （它靠 `table` 或 `canonical.split('.')[0]` 反查），
+                            # 这条命中会被整条丢掉，连带让该表的主体候选消失。
+                            # 实测 DR-20261006-IAG7 / K5JI 因此回归。
+                            "canonical": "%s.%s" % (c["table_name"], c["column_name"]),
+                            "label": name,
+                            "table": c["table_name"],
+                            "column": c["column_name"],
+                            "definition": _cal,
+                            "formula": _cal,
+                            "level": "P6",
+                            "source": "business_glossary",
+                            "locator": "%s.%s" % (c["table_name"], c["column_name"]),
+                        }
+                    )
                 for phrase in _phrases_from_text(_cal):
+                    if phrase in _metric_names:
+                        continue
                     if not _is_quality_caliber_phrase(phrase):
                         continue
                     terms.append(
@@ -422,10 +511,56 @@ def _expand_aliases(terms):
     return out
 
 
-def _phrases_from_text(text):
-    """从口径定义句中切出 2–6 字的中文名词短语（如「活跃用户数」「复购用户数」）。"""
+def _metric_names_from_text(text):
+    """从口径公式里取**指标名本身**——公式的引导项。
+
+    为什么单独开一条通道（2026-10-07）
+    ---------------------------------
+    `_is_quality_caliber_phrase` 用「≥3 字」挡掉 2 字噪声（「关联」「链接」这类
+    套话），但指标名天然可以是 2 字：「坪效=销售额/面积」「面积」「客单」。
+    实测漏掉的就是「坪效」——门禁 evidence_selftest 三项因此变红
+    （关键标准词在册／口语别名指向／命中 坪效）。
+
+    认两种结构（都是结构判定，不靠业务词表）：
+      ① 等式：`坪效=销售额/面积` → 等号左边是指标名
+      ② 否定式并列：`销量≠销售额(金额)≠订单数(笔数)` → 第一项是指标名，
+         后面几项是**被排除**的口径。这里第一项只有 2 字（「销量」），
+         同样过不了 ≥3 字的噪声阈值。
+
+    而纯描述句里的「关联 dim_member」仍被噪声规则挡住——不靠放宽字数阈值换命中。
+    """
     out = []
-    for seg in re.split(r"[，。；、（）()=＝/／\+\-\*：:\s]+", text or ""):
+    for part in re.split(r"[；;，,。\n]+", text or ""):
+        part = part.strip()
+        if not part:
+            continue
+        # ① 等式左边的指标名
+        m = re.match(r"^([A-Za-z\u4e00-\u9fa5_][A-Za-z0-9_\u4e00-\u9fa5]{1,7})[=＝]", part)
+        if m:
+            name = clean_label(m.group(1))
+            if name and re.search(r"[\u4e00-\u9fa5]", name) and name not in out:
+                out.append(name)
+            continue
+        # ② 否定式并列的第一项：`销量≠销售额(金额)≠订单数(笔数)`
+        if "≠" in part or "!=" in part:
+            first = re.split(r"[≠!]=?", part, maxsplit=1)[0].strip()
+            name = clean_label(first)
+            if name and re.search(r"[\u4e00-\u9fa5]", name) and name not in out:
+                out.append(name)
+    return out
+
+
+def _phrases_from_text(text):
+    """从口径定义句中切出 2–8 字的中文名词短语（如「活跃用户数」「复购用户数」）。
+
+    切分符含 `≠`/`!=`：`销量≠销售额(金额)≠订单数(笔数)` 若不切，整句会成为一个
+    「销量≠销售额」这种永不命中的伪词条，还会挤掉同名的真词条（实测挤掉「销售件数」，
+    导致 dws_store_daily_agg 在主体候选里整个消失）。
+    """
+    out = []
+    for seg in re.split(
+        r"[，。；、（）()=＝≠!／/＋\+\-\*：:\s]+", text or ""
+    ):
         seg = re.sub(r"^(SUM|COUNT|AVG|MAX|MIN)", "", seg.strip())
         if 2 <= len(seg) <= 8 and re.search(r"[\u4e00-\u9fa5]", seg):
             out.append(seg)
@@ -466,7 +601,20 @@ def collect(demand=None, demand_id=None, dataset="B", lexicon=None, knowledge_mo
     status, items = {}, []
     demand = demand or {}
     fields = ["title", "business_context", "description", "expected_output", "contact"]
-    text = " ".join(str(demand.get(f) or "") for f in fields).strip()
+    # 诉求字段 vs 背景字段：拼成一段平铺文本会丢掉"这个词出现在哪"。
+    # 实测 DR-20261006-17YP（门店累计销量）里，「销售额」「订单数」只出现在
+    # business_context 的**对比列举**（"区分销售额/销量/订单数三种口径"），
+    # 而「销售件数」出现在 title/description/expected_output——那才是真正的诉求。
+    # 两者混在一起当同等证据，主体表就会选错。记下每个字段的偏移区间即可回溯。
+    _spans, _parts = {}, []
+    _cur = 0
+    for f in fields:
+        v = str(demand.get(f) or "").strip()
+        if v:
+            _parts.append(v)
+            _spans[f] = (_cur, _cur + len(v))
+            _cur += len(v) + 1  # 与下面的 " " join 对齐
+    text = " ".join(_parts).strip()
     if demand.get("time_range"):
         text += " " + str(demand["time_range"])
 
@@ -612,6 +760,20 @@ def collect(demand=None, demand_id=None, dataset="B", lexicon=None, knowledge_mo
     # ---- P6 数据字典（定向取证：只取被业务文本命中的术语） ----
     n6 = 0
     hits = match_terms(text, lexicon or []) if lexicon else []
+    # 回填每条命中落在哪个需求字段，并标注它是否出现在**诉求字段**里。
+    # 诉求字段 = title / description / expected_output（业务真正在要什么）；
+    # business_context / contact 是背景说明（常出现"区分 A/B/C 三种口径"这类
+    # 对比列举，把所有候选词都提一遍，不代表主体倾向）。
+    # 上层 `_demand_field_weight` 用它给命中加权，不在词表层做判断。
+    for h in hits:
+        span = h.get("span") or (0, 0)
+        where = [
+            f
+            for f, (a, b) in _spans.items()
+            if span[0] >= a and span[1] <= b
+        ]
+        h["demand_fields"] = where
+        h["in_demand_text"] = bool(DEMAND_TEXT_FIELDS.intersection(where))
     for h in hits:
         items.append(
             item(
@@ -791,12 +953,67 @@ UNMODELLED_MARK = "【未建模"
 # ---------------------------------------------------------------------------
 # 冲突检测
 # ---------------------------------------------------------------------------
+def _source_specificity(source):
+    """同级时的来源具体性：具体列 > 表级 > 术语词条 > 其他。
+
+    排在前面的更「具体」，同级冲突时优先采信（避免用泛化词条压过真实字段）。
+    """
+    s = str(source or "")
+    if "column_docs" in s or "table_docs" in s:
+        return 0
+    if "business_glossary" in s:
+        return 1
+    if "glossary" in s:
+        return 2
+    return 3
+
+
+#: 同级冲突的 tiebreak 键序（同时用于 `_tiebreak_key` 与 note 文案，两者不许各写一份）
+_TIEBREAK_FIELDS = ("置信度", "实词命中数", "区分度", "命中词数", "来源具体性")
+_TIEBREAK_DESC = "→".join(_TIEBREAK_FIELDS)
+
+
+def _tiebreak_key(c):
+    """(优先级, -置信度, -实词命中数, -区分度, -命中词数, 来源具体性)。
+
+    LEVEL_RANK 越小优先级越高；其后各项只在**同优先级**内起作用。
+
+    「实词命中数」排在区分度之前：靠 2 个泛化派生词凑够 `GENERIC_ONLY_MIN`
+    才入围的表（strong=0），证据强度低于有一条例实词命中的表（strong≥1）。
+
+    用**命中词数**而不是 hit_count：hit_count 统计的是"命中在需求里出现了几次"，
+    反映用词频次而非证据强度。实测 DR-20261006-17YP 中 ads 的「门店」在诉求里
+    出现 4 次（hit=6），而真正持有 sales_qty 的 dws 只命中 1 次（hit=2）——
+    按 hit_count 判胜负恰好选反。按词数则两表都是 2，如实进入打平分支。
+    """
+    return (
+        LEVEL_RANK.get(c.get("level"), 99),
+        -(c.get("confidence") or 0.0),
+        -(c.get("strong_hits") or 0),
+        -(c.get("discriminative_score") or 0.0),
+        -len(c.get("matched_terms") or ()),
+        _source_specificity(c.get("source")),
+    )
+
+
 def detect_conflicts(claims):
     """在同一槽位上，若不同优先级来源给出不同结论，判定为口径冲突。
 
-    claims: [{slot, value, level, source, locator}]
-    返回 [{slot, winner, loser, winner_level, loser_level, note}]
+    claims: [{slot, value, level, source, locator, confidence?, hit_count?, discriminative_score?}]
+    返回 [{slot, winner, loser, winner_level, loser_level, note, tiebreak}]
+
     规则：**低优先级不得覆盖高优先级**（§2.3），冲突本身必须报出而不是静默择一。
+
+    2026-10-07 修复：原先只按 LEVEL_RANK 排序，同优先级时 `sorted` 稳定排序
+    等于「取先出现的那条」= 任意；而 note 又无条件写死「低优先级不得覆盖高优先级」，
+    在同级场景下这句话本身就是错的，属于误导性输出（实测主体槽位因此选错表）。
+    现改为：同优先级用 置信度 → 实词命中数 → 区分度 → 命中数 → 来源具体性 做确定性
+    tiebreak，并让 note 如实说明是「高优先级覆盖」「同级 tiebreak」还是
+    「各项打平、需业务确认」。
+
+    打平时 `winner` 字段仍填排序首位（保持既有返回结构与下游读取不变），
+    但 `tiebreak="ambiguous_needs_confirmation"` + `needs_confirmation=True`
+    会明确告诉调用方：这个 winner **不是结论**，别当既定答案用。
     """
     by_slot = {}
     for c in claims:
@@ -809,12 +1026,58 @@ def detect_conflicts(claims):
             distinct.setdefault(_norm(c["value"]), []).append(c)
         if len(distinct) < 2:
             continue
-        ordered = sorted(group, key=lambda x: LEVEL_RANK.get(x["level"], 99))
+        ordered = sorted(group, key=_tiebreak_key)
         winner = ordered[0]
         for norm, members in distinct.items():
             if norm == _norm(winner["value"]):
                 continue
-            loser = members[0]
+            loser = min(members, key=_tiebreak_key)
+            same_level = LEVEL_RANK.get(winner["level"], 99) == LEVEL_RANK.get(loser["level"], 99)
+            needs_conf = same_level and (
+                winner.get("ambiguous") or loser.get("ambiguous")
+                or _tiebreak_key(winner) == _tiebreak_key(loser)
+            )
+            if needs_conf:
+                # 证据完全打平：分不出高下。此时**不能**靠列表顺序静默定赢家
+                # （那正是本次修复前的原始缺陷），按 R4 如实报为需业务确认。
+                note = (
+                    "%s 与 %s 同为 %s 级，且「%s」各项信号完全相同、无法区分高下；"
+                    "按 R4「未确认关键口径不得进入高置信输出」，需业务确认后再定，"
+                    "此处仅列出候选：%s（%s）／%s（%s）"
+                    % (
+                        winner["level"],
+                        loser["level"],
+                        winner["level"],
+                        _TIEBREAK_DESC,
+                        winner["value"],
+                        winner["source"],
+                        loser["value"],
+                        loser["source"],
+                    )
+                )
+                tiebreak = "ambiguous_needs_confirmation"
+            elif same_level:
+                note = (
+                    "%s 与 %s 同为 %s 级、无优先级差异，按「%s」tiebreak，"
+                    "取 %s（%s）"
+                    % (
+                        winner["level"],
+                        loser["level"],
+                        winner["level"],
+                        _TIEBREAK_DESC,
+                        winner["value"],
+                        winner["source"],
+                    )
+                )
+                tiebreak = "same_level_tiebreak"
+            else:
+                note = "%s（%s）覆盖 %s（%s）：低优先级不得覆盖高优先级" % (
+                    winner["level"],
+                    winner["source"],
+                    loser["level"],
+                    loser["source"],
+                )
+                tiebreak = "level_precedence"
             conflicts.append(
                 {
                     "slot": slot,
@@ -824,8 +1087,10 @@ def detect_conflicts(claims):
                     "loser": loser["value"],
                     "loser_level": loser["level"],
                     "loser_source": loser["source"],
-                    "note": "%s（%s）覆盖 %s（%s）：低优先级不得覆盖高优先级"
-                    % (winner["level"], winner["source"], loser["level"], loser["source"]),
+                    "note": note,
+                    "tiebreak": tiebreak,
+                    # 打平时为 True：winner 只是排序首位，**不是结论**，须业务确认
+                    "needs_confirmation": needs_conf,
                 }
             )
     return conflicts
