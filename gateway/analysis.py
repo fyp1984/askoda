@@ -598,6 +598,13 @@ def _claims_from_slots(slots):
                         "level": e.get("level"),
                         "source": e.get("source"),
                         "locator": e.get("locator"),
+                        # 同级消解需要的次级信号：没有它们就只能任意取首个（见 detect_conflicts）
+                        "confidence": c.get("confidence"),
+                        "strong_hits": c.get("strong_hits"),
+                        "hit_count": c.get("hit_count"),
+                        "discriminative_score": c.get("discriminative_score"),
+                        "matched_terms": c.get("matched_terms"),
+                        "ambiguous": c.get("ambiguous"),
                     }
                 )
     return claims

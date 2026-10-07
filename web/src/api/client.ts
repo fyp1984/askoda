@@ -70,14 +70,107 @@ export const api = {
     request<E2eStatus>(`/demand/${encodeURIComponent(demandId)}/e2e-status?dataset=${dataset}`),
   confirm: (demandId: string, body: { question_id: string; answer: string; choice?: string; actor?: string }) =>
     post<ConfirmResp>(`/demand/${encodeURIComponent(demandId)}/confirm`, body),
-  sqlGenerate: (demandId: string, dataset: string) =>
-    post<SqlResp>(`/demand/${encodeURIComponent(demandId)}/sql`, { dataset }),
+  sqlGenerate: (demandId: string, dataset: string, candidateSql?: string | string[]) =>
+    post<SqlResp>(`/demand/${encodeURIComponent(demandId)}/sql`, {
+      dataset,
+      candidate_sql: candidateSql,
+    }),
   sqlExecute: (demandId: string, dataset: string, sql?: string) =>
     post<SqlExecResp>(`/demand/${encodeURIComponent(demandId)}/sql/execute`, { dataset, sql }),
   citations: (demandId: string) =>
     request<{ ok: boolean; source?: string; total?: number; items?: unknown[]; degraded_reason?: string }>(
       `/demand/${encodeURIComponent(demandId)}/citations`,
     ),
+
+  // ---- M8 菜单① 语义层 · MDL 字典 ----
+  semanticManifest: (dataset: string) =>
+    request<Record<string, any>>(`/semantic/manifest?dataset=${encodeURIComponent(dataset)}`),
+  semanticMdl: (args: { dataset: string; table?: string; keyword?: string; include_hidden?: boolean }) => {
+    const q = new URLSearchParams({ dataset: args.dataset })
+    if (args.table) q.set('table', args.table)
+    if (args.keyword) q.set('keyword', args.keyword)
+    q.set('include_hidden', String(!!args.include_hidden))
+    return request<MdlResp>(`/semantic/mdl?${q.toString()}`)
+  },
+  semanticGlossary: (args: { term?: string; keyword?: string } = {}) => {
+    const q = new URLSearchParams()
+    if (args.term) q.set('term', args.term)
+    if (args.keyword) q.set('keyword', args.keyword)
+    return request<Record<string, any>>(`/semantic/glossary?${q.toString()}`)
+  },
+  semanticDryRun: (sql: string, dataset: string) =>
+    post<Record<string, any>>('/semantic/dry-run', { sql, dataset }),
+  semanticCollect: (dataset: string, engine = 'native') =>
+    post<Record<string, any>>('/semantic/collect', { dataset, engine }),
+
+  // ---- M8 菜单② 知识储备 ----
+  knowledgeHealth: () => request<Record<string, any>>('/knowledge/health'),
+  knowledgeDocuments: (limit = 50) => request<Record<string, any>>(`/knowledge/documents?limit=${limit}`),
+  knowledgeSearch: (body: { question: string; top_k?: number; threshold?: number; vector_weight?: number; demand_id?: string }) =>
+    post<KnowledgeSearchResp>('/knowledge/search', body),
+  knowledgeCitations: (args: { demand_id?: string; include_retired?: boolean; limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (args.demand_id) q.set('demand_id', args.demand_id)
+    if (args.include_retired) q.set('include_retired', 'true')
+    q.set('limit', String(args.limit ?? 50))
+    return request<Record<string, any>>(`/knowledge/citations?${q.toString()}`)
+  },
+
+  // ---- M8 菜单③ 数据源接入 ----
+  datasourceScan: (dataset: string, persist = true) =>
+    post<Record<string, any>>('/datasource/scan', { dataset, persist }),
+  datasourceVersion: (dataset: string) =>
+    request<Record<string, any>>(`/datasource/version?dataset=${encodeURIComponent(dataset)}`),
+  datasourceCandidates: (demandId: string, dataset: string) =>
+    request<Record<string, any>>(
+      `/datasource/candidates?demand_id=${encodeURIComponent(demandId)}&dataset=${encodeURIComponent(dataset)}`,
+    ),
+}
+
+// ---- M8 新增响应形状 ----
+export type MdlColumn = {
+  column_name: string
+  column_label?: string
+  data_type?: string
+  nullable?: boolean
+  is_sensitive?: boolean
+  is_primary_key?: boolean
+  description?: string
+  source?: string
+  ai_visible?: boolean
+}
+
+export type MdlTable = {
+  dataset?: string
+  table_name: string
+  table_label?: string
+  domain?: string
+  grain?: string
+  row_estimate?: number
+  source?: string
+  columns: MdlColumn[]
+  column_count?: number
+  hidden_column_count?: number
+}
+
+export type MdlResp = {
+  ok: boolean
+  returned?: number
+  tables?: MdlTable[]
+}
+
+export type KnowledgeSearchResp = {
+  ok?: boolean
+  question?: string
+  citations?: Array<{
+    document_name?: string
+    chunk_id?: string
+    similarity?: number
+    content?: string
+    positions?: unknown
+  }>
+  answer_context?: string
+  error?: string
 }
 
 // ---------------------------------------------------------------------------

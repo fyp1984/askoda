@@ -68,3 +68,6 @@ agents/state/task_orders/
 .models/bge-m3/
 # 改库前的 mysqldump 备份（含连接配置，不入库）
 .models/backup/
+
+# 待集中清理的归档（过程/缓存/旧产物），不入库
+_archive/

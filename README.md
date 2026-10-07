@@ -24,6 +24,7 @@
   <a href="#三架构与设计原则">架构</a> ·
   <a href="#四目录结构">目录</a> ·
   <a href="#五快速上手">快速上手</a> ·
+  <a href="docs/GLOSSARY.md">术语表</a> ·
   <a href="#mcp-tools">MCP 能力视图</a> ·
   <a href="#mcp-ops">MCP 操作与升级</a> ·
   <a href="#六验证与自证">验证</a> ·
@@ -42,6 +43,14 @@ Askoda 是**以自然语言与业务意图为驱动的企业级数据分析与�
 它与市面上常见「意图 → SQL」工具的根本区别在于：**它在需求分析之前先建知识底座，在数据提取之后再做合规审计**——正是这**首尾两段**，决定了它能否在企业级真实生产里落地。
 
 > 一次提问的完整判断链：这句话是怎么被理解的 → 用了哪张表 → 口径从哪里来 → 生成前后每一道门禁拦了什么 → 谁在什么时候执行过 → 结果为什么被判定为可交付。
+
+### 📖 术语说明
+
+本文及项目文档中出现的缩写（如 **MDL**、**BFF**、**MCP**、**RAGFlow**、**TEI**、**Wren**）与专有名词（证据层级 P1–P9、语义规则 R1–R7、静态规则 REGISTRY、门禁 G0–G3、架构红线 R1–R5），统一收敛在：
+
+**→ [术语表 · docs/GLOSSARY.md](docs/GLOSSARY.md)**
+
+> ⚠️ **注意本项目有四套编号体系，同名不同义**：`R1–R5` 是架构红线、`R1–R7` 是需求语义规则、`P1–P9` 是证据层级、`G0–G3` 是门禁层。引用时请写全称，避免混淆。
 
 Askoda 不是"万能问数器"。对于**口径模糊、一对多放大、未建模字段、未确认指标**，它宁可**返回澄清问题或直接拒绝**，也不会用默认值静默兜底。这是它与市面上通用 AI-BI 工具最本质的区别。
 
@@ -198,7 +207,7 @@ Askoda 的整体研发遵循 **本体论驱动的数据管理**理念（理论�
 
 ```
 askoda/
-├── gateway/          网关服务端（MCP 工具面 41 个）：受理 / 分析 / 生成 / 门禁 / 执行 / 留痕
+├── gateway/          网关服务端（MCP 工具面 45 个）：受理 / 分析 / 生成 / 门禁 / 执行 / 留痕
 │   ├── contracts/    对外契约（结构化需求 JSON Schema 等）
 │   ├── Dockerfile
 │   ├── requirements.txt    仅依赖：fastmcp / psycopg / minio / sqlglot
@@ -310,25 +319,25 @@ docker compose up -d --build
 
 ---
 
-### 5.5 MCP 能力视图（41 个工具 · 九个域）
+### 5.5 MCP 能力视图（45 个工具 · 九个域）
 
 <a id="mcp-tools"></a>
 
-网关通过**一个** streamable-http 端点对外暴露 **41 个工具**，按业务域分为九组。**工具名与入参以 `gateway/app.py` 的 `@mcp.tool` 注册处为唯一事实源**，下表与之逐条一致（自动核验见 `tools/mcp_acceptance_check.py`）。返回字段的完整承诺与边界条件见项目文档工作空间的《MCP 工具契约与注册说明》。
+网关通过**一个** streamable-http 端点对外暴露 **45 个工具**，按业务域分为九组。**工具名与入参以 `gateway/app.py` 的 `@mcp.tool` 注册处为唯一事实源**，下表与之逐条一致（自动核验见 `tools/mcp_acceptance_check.py`）。返回字段的完整承诺与边界条件见项目文档工作空间的《MCP 工具契约与注册说明》。
 
 | # | 域 | 数 | 工具 |
 |---|---|---|---|
 | 1 | 健康与数据集 | 4 | `gateway_health` `datasets` `knowledge_health` `schema_version` |
 | 2 | 兜底规划与 Wren 直通 | 5 | `plan` `wren_manifest` `wren_dry_run` `wren_query` `ask` |
-| 3 | 需求受理 | 5 | `demand_create` `demand_get` `demand_list` `demand_summarize` `demand_set_status` |
-| 4 | 知识检索 | 2 | `knowledge_search` `knowledge_documents` |
+| 3 | 需求受理 | 6 | `demand_create` `demand_get` `demand_list` `demand_summarize` `demand_set_status` `demand_similar_precheck` |
+| 4 | 知识检索 | 4 | `knowledge_search` `knowledge_documents` `knowledge_retire` `knowledge_citation_list` |
 | 5 | 元数据字典 | 3 | `metadata_lookup` `metadata_glossary` `metadata_collect` |
 | 6 | 附件 | 3 | `attachment_put` `attachment_list` `attachment_url` |
 | 7 | 语义分析与确认闭环 | 7 | `analysis_first_round` `analysis_rounds` `analysis_get` `analysis_evidence` `confirmation_generate` `confirmation_list` `confirmation_answer` |
 | 8 | 结构化需求与上下文包 | 5 | `schema_scan` `requirement_structured` `requirement_get` `schema_candidates` `sql_context_pack` |
-| 9 | 生成 · 门禁 · 执行 | 7 | `sql_review` `sql_plan` `sql_generate` `sql_execute_readonly` `sql_run_get` `sql_run_list` `sql_run_replay` |
+| 9 | 生成 · 门禁 · 执行 | 8 | `sql_review` `sql_plan` `sql_generate` `sql_execute_readonly` `sql_run_get` `sql_run_list` `sql_run_replay` `sql_optimize` |
 
-合计 **4+5+5+2+3+3+7+5+7 = 41**。
+合计 **4+5+6+4+3+3+7+5+8 = 45**。
 
 > 约定：入参列 `名: 类型 = 默认`，标 ★ 为必填；`dataset` 多数默认 `B`（裸库 A 用于验证换库）。所有输入输出均为 JSON。
 
@@ -455,7 +464,7 @@ demand_create
 # 1) 探活：status=ok，双库都 ok
 curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool
 
-# 2) 握手 + 取工具面（应返回 41 个工具）
+# 2) 握手 + 取工具面（应返回 45 个工具）
 SID=$(curl -sD- -o/dev/null -X POST http://127.0.0.1:18080/mcp \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}}' \
@@ -481,7 +490,7 @@ curl -s -X POST http://127.0.0.1:18080/mcp \
 #### 5.6.1 接入前后自查（3 步）
 
 1. `curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool` → `status` 应为 `ok`（知识库单独展示，不可用不拖垮整体，会如实进 `degraded`）；
-2. 客户端 `tools/list` → 应为 **41 个**；
+2. 客户端 `tools/list` → 应为 **45 个**；
 3. 冒烟：调 `datasets` 看双库（A / B）是否都在册。
 
 #### 5.6.2 常用运维动作
@@ -490,7 +499,7 @@ curl -s -X POST http://127.0.0.1:18080/mcp \
 docker compose ps                 # 7 服务是否全 healthy
 docker compose up -d --build      # 改过 gateway/ 后重建
 python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # 双探活（HTTP + MCP，含真调一次 gateway_health）
-python3 tools/mcp_acceptance_check.py                                 # 工具面 41 个逐条核对
+python3 tools/mcp_acceptance_check.py                                 # 工具面 45 个逐条核对
 ```
 
 > ⚠️ 容器内代码平铺 `/app`，但 `tools/` 不在 build context —— 跑容器内脚本前需 `docker cp`；走 HTTP 的脚本**必须在宿主跑**，容器内会 connection refused。
@@ -525,7 +534,7 @@ python3 tools/mcp_acceptance_check.py                                 # 工具�
 
 ### 5.7 MCP 人工验证
 
-要按「最低成本、逐个确认可用」手工验一遍全部 41 个工具，步骤见项目文档工作空间的《MCP 服务人工验证方案》。最快路径：先跑一次 `tools/mcp_acceptance_check.py` 拿到机器级结论，再沿 5.5 的八步链路建**一个**需求单走通主干（覆盖约 30 个工具），最后补齐无依赖探针与负向抽查。
+要按「最低成本、逐个确认可用」手工验一遍全部 45 个工具，步骤见项目文档工作空间的《MCP 服务人工验证方案》。最快路径：先跑一次 `tools/mcp_acceptance_check.py` 拿到机器级结论，再沿 5.5 的八步链路建**一个**需求单走通主干（覆盖约 30 个工具），最后补齐无依赖探针与负向抽查。
 
 ---
 
@@ -542,7 +551,7 @@ python3 tools/mcp_acceptance_check.py                                 # 工具�
 # 双探活（HTTP + MCP 全链路），加 --deep 额外真执行一次 gateway_health
 python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep
 
-# MCP 工具面验收（41 个工具 + 真实调用比对，对照《实施推进与验收方案》）
+# MCP 工具面验收（45 个工具 + 真实调用比对，对照《实施推进与验收方案》）
 python3 tools/mcp_acceptance_check.py
 
 # 五层门禁自证（纯离线，不依赖数据库）
@@ -679,7 +688,7 @@ Signed-off-by: 西北人 <fyp1984@yeah.net>
 ### 短期（v0.4 · 阶段二收尾 → 阶段三）
 
 - [x] **M6 · 规则体系 + 健壮性 + 留痕回放**（M6-0…M6-5）：规则库扩充（一对多 / 时间口径 / 装载日期 / DISTINCT 滥用）+ 失败回退矩阵 F1–F5 + 超时 / 重试 / 并发 + 审计回放；**M6-5 总验收 9/9 全过**。含 POC-3 规则补强（L2 分级阻断 + 枚举值校验）：陷阱拦截率 70% → 100%、误拦 0%
-- [ ] **M7 · MCP 工具面完善 + 前后端贯通**（关卡二）：41 工具契约收口 + Agent 仅凭一句业务需求自主编排串通全链路 + 最小前端闭环
+- [ ] **M7 · MCP 工具面完善 + 前后端贯通**（关卡二）：45 工具契约收口 + Agent 仅凭一句业务需求自主编排串通全链路 + 最小前端闭环
 - [ ] **M8 · 五菜单工作台 + 交互**（客户化设计）：语义层 · MDL 字典 / 知识储备 / 数据源接入 / 需求分析 · SQL 生成 / SQL 联调 · 交付
 - [ ] **M9 · 真实业务系统接入 + 真实场景验收测试**
 

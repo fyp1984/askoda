@@ -497,7 +497,8 @@ async def sql_generate(demand_id: str, body: SqlIn) -> Any:
 @app.post(f"{API}/demand/{{demand_id}}/sql/execute", tags=["取数"])
 async def sql_execute(demand_id: str, body: SqlExecuteIn) -> Any:
     # 没有显式传 SQL 时，先尝试从已生成的 sql_runs 里取最近一条。
-    # 实测：网关不会自动回填 sql_runs，直接执行会报「待执行 SQL 为空」。
+    # 网关 sql_generate 已落库初稿（见 gateway/sqlgen.generate），此处优先用
+    # final_delivery_sql（若已执行），否则回退 generated_sql（生成初稿）。
     sql_text = (body.sql or "").strip()
     if not sql_text:
         try:
@@ -568,6 +569,149 @@ async def citations(
             "total": len(cites),
             "items": cites,
         }
+    )
+
+
+# --------------------------------------------------------------------------
+# M8 · 菜单① 语义层 · MDL 字典
+# PRD §12.7：引擎状态 / MDL 版本与变更历史 / 模型资产（字段可见性·计算口径·关系与枚举）
+# 此菜单为工作台默认首页。
+# --------------------------------------------------------------------------
+class DryRunIn(BaseModel):
+    sql: str = Field(min_length=1, description="待预演的 SQL")
+    dataset: str = Field(default="B")
+
+
+class CollectIn(BaseModel):
+    dataset: str = Field(default="B")
+    engine: str = Field(default="native")
+
+
+@app.get(f"{API}/semantic/manifest", tags=["语义层"])
+async def semantic_manifest(dataset: str = "B") -> Any:
+    """语义引擎清单：引擎版本 / 数据集 / 模型与关系规模。"""
+    return sanitize(await call("wren_manifest", {"dataset": dataset}))
+
+
+@app.get(f"{API}/semantic/mdl", tags=["语义层"])
+async def semantic_mdl(
+    dataset: str = "B",
+    table: str | None = None,
+    keyword: str | None = None,
+    include_hidden: bool = False,
+) -> Any:
+    """MDL 模型资产：字段中文名 / 口径 / 类型 / 是否对 AI 可见。
+
+    `include_hidden=True` 会带出物理存在但未建模的列，并标注「AI 不可见」——
+    这些是刻意不对 AI 开放的敏感列（PRD §12.7 界面原则 1：三色标识）。
+    """
+    args: dict[str, Any] = {"dataset": dataset, "include_hidden": include_hidden}
+    if table:
+        args["table"] = table
+    if keyword:
+        args["keyword"] = keyword
+    return sanitize(await call("metadata_lookup", args))
+
+
+@app.get(f"{API}/semantic/glossary", tags=["语义层"])
+async def semantic_glossary(term: str | None = None, keyword: str | None = None) -> Any:
+    """业务术语与口径词条。"""
+    return sanitize(await call("metadata_glossary", {"term": term, "keyword": keyword}))
+
+
+@app.post(f"{API}/semantic/dry-run", tags=["语义层"])
+async def semantic_dry_run(body: DryRunIn) -> Any:
+    """语义层预演（不执行）：SQL 引用的对象是否都在 MDL 可见闭集内。"""
+    return sanitize(await call("wren_dry_run", {"sql": body.sql, "dataset": body.dataset}))
+
+
+@app.post(f"{API}/semantic/collect", tags=["语义层"])
+async def semantic_collect(body: CollectIn) -> Any:
+    """重采集物理结构并重新播种 MDL 语义层（写元数据字典）。"""
+    return sanitize(await call("metadata_collect", {"dataset": body.dataset, "engine": body.engine}))
+
+
+# --------------------------------------------------------------------------
+# M8 · 菜单② 知识储备
+# PRD §12.7：知识收集 / 知识准入 / 知识库资产。
+# 说明：上传与准入依赖 RAGFlow 独立栈（B4），当前先交付「检索 + 资产 + 引用溯源」。
+# --------------------------------------------------------------------------
+class KnowledgeSearchIn(BaseModel):
+    question: str = Field(min_length=1, description="检索问题")
+    top_k: int = Field(default=5)
+    threshold: float = Field(default=0.1, description="相似度下限，必须 >0（传 0 会被服务端回退成 0.2）")
+    vector_weight: float = Field(default=0.7)
+    demand_id: str = Field(default="", description="留痕用；为空则只检索不登记引用")
+
+
+@app.get(f"{API}/knowledge/health", tags=["知识储备"])
+async def knowledge_health() -> Any:
+    """知识库连通性与数据集可见性（含已解析文档数）。"""
+    return sanitize(await call("knowledge_health", {}))
+
+
+@app.get(f"{API}/knowledge/documents", tags=["知识储备"])
+async def knowledge_documents(limit: int = 50) -> Any:
+    """知识库资产：已入库文档（名称 / 解析状态 / 分块数）。"""
+    return sanitize(await call("knowledge_documents", {"limit": limit}))
+
+
+@app.post(f"{API}/knowledge/search", tags=["知识储备"])
+async def knowledge_search(body: KnowledgeSearchIn) -> Any:
+    """检索知识库，返回带来源的引用（文档名 / 片段定位 / 相似度）。"""
+    return sanitize(
+        await call(
+            "knowledge_search",
+            {
+                "question": body.question,
+                "top_k": body.top_k,
+                "threshold": body.threshold,
+                "vector_weight": body.vector_weight,
+                "demand_id": body.demand_id,
+            },
+        )
+    )
+
+
+@app.get(f"{API}/knowledge/citations", tags=["知识储备"])
+async def knowledge_citations(
+    demand_id: str = "", include_retired: bool = False, limit: int = 50
+) -> Any:
+    """知识引用留痕记录（按 demand_id 筛选；为空则返回跨需求最近记录）。"""
+    return sanitize(
+        await call(
+            "knowledge_citation_list",
+            {"demand_id": demand_id, "include_retired": include_retired, "limit": limit},
+        )
+    )
+
+
+# --------------------------------------------------------------------------
+# M8 · 菜单③ 数据源接入
+# PRD §12.7：数据库接入 / Schema 差异与 MDL 候选 / 表结构与数据字典。
+# --------------------------------------------------------------------------
+class ScanIn(BaseModel):
+    dataset: str = Field(default="B")
+    persist: bool = Field(default=True, description="是否写入 schema_snapshots（重复扫描幂等）")
+
+
+@app.post(f"{API}/datasource/scan", tags=["数据源接入"])
+async def datasource_scan(body: ScanIn) -> Any:
+    """扫描数据集 Schema，产出快照与稳定版本号（同一库两次扫描必须同值）。"""
+    return sanitize(await call("schema_scan", {"dataset": body.dataset, "persist": body.persist}))
+
+
+@app.get(f"{API}/datasource/version", tags=["数据源接入"])
+async def datasource_version(dataset: str = "B") -> Any:
+    """最近一次 Schema 快照的版本号与规模（表数 / 字段数）。"""
+    return sanitize(await call("schema_version", {"dataset": dataset}))
+
+
+@app.get(f"{API}/datasource/candidates", tags=["数据源接入"])
+async def datasource_candidates(demand_id: str, dataset: str = "B") -> Any:
+    """在 MDL 闭集内给出主题表 / 关联路径 / 时间字段候选（未命中给 miss_reason，不猜）。"""
+    return sanitize(
+        await call("schema_candidates", {"demand_id": demand_id, "dataset": dataset})
     )
 
 
