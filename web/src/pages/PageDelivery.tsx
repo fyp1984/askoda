@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { api, type E2eStatus, type SqlExecResp, type SqlResp } from '../api/client'
 import { Card, ErrorBox, Loading, PartialErrorsBox } from '../components/ui'
+import DemandStatusActions from '../components/DemandStatusActions'
+import AuditReplay from '../components/AuditReplay'
 
 /**
  * 菜单⑤ · SQL 联调 · 交付
@@ -274,6 +276,16 @@ export default function PageDelivery({
           </div>
         )}
       </Card>
+
+      {/* 审计回放：把「迭代记录」那张留痕表还原成可对照复算的完整判断链 */}
+      <AuditReplay demandId={demandId} />
+
+      {/* 取到数之后的下一步：把需求收口到终态「已通过」，或退回让业务方改 */}
+      <DemandStatusActions
+        demandId={demandId}
+        currentStatus={status?.demand?.status}
+        onDone={onRefresh}
+      />
     </div>
   )
 }

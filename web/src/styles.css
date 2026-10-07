@@ -93,6 +93,28 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 
 .linklike { border: none; background: none; color: var(--primary); text-decoration: underline; padding: 0; cursor: pointer; }
 
+/* 空态：列表无数据时给出「为什么空 + 下一步该干什么」，不允许只留一片空白 */
+.emptybox { border: 1px dashed var(--line); border-radius: 6px; padding: 18px; text-align: center; background: #fcfcfd; }
+.emptybox-title { font-weight: 600; margin-bottom: 6px; }
+.emptybox-hint { font-size: 12px; color: var(--muted); }
+
+/* 分页器 */
+.pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+
+/* 二次确认框：状态流转等不可逆操作专用 */
+.confirmbox { border: 1px solid #f0dca8; background: var(--warn-bg); border-radius: 6px; padding: 12px; margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+.confirmbox-title { font-weight: 600; color: #7a5200; }
+.confirmbox-hint { font-size: 12px; color: var(--warn); }
+
+/* 可选标记（与必填的 .req 相对） */
+.opt-tag { color: var(--muted); font-style: normal; margin-left: 6px; font-size: 11px; }
+
+/* 列表里的状态筛选下拉 */
+.status-pick { margin-left: 6px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+
+/* 当前选中的需求行 */
+.row-cur { background: #f2f7fd; }
+
 .meta-row { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 .cap { color: var(--warn); }
 
