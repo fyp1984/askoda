@@ -417,6 +417,108 @@ def knowledge_documents(limit: int = 50) -> dict:
 
 
 @mcp.tool
+def knowledge_upload(
+    filename: str,
+    content_base64: str,
+    content_type: str = "",
+    actor: str = "",
+) -> dict:
+    """上传一份文档到知识库并触发解析（知识准入）。
+
+    入库分两步（RAGFlow v0.26.4 契约）：先 multipart 直传到数据集，
+    再 `documents/parse` 触发切分+向量化。**解析是异步的**，本调用返回后
+    用 `knowledge_document_status` 轮询进度，不要在本次调用里等。
+
+    入参
+    ----
+    filename       原始文件名，含扩展名（如 `口径补充.md`）。中文名支持。
+    content_base64 文件内容的 base64（**不是纯文本**——文档常是二进制，
+                   走 base64 才能原样传pdf/docx）。
+    content_type   MIME，可留空。
+    actor          操作人，仅用于留痕。
+
+    准入范围：只放行文档类扩展名（md/txt/pdf/docx/xlsx/csv/html 等），
+    单文件上限默认 32MB（`KNOWLEDGE_MAX_UPLOAD_MB`可调）。
+    """
+    try:
+        import base64
+
+        if not filename:
+            return {"ok": False, "error": "filename 不能为空"}
+        if not content_base64:
+            return {"ok": False, "error": "content_base64 不能为空"}
+        try:
+            raw = base64.b64decode(content_base64, validate=False)
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": "content_base64 解码失败：%s: %s" % (type(e).__name__, str(e)[:160]),
+            }
+        result = knowledge.upload_document(
+            filename, raw, content_type=content_type, dataset_id=""
+        )
+        if result.get("ok") and actor:
+            _record_knowledge_event(actor, "knowledge_upload", filename[:200], result)
+        return result
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@mcp.tool
+def knowledge_document_status(document_id: str = "", limit: int = 50) -> dict:
+    """查知识库文档的解析进度（前端轮询用）。
+
+    不传 document_id 就返回全部文档。解析为异步，上传后应轮询到
+    `run=DONE` 才算真正可被检索命中。
+    """
+    try:
+        return knowledge.document_status(document_id=document_id, limit=limit)
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@mcp.tool
+def knowledge_delete(document_id: str, actor: str = "") -> dict:
+    """从知识库撤库一份文档（知识准入的反向操作）。
+
+    只删RAGFlow 里的文档，不碰需求单与附件存储。
+    """
+    try:
+        result = knowledge.delete_document(document_id, actor=actor)
+        if result.get("ok") and actor:
+            _record_knowledge_event(actor, "knowledge_delete", document_id[:200], result)
+        return result
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+def _record_knowledge_event(actor, event_type, detail_summary, result):
+    """知识准入的流转留痕。写不进去不阻断主流程——留痕是附加价值。"""
+    try:
+        import db as _db
+
+        _db.execute(
+            "INSERT INTO demand_events (demand_id, event_type, actor, detail) "
+            "VALUES (%s,%s,%s,%s)",
+            (
+                "KC-EVENT",
+                event_type,
+                str(actor)[:64],
+                _db.dumps(
+                    {
+                        "summary": str(detail_summary)[:200],
+                        "dataset_id": (result or {}).get("dataset_id"),
+                        "document_ids": (result or {}).get("document_ids")
+                        or [(result or {}).get("document_id")],
+                    }
+                ),
+            ),
+        )
+    except Exception:
+        pass
+
+
+@mcp.tool
 def knowledge_retire(citation_id: str, reason: str = "", actor: str = "") -> dict:
     """把某条知识引用标记为已下架/已回退（PRD §13 第③类留痕）。
 

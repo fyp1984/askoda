@@ -147,6 +147,25 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .chip-red { background: var(--danger-bg); color: var(--danger); }
 .chip-green { background: var(--ok-bg); color: var(--ok); }
 .chip-muted { background: #eceef1; color: var(--muted); }
+.chip-blue { background: #e7f0fd; color: #1a5fb4; }
+
+/* ---- 知识收集：上传 / 自动获取 ---- */
+.uploadbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
+.uploadbar input[type="file"] { font-size: 12.5px; max-width: 100%; }
+.uploadbar-hint { font-size: 12px; color: var(--muted); }
+
+/* 成功回执（区别于 .errbox 的失败回执） */
+.okbox { border: 1px solid #b6e0c4; background: var(--ok-bg); border-radius: 6px; padding: 10px 12px; margin: 10px 0; }
+.okbox-title { color: var(--ok); font-weight: 600; }
+.okbox-msg { margin-top: 4px; font-size: 12px; }
+
+/* 行内文字按钮（表格「操作」列的撤库） */
+.linkbtn {
+  border: none; background: none; padding: 0;
+  color: var(--primary); font-size: 12px; cursor: pointer; text-decoration: underline;
+}
+.linkbtn:hover { color: var(--primary-d); }
+.linkbtn:disabled { color: var(--muted); cursor: not-allowed; text-decoration: none; }
 
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
 table.grid { border-collapse: collapse; width: 100%; font-size: 12px; }
@@ -231,6 +250,34 @@ table.grid tr:last-child td { border-bottom: none; }
   background: #fff;
 }
 
+/* ---- 结果图表（recharts 自动选型）---- */
+.chart-frame { display: flex; flex-direction: column; gap: 8px; }
+/* 图型说明：让用户知道「为什么是这个图」，选型才可解释、可预期 */
+.chart-why {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 12.5px; color: var(--text);
+  background: #f2f6fd; border: 1px solid #cfdef5; border-radius: 6px; padding: 7px 10px;
+}
+.chart-why-tag {
+  flex: none; background: var(--primary); color: #fff;
+  border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 600;
+}
+.chart-note { margin: 0; font-size: 12px; }
+/* 降级提示（空数据 / 1 行 / 无数值列 / 高基数） */
+.chart-degraded {
+  border: 1px dashed var(--line); border-radius: 6px;
+  background: #fafbfc; padding: 14px 12px;
+}
+.chart-degraded p { margin: 0 0 4px; }
+.chart-degraded p:last-child { margin-bottom: 0; }
+
+/* 表格 / 图表 视图切换 */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg-btn { border: none; border-radius: 0; padding: 5px 14px; font-size: 12.5px; background: #fff; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--line); }
+.seg-btn.on { background: var(--primary); color: #fff; }
+.seg-btn.on:hover { background: var(--primary-d); }
+
 .notice {
   background: #eef6ff;
   border: 1px solid #b9d5f2;
@@ -246,4 +293,7 @@ table.grid tr:last-child td { border-bottom: none; }
 @media (max-width: 720px) {
   .field-row { grid-template-columns: 1fr; }
   .trace { flex-direction: column; gap: 10px; }
+  /* 窄屏：图表容器必须允许收缩，否则 ResponsiveContainer 量到宽度 0 会白屏 */
+  .chart-frame > div { min-width: 0; }
+  .chart-why { flex-direction: column; gap: 4px; }
 }
