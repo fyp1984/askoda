@@ -164,6 +164,26 @@ class SimilarPrecheckIn(BaseModel):
     threshold: float = 0.55
 
 
+class DemandSetStatusIn(BaseModel):
+    status: str = Field(min_length=1, description="目标状态；必须是 DEMAND_STATUSES 之一")
+    note: str | None = Field(default=None, description="流转说明；退回时必填")
+    actor: str = Field(default="", description="操作人，用于留痕")
+
+
+# 需求状态机取值，与 gateway/demand.py:40 STATUSES 逐字一致。
+# 在 BFF 侧独立持有一份，是为了让**非法状态在服务端就被拒**，
+# 不透传到网关（网关虽也会拒，但那时已经产生了一次无意义的跨服务调用）。
+DEMAND_STATUSES = (
+    "待分析",
+    "分析中",
+    "待业务确认",
+    "待补充修改",
+    "待审核通过",
+    "已通过",
+    "已退回",
+)
+
+
 # --------------------------------------------------------------------------
 # 工具调用封装
 # --------------------------------------------------------------------------
@@ -218,7 +238,84 @@ async def create_demand(body: DemandCreateIn) -> Any:
     return sanitize(result)
 
 
-# 5. POST /api/v1/demand/similar-precheck —— 提交前查重
+# 5. GET /api/v1/demand —— 需求列表（找回需求）
+@app.get(f"{API}/demand", tags=["需求"])
+async def list_demands(
+    status: str | None = None, limit: int = 20, offset: int = 0
+) -> Any:
+    """需求列表：业务人员离开页面后据此找回自己提交过的需求。
+
+    转发网关 `demand_list`（入参 status/limit/offset，见 tools/list 实盘 schema）。
+    limit 上限 100、offset 下限 0 在**服务端夹紧**，避免前端（或误调用）打穿网关。
+    """
+    if status is not None and status not in DEMAND_STATUSES:
+        raise ApiError(
+            code="INVALID_STATUS",
+            message=f"状态筛选值「{status}」不是合法状态。",
+            hint=f"可选状态：{'、'.join(DEMAND_STATUSES)}。"
+                 "请从下拉框里选一个，不要手工输入。",
+        )
+
+    safe_limit = max(1, min(limit, 100))
+    safe_offset = max(0, offset)
+    result = await call(
+        "demand_list",
+        {"status": status, "limit": safe_limit, "offset": safe_offset},
+    )
+    reason = _tool_rejected(result)
+    if reason:
+        raise ApiError(
+            code="DEMAND_LIST_FAILED",
+            message=reason,
+            hint="需求列表没取到。请稍后重试；若持续失败，去运维确认 MCP 网关状态。",
+        )
+    return sanitize(result)
+
+
+# 6. POST /api/v1/demand/{id}/set-status —— 需求状态流转（含「验收通过」收口）
+@app.post(f"{API}/demand/{{demand_id}}/set-status", tags=["需求"])
+async def set_demand_status(demand_id: str, body: DemandSetStatusIn) -> Any:
+    """流转需求单状态，转发网关 `demand_set_status`。
+
+    服务端在此校验 status 合法性（不把非法值透传给网关）；
+    「已退回」必须带 note——退回不给理由等于把问题踢回给业务方。
+    """
+    if body.status not in DEMAND_STATUSES:
+        raise ApiError(
+            code="INVALID_STATUS",
+            message=f"状态「{body.status}」不是合法状态。",
+            hint=f"可选状态：{'、'.join(DEMAND_STATUSES)}。"
+                 "若你看到这条，说明前端传了状态机之外的值，请刷新页面重试。",
+        )
+    if body.status == "已退回" and not (body.note or "").strip():
+        raise ApiError(
+            code="NOTE_REQUIRED",
+            message="退回必须写明原因。",
+            hint="请在退回原因里写清楚业务方要改什么（例如口径不对、维度缺失），"
+                 "否则提交方无法定位问题。",
+        )
+
+    result = await call(
+        "demand_set_status",
+        {
+            "demand_id": demand_id,
+            "status": body.status,
+            "note": body.note,
+            "actor": body.actor,
+        },
+    )
+    reason = _tool_rejected(result)
+    if reason:
+        raise ApiError(
+            code="SET_STATUS_FAILED",
+            message=reason,
+            hint="状态没有流转成功。请确认需求编号是否正确；"
+                 "若该需求已被清理，请回到「需求列表」重新选一条。",
+        )
+    return sanitize(result)
+
+
+# 7. POST /api/v1/demand/similar-precheck —— 提交前查重
 @app.post(f"{API}/demand/similar-precheck", tags=["需求"])
 async def similar_precheck(body: SimilarPrecheckIn) -> Any:
     """相似需求预检。
@@ -279,7 +376,7 @@ async def similar_precheck(body: SimilarPrecheckIn) -> Any:
     }
 
 
-# 6. POST /api/v1/demand/{id}/analyze —— 首轮分析
+# 8. POST /api/v1/demand/{id}/analyze —— 首轮分析
 @app.post(f"{API}/demand/{{demand_id}}/analyze", tags=["分析"])
 async def analyze(demand_id: str, body: AnalyzeIn) -> Any:
     result = await call(
@@ -297,7 +394,7 @@ async def analyze(demand_id: str, body: AnalyzeIn) -> Any:
     return sanitize(result)
 
 
-# 7. GET /api/v1/demand/{id}/e2e-status —— ★核心聚合接口
+# 9. GET /api/v1/demand/{id}/e2e-status —— ★核心聚合接口
 @app.get(f"{API}/demand/{{demand_id}}/e2e-status", tags=["聚合"])
 async def e2e_status(demand_id: str, dataset: str = "B", run_limit: int = 20) -> Any:
     """一次打包 6 个 MCP 工具结果，前端只调1 次。
@@ -378,7 +475,7 @@ _NOT_READY_HINT = {
 }
 
 
-# 8. POST /api/v1/demand/{id}/confirm —— 口径确认答复
+# 10. POST /api/v1/demand/{id}/confirm —— 口径确认答复
 @app.post(f"{API}/demand/{{demand_id}}/confirm", tags=["确认"])
 async def confirm(demand_id: str, body: ConfirmIn) -> Any:
     """答复一条口径确认。
@@ -467,7 +564,7 @@ def _detect_backfill(before: Any, after: Any) -> dict[str, Any]:
     }
 
 
-# 9. POST /api/v1/demand/{id}/sql —— 生成 SQL
+# 11. POST /api/v1/demand/{id}/sql —— 生成 SQL
 @app.post(f"{API}/demand/{{demand_id}}/sql", tags=["取数"])
 async def sql_generate(demand_id: str, body: SqlIn) -> Any:
     # 实测：`sql_generate` 不会自动产出结构化需求对象，若跳过这一步，
@@ -493,7 +590,7 @@ async def sql_generate(demand_id: str, body: SqlIn) -> Any:
     return sanitize(result)
 
 
-# 10. POST /api/v1/demand/{id}/sql/execute —— 执行只读 SQL
+# 12. POST /api/v1/demand/{id}/sql/execute —— 执行只读 SQL
 @app.post(f"{API}/demand/{{demand_id}}/sql/execute", tags=["取数"])
 async def sql_execute(demand_id: str, body: SqlExecuteIn) -> Any:
     # 没有显式传 SQL 时，先尝试从已生成的 sql_runs 里取最近一条。
@@ -524,7 +621,7 @@ async def sql_execute(demand_id: str, body: SqlExecuteIn) -> Any:
     return sanitize(result)
 
 
-# 11. GET /api/v1/demand/{id}/citations —— 知识引用明细
+# 13. GET /api/v1/demand/{id}/citations —— 知识引用明细
 @app.get(f"{API}/demand/{{demand_id}}/citations", tags=["溯源"])
 async def citations(
     demand_id: str, include_retired: bool = False, limit: int = 50
@@ -568,6 +665,95 @@ async def citations(
             "sql_run_count": (runs or {}).get("total", 0) if isinstance(runs, dict) else 0,
             "total": len(cites),
             "items": cites,
+        }
+    )
+
+
+# --------------------------------------------------------------------------
+# 14. GET /api/v1/demand/{id}/replay —— ★审计回放（技术人员视角的完整判断链）
+# --------------------------------------------------------------------------
+# 为什么单独开一个接口、而不是塞进 e2e-status：
+# e2e-status 是「当前态」聚合（每块只取最新一次），审计回放是「历史态」查询——
+# 要能按版本号精确复原某一次的输入/门禁/结论。两者语义与生命周期都不同，
+# 混在一起会把 e2e-status 变成什么都能塞的胖接口，反而更难读。
+@app.get(f"{API}/demand/{{demand_id}}/replay", tags=["审计"])
+async def demand_replay(demand_id: str, version: int = 0) -> Any:
+    """按版本精确复原当时的完整判断链：输入 → pack_version → SQL → 审查 → 结果。
+
+    转发网关 `sql_run_replay`（入参 demand_id / version，version=0 取最近一次）。
+    实盘核对：网关的 version 语义是**第 N 次执行（从 1 起）**，而 `sql_run_list`
+    按时间**倒序**返回。两者方向相反，直接把列表下标当 version 传回放会取错版本。
+    因此这里同时取一次列表、在 BFF 侧把 version_idx 算好一并返回，
+    前端只需回传它拿到的 version_idx，不必自己推导。
+    """
+    safe_version = max(0, version)
+
+    # 1) 先取该需求的全部执行记录，用于渲染版本清单
+    runs = await call("sql_run_list", {"demand_id": demand_id, "limit": 100})
+    reason = _tool_rejected(runs)
+    if reason:
+        raise ApiError(
+            code="REPLAY_RUNS_FAILED",
+            message=reason,
+            hint="取不到该需求的执行记录。请确认需求编号是否正确；"
+                 "若该需求已被清理，请回到「需求列表」重新选一条。",
+        )
+    total = int((runs or {}).get("total") or 0)
+    items = (runs or {}).get("items") or []
+    # sql_run_list 是 created_at DESC，sql_run_replay 的 version 是第 N 次（ASC）。
+    # 两条排序键完全相同，故倒序列表的第 i 项对应 version_idx = total - i。
+    versions = [
+        {
+            "version_idx": total - i,
+            "sql_run_id": r.get("sql_run_id"),
+            "created_at": r.get("created_at"),
+            "review_status": r.get("review_status"),
+            "adopted": r.get("adopted"),
+            "generator_model": r.get("generator_model"),
+            "actor": r.get("actor"),
+            "requirement_version": r.get("requirement_version"),
+            "schema_version": r.get("schema_version"),
+            "pack_version": r.get("pack_version"),
+            "generated_sql_preview": r.get("generated_sql_preview"),
+        }
+        for i, r in enumerate(items)
+    ]
+
+    # 2) 还没有任何执行记录 → 不当作故障，前端据此渲染空态
+    if total == 0:
+        return sanitize(
+            {
+                "ok": True,
+                "demand_id": demand_id,
+                "total": 0,
+                "versions": [],
+                "replay": None,
+                "notice": "该需求还没有任何 SQL 执行记录，无可回放。"
+                          "请先在「SQL 联调 · 交付」页点「生成 SQL」。",
+            }
+        )
+
+    # 3) 取指定版本的完整快照
+    replay = await call(
+        "sql_run_replay", {"demand_id": demand_id, "version": safe_version}
+    )
+    reason = _tool_rejected(replay)
+    if reason:
+        raise ApiError(
+            code="REPLAY_VERSION_INVALID",
+            message=reason,
+            hint=f"该需求共有 {total} 次执行记录，请从上面的版本清单里选一个再回放。",
+        )
+
+    return sanitize(
+        {
+            "ok": True,
+            "demand_id": demand_id,
+            "total": total,
+            "versions": versions,
+            "replay": replay,
+            "notice": "以下内容是当次运行的**快照**，由历史留痕复原，"
+                      "不受此后元数据/知识库变动影响。",
         }
     )
 
