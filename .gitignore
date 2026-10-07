@@ -18,6 +18,15 @@ node_modules/
 *.tsbuildinfo
 npm-debug.log*
 yarn-error.log*
+# vite 加载 TS 配置时生成的中间态文件（含绝对路径与时间戳，每次 dev/build 都会变）
+web/vite.config.ts.timestamp-*
+vite.config.ts.timestamp-*
+# 编辑器/工具留下的临时与备份文件
+*.tmp
+*.orig
+*.rej
+*.bak
+*~
 
 # ---- Python ----
 __pycache__/
