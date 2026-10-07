@@ -43,6 +43,14 @@ Its fundamental difference from typical "intent → SQL" tools: **it builds a kn
 
 > The full judgment chain for one question: How was the request understood → Which table was used → Where did the metric definition come from → What did each gate block → Who executed it and when → Why was the result deemed deliverable.
 
+### 📖 Glossary
+
+Abbreviations (**MDL**, **BFF**, **MCP**, **RAGFlow**, **TEI**, **Wren**) and domain terms (evidence levels P1–P9, semantic rules R1–R7, static rule REGISTRY, gate layers G0–G3, architecture red lines R1–R5) are consolidated in one place:
+
+**→ [术语表 · docs/GLOSSARY.md](docs/GLOSSARY.md)** *(Chinese)*
+
+> ⚠️ **Four independent numbering systems share similar labels**: `R1–R5` = architecture red lines, `R1–R7` = requirement semantic rules, `P1–P9` = evidence levels, `G0–G3` = gate layers. Always spell out the full name when referring to them.
+
 Askoda is **not a "universal AI chat-over-data" tool**. When definitions are ambiguous, one-to-many amplification is possible, fields are unmodeled, or metrics are not yet confirmed — Askoda **returns clarifying questions or refuses entirely** rather than guessing with silent defaults. This is the core difference from general AI-BI tools on the market.
 
 ### 1.1 The 3-Layer Spine: Facts → Logic → Action
