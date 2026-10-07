@@ -3,6 +3,7 @@ import { api, type E2eStatus, type SqlExecResp, type SqlResp } from '../api/clie
 import { Card, ErrorBox, Loading, PartialErrorsBox } from '../components/ui'
 import DemandStatusActions from '../components/DemandStatusActions'
 import AuditReplay from '../components/AuditReplay'
+import ResultChart from '../components/ResultChart'
 
 /**
  * 菜单⑤ · SQL 联调 · 交付
@@ -26,6 +27,8 @@ export default function PageDelivery({
   const [exec, setExec] = useState<SqlExecResp | null>(null)
   const [busy, setBusy] = useState<'gen' | 'exec' | null>(null)
   const [error, setError] = useState<unknown>(null)
+  // 结果区视图：图表 / 表格。部分用户习惯直接看数字，所以两个视图都保留，且可一键切换。
+  const [view, setView] = useState<'chart' | 'table'>('chart')
 
   if (!demandId) {
     return (
@@ -71,23 +74,10 @@ export default function PageDelivery({
   const rows: unknown[][] = exec?.sample_rows || []
   const runs: any[] = status?.runs?.items || []
 
-  // ---- 结果可视化：找「一个文本标签列 + 一个数值列」画柱状图 ----
-  const numericIdx = (() => {
-    for (let j = 0; j < cols.length; j++) {
-      const vals = rows.map((r) => r[j])
-      if (vals.length === 0) continue
-      const ok = vals.every((v) => v !== null && v !== undefined && v !== '' && !Number.isNaN(Number(v)))
-      if (ok) return j
-    }
-    return -1
-  })()
-  const labelIdx = numericIdx >= 0 ? cols.findIndex((_, j) => j !== numericIdx) : -1
-  const canChart = numericIdx >= 0 && labelIdx >= 0 && rows.length > 0
-
-  const chartData = canChart
-    ? rows.map((r) => ({ label: String(r[labelIdx] ?? ''), value: Number(r[numericIdx] ?? 0) }))
-    : []
-  const maxVal = Math.max(...chartData.map((d) => Math.abs(d.value)), 1)
+  // 后端只回传前若干行样本（实测真实 9 行时 sample_rows 仅 5 行）。
+  // 这里如实告知用户「图上画的是样本，不是全量」，不谎称已展示全部数据。
+  const totalRows = exec?.row_count ?? exec?.validation_result?.row_count ?? rows.length
+  const truncated = rows.length > 0 && totalRows > rows.length
 
   // ---- 生产脚本导出（头注：口径依据 + 门禁记录 + 溯源三件套）----
   const buildExport = () => {
@@ -194,15 +184,32 @@ export default function PageDelivery({
         ) : null}
       </Card>
 
-      {exec && canChart ? (
-        <Card title={`结果可视化 · ${cols[numericIdx]}（按 ${cols[labelIdx]}）`}>
-          <BarChart data={chartData} max={maxVal} unit={cols[numericIdx]} />
-        </Card>
-      ) : null}
-
       {exec ? (
-        <Card title="结果集">
-          {cols.length > 0 ? (
+        <Card
+          title={`执行结果 · ${rows.length} 行样本 × ${cols.length} 列`}
+          extra={
+            <div className="seg" role="group" aria-label="结果视图切换">
+              <button className={view === 'chart' ? 'seg-btn on' : 'seg-btn'} onClick={() => setView('chart')}>
+                图表
+              </button>
+              <button className={view === 'table' ? 'seg-btn on' : 'seg-btn'} onClick={() => setView('table')}>
+                表格
+              </button>
+            </div>
+          }
+        >
+          {cols.length === 0 ? (
+            <p className="muted">无样本行。</p>
+          ) : view === 'chart' ? (
+            <>
+              <ResultChart columns={cols} rows={rows} />
+              {truncated ? (
+                <p className="notice">
+                  本次共返回 {totalRows} 行，图表基于其中 {rows.length} 行样本绘制（未聚合、未补齐）；如需核对全部数字，请切到「表格」。
+                </p>
+              ) : null}
+            </>
+          ) : (
             <div className="table-wrap">
               <table className="grid">
                 <thead>
@@ -223,8 +230,6 @@ export default function PageDelivery({
                 </tbody>
               </table>
             </div>
-          ) : (
-            <p className="muted">无样本行。</p>
           )}
         </Card>
       ) : null}
@@ -287,58 +292,5 @@ export default function PageDelivery({
         onDone={onRefresh}
       />
     </div>
-  )
-}
-
-/** 极简柱状图：纯 SVG，不引第三方图表库（避免新增运行时依赖）。 */
-function BarChart({ data, max, unit }: { data: Array<{ label: string; value: number }>; max: number; unit: string }) {
-  const W = 640
-  const H = 300
-  const padL = 56
-  const padB = 48
-  const padT = 24
-  const plotW = W - padL - 24
-  const plotH = H - padT - padB
-  const n = data.length || 1
-  const slot = plotW / n
-  const barW = Math.min(80, slot * 0.6)
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * max)
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="chart" role="img">
-      <rect x="0" y="0" width={W} height={H} fill="#ffffff" />
-      <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke="#888888" strokeWidth="1.5" />
-      <line x1={padL} y1={padT + plotH} x2={W - 24} y2={padT + plotH} stroke="#cccccc" strokeWidth="1" />
-      {ticks.map((t, i) => {
-        const y = padT + plotH - (t / (max || 1)) * plotH
-        return (
-          <g key={i}>
-            <line x1={padL} y1={y} x2={W - 24} y2={y} stroke="#eeeeee" strokeWidth="1" />
-            <text x={padL - 8} y={y + 4} fontSize="11" fill="#666666" textAnchor="end">
-              {Math.round(t * 100) / 100}
-            </text>
-          </g>
-        )
-      })}
-      {data.map((d, i) => {
-        const h = (Math.abs(d.value) / (max || 1)) * plotH
-        const x = padL + slot * i + (slot - barW) / 2
-        const y = padT + plotH - h
-        return (
-          <g key={i}>
-            <rect x={x} y={y} width={barW} height={h} fill="#2f6fb0" />
-            <text x={x + barW / 2} y={y - 6} fontSize="12" fontWeight="700" fill="#1a1a1a" textAnchor="middle">
-              {d.value}
-            </text>
-            <text x={x + barW / 2} y={padT + plotH + 20} fontSize="12" fill="#333333" textAnchor="middle">
-              {d.label}
-            </text>
-          </g>
-        )
-      })}
-      <text x={16} y={padT + plotH / 2} fontSize="12" fill="#666666" textAnchor="middle" transform={`rotate(-90 16 ${padT + plotH / 2})`}>
-        {unit}
-      </text>
-    </svg>
   )
 }
