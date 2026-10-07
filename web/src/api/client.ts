@@ -133,6 +133,17 @@ export const api = {
     q.set('limit', String(args.limit ?? 50))
     return request<Record<string, any>>(`/knowledge/citations?${q.toString()}`)
   },
+  // 知识准入：上传走 base64 JSON 而非 multipart——BFF 侧不引python-multipart（红线五）
+  knowledgeUpload: (body: { filename: string; content_base64: string; content_type?: string; actor?: string }) =>
+    post<Record<string, any>>('/knowledge/upload', body),
+  knowledgeStatus: (documentId = '', limit = 50) => {
+    const q = new URLSearchParams()
+    if (documentId) q.set('document_id', documentId)
+    q.set('limit', String(limit))
+    return request<Record<string, any>>(`/knowledge/status?${q.toString()}`)
+  },
+  knowledgeDelete: (body: { document_id: string; actor?: string }) =>
+    post<Record<string, any>>('/knowledge/delete', body),
 
   // ---- M8 菜单③ 数据源接入 ----
   datasourceScan: (dataset: string, persist = true) =>

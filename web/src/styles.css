@@ -147,6 +147,25 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .chip-red { background: var(--danger-bg); color: var(--danger); }
 .chip-green { background: var(--ok-bg); color: var(--ok); }
 .chip-muted { background: #eceef1; color: var(--muted); }
+.chip-blue { background: #e7f0fd; color: #1a5fb4; }
+
+/* ---- 知识收集：上传 / 自动获取 ---- */
+.uploadbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
+.uploadbar input[type="file"] { font-size: 12.5px; max-width: 100%; }
+.uploadbar-hint { font-size: 12px; color: var(--muted); }
+
+/* 成功回执（区别于 .errbox 的失败回执） */
+.okbox { border: 1px solid #b6e0c4; background: var(--ok-bg); border-radius: 6px; padding: 10px 12px; margin: 10px 0; }
+.okbox-title { color: var(--ok); font-weight: 600; }
+.okbox-msg { margin-top: 4px; font-size: 12px; }
+
+/* 行内文字按钮（表格「操作」列的撤库） */
+.linkbtn {
+  border: none; background: none; padding: 0;
+  color: var(--primary); font-size: 12px; cursor: pointer; text-decoration: underline;
+}
+.linkbtn:hover { color: var(--primary-d); }
+.linkbtn:disabled { color: var(--muted); cursor: not-allowed; text-decoration: none; }
 
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
 table.grid { border-collapse: collapse; width: 100%; font-size: 12px; }

@@ -873,6 +873,72 @@ async def knowledge_citations(
 
 
 # --------------------------------------------------------------------------
+# M8 · 知识准入（上传 / 解析进度 / 撤库）
+#
+# 为什么走 base64 JSON 而不用 multipart 上传
+# ------------------------------------------
+# FastAPI 收 `UploadFile` 需要 `python-multipart`，而本项目红线五「不新增运行时依赖」。
+# 前端用浏览器内置 `FileReader` 读 base64 即可，零新依赖；
+# 网关侧 `knowledge_upload` 本来就收 `content_base64`，两头都不必引库。
+# --------------------------------------------------------------------------
+class KnowledgeUploadIn(BaseModel):
+    filename: str = Field(min_length=1, description="原始文件名，含扩展名")
+    content_base64: str = Field(min_length=1, description="文件内容 base64")
+    content_type: str = Field(default="", description="MIME，可留空")
+    actor: str = Field(default="")
+
+
+class KnowledgeDeleteIn(BaseModel):
+    document_id: str = Field(min_length=1)
+    actor: str = Field(default="")
+
+
+@app.post(f"{API}/knowledge/upload", tags=["知识储备"])
+async def knowledge_upload(body: KnowledgeUploadIn) -> Any:
+    """上传文档到知识库并触发解析。
+
+    解析是**异步**的：本调用返回后请轮询 `GET /knowledge/status` 直到
+    `run=DONE`，否则文档还不被检索命中。
+    """
+    try:
+        result = await call(
+            "knowledge_upload",
+            {
+                "filename": body.filename,
+                "content_base64": body.content_base64,
+                "content_type": body.content_type,
+                "actor": body.actor,
+            },
+        )
+    except McpError as exc:
+        raise ApiError(
+            code="KNOWLEDGE_UPLOAD_FAILED",
+            message=str(exc),
+            hint="请确认知识库 API 可用、文件名带扩展名、文件未超限。",
+        )
+    return sanitize(result)
+
+
+@app.get(f"{API}/knowledge/status", tags=["知识储备"])
+async def knowledge_status(document_id: str = "", limit: int = 50) -> Any:
+    """文档解析进度（前端轮询用）。不传 document_id 返回全部。"""
+    return sanitize(await call("knowledge_document_status", {"document_id": document_id, "limit": limit}))
+
+
+@app.post(f"{API}/knowledge/delete", tags=["知识储备"])
+async def knowledge_delete(body: KnowledgeDeleteIn) -> Any:
+    """从知识库撤库一份文档（只删 RAGFlow 侧，不碰需求单与附件）。"""
+    try:
+        result = await call(
+            "knowledge_delete",
+            {"document_id": body.document_id, "actor": body.actor},
+        )
+    except McpError as exc:
+        raise ApiError(code="KNOWLEDGE_DELETE_FAILED", message=str(exc))
+    return sanitize(result)
+
+
+# --------------------------------------------------------------------------
 # M8 · 菜单③ 数据源接入
 # PRD §12.7：数据库接入 / Schema 差异与 MDL 候选 / 表结构与数据字典。
 # --------------------------------------------------------------------------

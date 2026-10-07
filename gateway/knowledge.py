@@ -35,9 +35,12 @@ RAGFlow v0.26.4 原生检索接口 `POST /api/v1/retrieval`（自带 OIDC/API-Ke
 """
 import json
 import os
+import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 
 API_BASE = os.getenv("KNOWLEDGE_API_URL", "http://127.0.0.1:19380/api/v1")
 API_KEY = os.getenv("KNOWLEDGE_API_KEY", "").strip()
@@ -48,6 +51,17 @@ DATASET_ID = os.getenv("KNOWLEDGE_DATASET_ID", "").strip()
 # 「RAGFlow 独立栈」在物理上尚未成立。改名这个字段等于把未完成的事说成已完成。
 BASE_NAME = os.getenv("KNOWLEDGE_BASE_NAME", "RAGFlow API（19380 入口）").strip()
 TIMEOUT = int(os.getenv("KNOWLEDGE_TIMEOUT", "30"))
+# 上传单独给更长的超时：文档可能几十 MB，且解析排队发生在上传之后，
+# 但上传本身在 OrbStack 上实测也会跑到秒级，不能沿用检索的 30s 之外再叠加。
+UPLOAD_TIMEOUT = int(os.getenv("KNOWLEDGE_UPLOAD_TIMEOUT", "120"))
+# 允许入库的扩展名。RAGFlow 本身能解析更多类型，但准入是业务决定：
+# 只放行文档类，避免把二进制/可执行内容塞进知识库。
+ALLOWED_SUFFIXES = (
+    ".md", ".markdown", ".txt", ".pdf", ".docx", ".doc", ".pptx", ".ppt",
+    ".xlsx", ".xls", ".csv", ".html", ".htm",
+)
+# 单个文档大小上限（RAGFlow 侧也有限制，这里先挡住明显超大的）。
+MAX_UPLOAD_BYTES = int(os.getenv("KNOWLEDGE_MAX_UPLOAD_MB", "32")) * 1024 * 1024
 
 # 实测校准后的默认检索参数
 DEFAULT_THRESHOLD = 0.1
@@ -106,6 +120,100 @@ def _post(path, payload):
             "知识库不可达（%s）：%s: %s" % (API_BASE, type(e).__name__, str(e)[:200])
         )
     # RAGFlow 的 chunk 正文可能含未转义控制字符，用宽松模式解析
+    return json.loads(raw, strict=False)
+
+
+def _upload(path, filename, content, content_type="application/octet-stream"):
+    """multipart/form-data 上传（RAGFlow 的 `documents/upload` 不是 JSON 接口）。
+
+    手写 multipart 而不引入 requests/httpx：`requirements.txt` 只放行 fastmcp /
+    starlette / psycopg / minio / sqlglot，新增运行时依赖要过红线五。
+    字段名必须是 `file`（技能实测 v0.26.4 的契约）。
+    """
+    key = _key()
+    if not key:
+        raise KnowledgeError(
+            "未配置知识库 API Key：请设置 KNOWLEDGE_API_KEY 或 KNOWLEDGE_API_KEY_FILE"
+        )
+    boundary = "----askoda%s" % uuid.uuid4().hex
+    sep = ("--" + boundary + "\r\n").encode("ascii")
+    # 中文文件名走 RFC 5987 的 filename*，同时给一个 ASCII 兜底名。
+    # 只塞 ASCII 会被服务端按 latin-1 解码——中文知识文档名很常见，必须处理。
+    disp = (
+        'Content-Disposition: form-data; name="file"; filename="%s"; '
+        "filename*=UTF-8''%s\r\n"
+        % (_ascii_filename(filename), urllib.parse.quote(str(filename or ""), safe=""))
+    )
+    body = b"".join([
+        sep,
+        disp.encode("utf-8"),
+        b"Content-Type: " + (content_type or "application/octet-stream").encode("ascii") + b"\r\n\r\n",
+        content,
+        b"\r\n",
+        ("--" + boundary + "--\r\n").encode("ascii"),
+    ])
+    req = urllib.request.Request(
+        API_BASE.rstrip("/") + path,
+        data=body,
+        headers={
+            "Content-Type": "multipart/form-data; boundary=" + boundary,
+            "Authorization": "Bearer " + key,
+        },
+        method="POST",
+    )
+    try:
+        with _opener().open(req, timeout=UPLOAD_TIMEOUT) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        raise KnowledgeError("知识库 HTTP %s：%s" % (e.code, detail[:200]))
+    except Exception as e:
+        raise KnowledgeError(
+            "知识库不可达（%s）：%s: %s" % (API_BASE, type(e).__name__, str(e)[:200])
+        )
+    return json.loads(raw, strict=False)
+
+
+def _ascii_filename(name):
+    """multipart 头里的 filename 只允许 ASCII，中文名走 RFC 5987 的 filename*。
+
+    直接塞中文会让部分服务端按 latin-1 解码而报 400 或乱码。
+    """
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(name or ""))
+    return safe or "upload.bin"
+
+
+def _delete(path, payload):
+    key = _key()
+    if not key:
+        raise KnowledgeError(
+            "未配置知识库 API Key：请设置 KNOWLEDGE_API_KEY 或 KNOWLEDGE_API_KEY_FILE"
+        )
+    req = urllib.request.Request(
+        API_BASE.rstrip("/") + path,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + key,
+        },
+        method="DELETE",
+    )
+    try:
+        with _opener().open(req, timeout=TIMEOUT) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        raise KnowledgeError("知识库 HTTP %s：%s" % (e.code, detail[:200]))
+    except Exception as e:
+        raise KnowledgeError("知识库不可达：%s: %s" % (type(e).__name__, str(e)[:200]))
     return json.loads(raw, strict=False)
 
 
@@ -194,13 +302,193 @@ def list_documents(limit=50):
                 "id": r.get("id"),
                 "name": r.get("name"),
                 "run": r.get("run"),
+                # progress 与 run 一起给出：前端要显示"解析中/已完成/失败"，
+                # 只给 run 的话前端无法区分「WAITING」和「CANCELLED」。
+                "progress": r.get("progress"),
                 "chunk_count": r.get("chunk_count"),
                 "size": r.get("size"),
                 "created_at": r.get("create_time"),
+                "parse_error": r.get("error_msg") or r.get("parse_error") or "",
             }
             for r in rows
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# 知识准入（上传 → 解析 → 撤库）
+# ---------------------------------------------------------------------------
+# 2026-10-07 补齐。此前网关只有检索侧工具（search/health/documents/retire/citation_list），
+# **没有任何写入工具**，前端「知识收集」区的上传功能因此从未通过；
+# 页面提示写的是「依赖 RAGFlow 独立站，B4 未复位完成」，与实测不符——
+# 实测 19380 入口的检索/列表/解析接口全部 code=0 可用，缺的是网关侧实现，不是底座能力。
+def _resolve_dataset_id():
+    ds_id = DATASET_ID
+    if not ds_id:
+        ds_id = ((health().get("dataset") or {}).get("id")) or ""
+    return ds_id
+
+
+def _all_document_names():
+    """取数据集内**全部**文档名（按 total 翻页）。
+
+    `page_size` 服务端上限 100，一次请求拿不全；防重判断必须看全量，
+    否则文档多了会漏判、把重复件放进去。取不到就返回空集合——
+    此时宁可放过重复，也不能把正常上传一起拦死。
+    """
+    ds_id = _resolve_dataset_id()
+    if not ds_id:
+        return set()
+    names, page = set(), 1
+    try:
+        while page <= 50:  # 上限 50 页 = 5000 份，够用且不会打爆上游
+            d = _get("/datasets/%s/documents?page=%d&page_size=100" % (ds_id, page))
+            if d.get("code") != 0:
+                break
+            data = d.get("data") or {}
+            rows = data.get("docs") or []
+            names.update((r.get("name") or "") for r in rows if isinstance(r, dict))
+            total = data.get("total", len(rows))
+            if not rows or len(rows) * page >= total:
+                break
+            page += 1
+    except KnowledgeError:
+        return names
+    return names
+
+
+def upload_document(filename, content, content_type="", dataset_id=""):
+    """上传一份文档并触发解析，返回新文档的 id 与解析状态。
+
+    分两步（实测 v0.26.4 契约）：先 `POST /datasets/{id}/documents` 直传，
+    再 `POST /datasets/{id}/documents/parse` 触发切分入库。直传即可，无需再走
+    `files/link-to-datasets`（技能第四节实测结论）。
+    """
+    name = str(filename or "").strip()
+    if not name:
+        return {"ok": False, "error": "缺少文件名"}
+    suffix = os.path.splitext(name)[1].lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        return {
+            "ok": False,
+            "error": "不支持的文件类型 %s；允许：%s"
+            % (suffix or "(无扩展名)", "、".join(ALLOWED_SUFFIXES)),
+        }
+    if not content:
+        return {"ok": False, "error": "文件内容为空"}
+    if len(content) > MAX_UPLOAD_BYTES:
+        return {
+            "ok": False,
+            "error": "文件超过上限 %d MB" % (MAX_UPLOAD_BYTES // 1024 // 1024),
+        }
+    ds_id = dataset_id or _resolve_dataset_id()
+    if not ds_id:
+        return {"ok": False, "error": "无法确定数据集 ID"}
+
+    # 防重：RAGFlow 对同名文件会静默改名入库（`x.md` → `x(1).md`），
+    # 同一份口径重复入库会产生互相矛盾的证据（检索时两版都可能被召回）。
+    # 这里在入库前拦下并如实报出已有文档的 id，让前端提示"要换就先撤库"。
+    # 注意分页：`page_size` 服务端上限 100（技能第四节），一次拉 1000 会被截断，
+    # 文档多了就会漏判，所以这里按 total 翻页取全量名字。
+    existing = _all_document_names()
+    if name in existing:
+        listed = list_documents(limit=100)
+        dup = next(
+            (d for d in (listed.get("documents") or []) if (d.get("name") or "") == name),
+            None,
+        )
+        return {
+            "ok": False,
+            "error": "库中已有同名文档《%s》；知识库同一口径只留一份，"
+            "请先撤库再上传，或改用带版本号的文件名" % name,
+            "duplicate": True,
+            "document_id": (dup or {}).get("id", ""),
+            "run": (dup or {}).get("run", ""),
+        }
+
+    resp = _upload(
+        "/datasets/%s/documents" % ds_id, name, content,
+        content_type or "application/octet-stream",
+    )
+    # **code 必须先判，再取 data**（技能第四节）：错误响应不带 data，
+    # 若直接 resp["data"]["docs"] 并 or [] 兜底，会把「参数被拒」误读成「库里没文档」。
+    if resp.get("code") != 0:
+        return {
+            "ok": False,
+            "error": "上传被拒：%s" % (resp.get("message") or "code=%s" % resp.get("code")),
+        }
+    # 实测 v0.26.4：`data` 直接是**文档数组**（不是 {"docs": [...]}），
+    # 且中文文件名在 filename* 下原样保留（如「结构探测件.md」）。
+    data = resp.get("data")
+    docs = data if isinstance(data, list) else ((data or {}).get("docs") or [])
+    if not docs:
+        return {"ok": False, "error": "上传成功但未返回文档 id，无法继续解析"}
+    ids = [d.get("id") for d in docs if isinstance(d, dict) and d.get("id")]
+    if not ids:
+        return {"ok": False, "error": "上传响应缺少文档 id"}
+    first_name = next(
+        (d.get("name") for d in docs if isinstance(d, dict) and d.get("name")), name
+    )
+
+    # 触发解析（异步）。失败不判为上传失败——文档已在库里，只是没开始切分。
+    parse_note = ""
+    try:
+        pr = _post("/datasets/%s/documents/parse" % ds_id, {"document_ids": ids})
+        if pr.get("code") != 0:
+            parse_note = "已入库但触发解析失败：%s" % (
+                pr.get("message") or "code=%s" % pr.get("code")
+            )
+    except KnowledgeError as e:
+        parse_note = "已入库但触发解析失败：%s" % str(e)[:160]
+
+    return {
+        "ok": True,
+        "dataset_id": ds_id,
+        "name": first_name,
+        "document_ids": ids,
+        "size": len(content),
+        "parse_started": not parse_note,
+        "note": parse_note,
+        # 前端据此轮询 document_status，不阻塞在本次调用上
+        "status_hint": "解析为异步，请用 document_status 查询进度",
+    }
+
+
+def document_status(document_id="", limit=50):
+    """查文档解析状态（前端轮询用）。"""
+    ds_id = _resolve_dataset_id()
+    if not ds_id:
+        return {"ok": False, "error": "无法确定数据集 ID"}
+    listed = list_documents(limit=limit)
+    if not listed.get("ok"):
+        return listed
+    docs = listed["documents"]
+    if document_id:
+        docs = [d for d in docs if d.get("id") == document_id]
+        if not docs:
+            return {"ok": False, "error": "未找到文档 %s" % document_id}
+        return {"ok": True, "dataset_id": ds_id, "documents": docs}
+    return {"ok": True, "dataset_id": ds_id, "total": listed["total"], "documents": docs}
+
+
+def delete_document(document_id, actor=""):
+    """撤库：删掉一份文档（知识准入的反向操作）。
+
+    只删 RAGFlow 里的文档本身，不碰网关的需求单与附件存储。
+    """
+    did = str(document_id or "").strip()
+    if not did:
+        return {"ok": False, "error": "缺少 document_id"}
+    ds_id = _resolve_dataset_id()
+    if not ds_id:
+        return {"ok": False, "error": "无法确定数据集 ID"}
+    resp = _delete("/datasets/%s/documents" % ds_id, {"ids": [did]})
+    if resp.get("code") != 0:
+        return {
+            "ok": False,
+            "error": "撤库被拒：%s" % (resp.get("message") or "code=%s" % resp.get("code")),
+        }
+    return {"ok": True, "dataset_id": ds_id, "document_id": did, "actor": actor}
 
 
 # ---------------------------------------------------------------------------
