@@ -7,6 +7,14 @@ BFF **不直连** Wren（9000/9002）、不直连业务 PG。
 
 ## 1. 起 BFF
 
+**推荐：走 compose**（连网关一起起，一条命令拿到完整应用，见第 6 节）：
+
+```bash
+docker compose up -d bff
+```
+
+**本机手工起**（调试用）：
+
 ```bash
 cd bff
 pip install -r requirements.txt
@@ -76,7 +84,35 @@ curl -s http://127.0.0.1:18081/openapi.json -o web/schemas/openapi.json
 cd web && npm run gen:api       # 产出 src/api/schema.ts
 ```
 
-## 5. 红线约束（自检已跑通）
+## 6. 容器化（已交付）
+
+BFF 已纳入`docker-compose.yml`，服务名 `bff`，与网关同栈：
+
+```bash
+docker compose up -d bff      # 交付形态：正常模式，无reload
+curl http://127.0.0.1:18081/api/v1/health   # 200
+```
+
+| 项 | 值 |
+| --- | --- |
+| 镜像 | `askoda-bff:0.1.0`（`bff/Dockerfile`，基础镜像 `python:3.13-slim`） |
+| 端口 | 容器 `18081` → 宿主机 `18081`（`.env` 里 `BFF_HOST_PORT` 可改） |
+| 容器内网关地址 | `ASKODA_GATEWAY_URL=http://gateway:8080/mcp`（**走服务名**；容器内 `127.0.0.1` 指向自己，不是网关） |
+| 前端产物 | 随镜像走（`COPY . ./` 含 `static/`），由 BFF 同源托管 |
+| 启动命令 | `uvicorn app:app --host 0.0.0.0 --port 18081` |
+
+**为什么不用 `python serve.py`**：`serve.py` 面向宿主手工起，`host` 写死 `127.0.0.1`
+且 `reload` 写死 `False`（见 `bff/serve.py:22-26`）；容器内必须监听 `0.0.0.0`。
+镜像里改用等价的 uvicorn 命令行，参数与 `serve.py` 保持一致。
+`serve.py` 本身**仍然可用**（本机手工调试不受影响）。
+
+开发期热重载见根目录 `README.md`「开发期热重载」与 `docker-compose.dev.yml`
+文件头注释（含 gateway 为何只能 restart 的实测原因）。
+
+> ⚠️ **当前无鉴权，仅限本机访问。** `18081` 上的23 个接口与前端应用都没有
+> 访问控制，不要暴露到公网或局域网。
+
+## 7. 红线约束（自检已跑通）
 
 - **R2**：前端只出现相对路径 `/api/v1/...`；网关地址只存在于 `bff/config.py`。
   自检命令（应无输出）：
@@ -88,9 +124,3 @@ cd web && npm run gen:api       # 产出 src/api/schema.ts
   `wren_endpoint` / `data_source` / `endpoint` 等内部地址，避免透传到浏览器。
 - **R3/R4**：不 fork、不改开源源码，无 UI 补丁 / DOM 注入 / 产物替换。
 - **R5**：BFF 依赖只写进 `bff/requirements.txt`，不动 `gateway/requirements.txt`。
-
-## 6. 已知部署事项
-
-`docker-compose.yml` 本批**未改动**（改 compose 需人工确认部署）。
-如需容器化，建议把 BFF 作为独立服务加入 compose，并让前端走同源 `/api`，
-**不要**在 compose 里给前端配后端绝对地址。

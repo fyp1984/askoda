@@ -167,6 +167,44 @@ services:
       - ./wren-docker-b/workspace/mdl.json:/workspace-b/mdl.json:ro
 
   # ------------------------------------------------------------------
+  # BFF（Backend for Frontend）· 前端产物同源托管
+  #
+  # 为什么必须与 gateway 同栈
+  # ----------------------
+  # 前端只认识相对路径 /api/v1/...（红线 R2，网关地址只存在于 bff/config.py），
+  # 所以浏览器 → BFF → 网关 必须在同一套编排里，「一条命令跑起来」才成立。
+  #
+  # 为什么网关地址在容器内要写服务名
+  # ------------------------------
+  # 127.0.0.1 在容器里指的是容器自己，不是宿主机、也不是 gateway 容器。
+  # 同网络内服务互访一律用服务名（gateway 是本编排的服务名）。
+  # ------------------------------------------------------------------
+  bff:
+    build:
+      context: ./bff
+      args:
+        PIP_INDEX: ${PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    image: askoda-bff:0.1.0
+    container_name: askoda-bff
+    restart: unless-stopped
+    depends_on:
+      gateway:
+        condition: service_healthy
+    environment:
+      # 容器内走服务名，不经宿主机回环
+      ASKODA_GATEWAY_URL: "http://gateway:8080/mcp"
+      ASKODA_BFF_PORT: "18081"
+      ASKODA_SERVE_STATIC: "1"
+      ASKODA_MCP_TIMEOUT: "180"
+    ports:
+      # 宿主机 18081：前端入口 http://127.0.0.1:18081/
+      # ★ 绑127.0.0.1 而非 0.0.0.0 —— 当前**没有任何入站鉴权与多租户隔离**
+      #   （BFF 不校验身份，任何能连上的人都能看全部需求单与分析记录）。
+      #   绑回环是当前唯一的防护，绑 0.0.0.0 会让同局域网任意主机可访问，等同数据开放。
+      #   进生产环境补齐鉴权后，再放开到 0.0.0.0。
+      - "127.0.0.1:${BFF_HOST_PORT:-18081}:18081"
+
+  # ------------------------------------------------------------------
   # 本地 embedding 服务（B4b · 恢复知识检索召回）
   #
   # 为什么需要它

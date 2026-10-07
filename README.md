@@ -87,7 +87,7 @@ Askoda 的整体研发遵循 **本体论驱动的数据管理**理念（理论�
 |---|---|---|
 | **点** | 一张表 + 一个口径 | 单表建模 ≤ 2 人天（维表 0.5 / 汇总表 1 / 明细宽表 1.5–2） |
 | **线** | 一组强关联表 + 协同口径 + 关联方向 | 交易域链式（订单 → 明细 → 退款）一次打通，L2 规则可判 JOIN 方向 |
-| **面** | 一个数据域 = 一整套可版本化的 MDL | 模拟库 A / B 双面并存，**换库代码零改动（diffs = 0）**；一个完整面 ≈ 8 表 · 47 字段 · 9.5 人天 |
+| **面** | 一个数据域 = 一整套可版本化的 MDL | 模拟库 A / B 双面并存，**换库代码零改动（diffs = 0）**；一个完整面 ≈ 8 表 · 48 字段 · 9.5 人天 |
 
 先切哪里？优先选**语义复杂、规则明确、合规压力大**的真实痛点；个人探索式分析、"一句话出图"的演示场景不适用。
 
@@ -246,7 +246,7 @@ askoda/
 │   ├── 03-表结构与颗粒度说明-零售会员域.md
 │   └── 04-需求受理与口径确认规程.md
 ├── wren-docker/      模拟库 A 环境（电商域，6 模型 / 29 字段 / 5 关系）
-├── wren-docker-b/    模拟库 B 环境（零售会员域，8 模型 / 47 字段 / 10 关系）
+├── wren-docker-b/    模拟库 B 环境（零售会员域，8 模型 / 48 字段 / 10 关系）
 ├── demo/             演示程序
 │   ├── demo-server.py       本地实测服务（127.0.0.1:8080）
 │   ├── 数据需求智能分析助手-V7.html  工作台 Demo 页
@@ -275,12 +275,31 @@ askoda/
 # 1. 准备环境变量
 cp .env.example .env
 
-# 2. 一键起停全部服务（首次会构建 gateway 镜像，约 1–3 分钟）
+# 2. 一键起停全部服务（首次会构建 gateway + bff 镜像，约 1–3 分钟）
 docker compose up -d
 
-# 3. 检查状态（7 个服务全部 healthy 才算就绪）
+# 3. 检查状态（8 个服务全部 healthy 才算就绪）
 docker compose ps
 ```
+
+起栈后**直接用浏览器打开前端**：
+
+```
+http://127.0.0.1:18081/
+```
+
+这一条命令即可拿到完整应用（前端 + BFF + 网关 + 双模拟库 + 元数据库 + 附件存储），
+无需在宿主机手工起任何进程。前端构建产物随 BFF 镜像交付（见 `bff/Dockerfile`）。
+
+> ⚠️ **当前无鉴权，仅限本机访问**
+>
+> 本项目处于**开发测试阶段**，**尚未实现任何入站鉴权与多租户隔离**：BFF 不校验身份，
+> 任何能访问该端口的人都可以查看全部需求单、分析轮次与取数记录。
+>
+> 当前的防护**仅靠「只监听 127.0.0.1 回环地址」**——即只有本机才能访问。
+> **不要把 18081 端口暴露到公网或不受信任的局域网**，否则等同于把全部数据开放。
+>
+> 鉴权与多租户计划在进入生产环境时统一补齐（届时含负载均衡与业务连续性，一并处理）。
 
 改了 `gateway/` 代码后重新构建：
 
@@ -293,21 +312,74 @@ docker compose up -d --build
 > BUILDX_CONFIG="$PWD/.buildx" docker compose build gateway
 > ```
 
-### 5.3 接入面
+### 5.3 开发期热重载
+
+开发时用 `docker-compose.dev.yml` 覆盖，它只改「代码从哪来、怎么启动」，不改任何业务配置：
+
+```bash
+# 以开发形态启动（只需 bff 热重载时，可只指定 bff 服务）
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
+
+**BFF：真热重载。** 改 `bff/` 下任意 `.py`，等 1～2 秒直接刷新页面即可，
+**不需要 rebuild、不需要 restart**。容器日志会明确记录重载：
+
+```
+WARNING:  WatchFiles detected changes in 'app.py'. Reloading...
+INFO:     Started server process [20]
+```
+
+**网关：只能 restart，没有热重载。** 这是技术限制不是偷懒 ——
+FastMCP 4.x 的 `mcp.run()` **没有 reload 参数**（实测 fastmcp 4.0.10），
+进程内无法重载。改完 `gateway/` 代码后：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml restart gateway
+```
+
+| 改哪里 |生效方式 |
+| --- | --- |
+| `bff/*.py` | **自动**（1～2 秒，无需任何命令） |
+| `bff/static/`（前端产物） | 需 `cd web && npm run build`，浏览器刷新即可（整目录已挂载） |
+| `web/src/`（前端源码） | 需 `npm run build` 产出到 `bff/static/` |
+| `gateway/*.py` | `restart gateway`；**新增文件还要 `--build`** |
+
+> 两个挂载口径不同是有原因的，别照抄：gateway 用**逐文件**挂载，因为镜像 `/app` 里有
+> 宿主没有的 `tools/`、`contracts/`，整目录挂会遮没；bff 用**整目录**挂载，
+> 因为逐文件挂载实测**收不到 inotify 事件、reload 永不触发**（详见
+> `docker-compose.dev.yml` 文件头注释）。
+
+### 5.4 接入面
 
 | 项 | 地址 | 说明 |
 |---|---|---|
 | **MCP 端点** | `http://127.0.0.1:18080/mcp` | streamable-http，Agent 接这里（FastMCP 4.x，协议版本随客户端协商） |
 | **健康检查** | `http://127.0.0.1:18080/healthz` | 各数据集与组件连通性，返回 `degraded` 时查看 `components` 字段 |
 | **模拟库 A（电商）** | `127.0.0.1:9000`(MCP) / `15432`(PG) | 6 模型 / 29 字段 / 5 关系 |
-| **模拟库 B（零售会员）** | `127.0.0.1:9002`(MCP) / `15433`(PG) | 8 模型 / 47 字段 / 10 关系 |
+| **模拟库 B（零售会员）** | `127.0.0.1:9002`(MCP) / `15433`(PG) | 8 模型 / 48 字段 / 10 关系 |
 | **网关元数据库** | `127.0.0.1:15434`(PG) | user=assistant / 需求单、事件、元数据字典 |
 | **附件对象存储** | `127.0.0.1:19000`(S3) / `19001`(控制台) | MinIO，桶 `askoda-attachments` |
 | **知识底座（可选）** | `http://127.0.0.1:19380/api/v1` | RAGFlow v0.26.4 检索接口，网关只做客户端 |
+| **前端应用** | `http://127.0.0.1:18081/` | 由 BFF 同源托管前端产物 + 代理 `/api/v1/...` |
+| **BFF 接口契约** | `http://127.0.0.1:18081/docs` | OpenAPI（23 个接口，统一前缀 `/api/v1`） |
+
+### 5.5 ⚠️ 当前无鉴权，仅限本机访问
+
+**这套编排没有做任何鉴权与授权。** BFF 的 23 个接口、前端应用本身，
+只要能连上 `18081` 就能直接调用，包括会触发只读 SQL 执行与落库的接口。
+
+因此：
+
+- **只允许在本机（`127.0.0.1`）访问**，不要把端口暴露到公网或局域网；
+- compose 里 `18081` 绑的是 `0.0.0.0`，若所在网络不可信，
+  请在 `.env` 里收紧绑定或用防火墙拦截；
+- 前端产物、需求单内容、查询结果均无访问控制，**不要在不受信的环境演示或部署**。
+
+鉴权与多租户隔离是明确的后续项，不在当前开发期范围内。
+
+### 5.6 常见问题排错
 
 宿主机网关端口用 `18080` 而非 `8080`：`8080` 留给本地演示服务 `demo/demo-server.py`。
-
-### 5.4 常见问题排错
 
 | 现象 | 原因 | 修复 |
 |---|---|---|
@@ -316,10 +388,13 @@ docker compose up -d --build
 | 知识库接口报 `host.docker.internal` 不可达 | RAGFlow 不在本机或未起来 | 在 `.env` 里把 `KNOWLEDGE_API_URL` 改为实际可达地址，或留空跳过（`degraded_sources` 会如实报告） |
 | 数据卷 `wren-pgdata` 报 `external volume not found` | 新机器上没有单栈时代遗留卷 | 在 `.env` 里改为 `WREN_PG_VOLUME=askoda_wren-pgdata` 或删除 `external: true` 由 compose 自建 |
 | `tools/*_selftest.py` 报 ModuleNotFoundError | 部分自证脚本依赖网关内部模块 | 纯离线自证（`gates` / `rules` / `masking` / `knowledge` / `evidence` / `semantics`）可在宿主直跑；确实需要内部模块的按脚本头部注释 `docker cp` 进容器 + `PYTHONPATH=/app` 执行 |
+| `18081` 端口被占用、`bff` 起不来 | 宿主机上还有手工起的 BFF 进程（容器化之前的老习惯） | 停掉它（`lsof -ti :18081 \| xargs kill`），再用 compose 起；两者不能同时占同一端口 |
+| 开发期改 `bff/*.py` 没反应 | 只用了 `docker compose up -d`，没叠加 dev 覆盖 | 叠加 `-f docker-compose.dev.yml up -d bff`，并确认日志出现 `Started reloader process ... using WatchFiles` |
+| `tools/e2e_verify.py` 报 `未安装 psycopg` | `persist` 阶段在**宿主** `import db`，需要宿主装 psycopg | 与容器化无关；`pip install "psycopg[binary]"` 后重跑，或按脚本头部注释在 gateway 容器内执行该阶段 |
 
 ---
 
-### 5.5 MCP 能力视图（45 个工具 · 九个域）
+### 5.7 MCP 能力视图（45 个工具 · 九个域）
 
 <a id="mcp-tools"></a>
 
@@ -483,7 +558,7 @@ curl -s -X POST http://127.0.0.1:18080/mcp \
 
 ---
 
-### 5.6 MCP 操作指引与版本升级对照
+### 5.8 MCP 操作指引与版本升级对照
 
 <a id="mcp-ops"></a>
 
@@ -532,7 +607,7 @@ python3 tools/mcp_acceptance_check.py                                 # 工具�
 
 ---
 
-### 5.7 MCP 人工验证
+### 5.9 MCP 人工验证
 
 要按「最低成本、逐个确认可用」手工验一遍全部 45 个工具，步骤见项目文档工作空间的《MCP 服务人工验证方案》。最快路径：先跑一次 `tools/mcp_acceptance_check.py` 拿到机器级结论，再沿 5.5 的八步链路建**一个**需求单走通主干（覆盖约 30 个工具），最后补齐无依赖探针与负向抽查。
 
