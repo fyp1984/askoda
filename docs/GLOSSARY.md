@@ -15,9 +15,9 @@
 ### MCP（Model Context Protocol）
 AI Agent 调用外部工具的协议。在本项目中它是**网关与前端/BFF 之间的唯一通道**。
 
-对外只暴露一个 streamable-http 端点（`/mcp`），共 **45 个工具**。一个 MCP 会话内不支持并发调用同一个 `Mcp-Session-Id`——并行发请求会导致 SSE 流互相截断进而挂死。
+对外只暴露一个 streamable-http 端点（`/mcp`），共 **48 个工具**。一个 MCP 会话内不支持并发调用同一个 `Mcp-Session-Id`——并行发请求会导致 SSE 流互相截断进而挂死。
 
-> 权威来源：`gateway/app.py`（`@mcp.tool` 共 45 处）、`bff/mcp_client.py`
+> 权威来源：`gateway/app.py`（`@mcp.tool` 共 48 处）、`bff/mcp_client.py`
 
 ### BFF（Backend for Frontend）
 **给前端专用的后端层**。它坐在前端和 MCP 网关之间，只做三件事：聚合、转换、脱敏。

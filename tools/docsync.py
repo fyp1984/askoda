@@ -31,7 +31,7 @@ FROZEN_HINT = "实施基线v1冻结清单"
 
 # 事实源（须与代码实测一致）
 FACTS = {
-    "tool_count": 45,          # gateway/app.py 的 @mcp.tool 数量
+    "tool_count": 48,          # gateway/app.py 的 @mcp.tool 数量
     "gate_scripts": 40,        # tools/ 下门禁类脚本数（下限）
     "rules_count": 11,         # REGISTRY 条数
     "adversarial_cases": 50,   # 对抗用例库总用例数
