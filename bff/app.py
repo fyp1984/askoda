@@ -320,10 +320,11 @@ async def set_demand_status(demand_id: str, body: DemandSetStatusIn) -> Any:
 async def similar_precheck(body: SimilarPrecheckIn) -> Any:
     """相似需求预检。
 
-    实盘核对结论：本机网关实例**未暴露** `demand_similar_precheck` 工具
-    （源码 gateway/app.py 有定义，但容器跑的是旧镜像；tools/list 只有 41 个）。
-    因此这里优先调原生工具，不可用时降级为「demand_list 拉候选 + difflib
-    字符级相似度」，语义与 gateway/demand.py:163 find_similar 保持一致。
+    实盘核对结论：早期本机网关实例**未暴露** `demand_similar_precheck` 工具
+    （源码 gateway/app.py 有定义，但容器跑的是旧镜像，当时 tools/list 只有 41 个）；
+    该问题已随镜像重建修复，当前网关可直接调用。这里仍**优先调原生工具、不可用时降级**为
+    「demand_list 拉候选 + difflib 字符级相似度」，语义与 gateway/demand.py:163 find_similar 保持一致。
+    保留兜底路径，是因为 BFF 有可能连到旧版本的网关实例。
     """
     try:
         native = await call(

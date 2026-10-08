@@ -1,4 +1,4 @@
-# 服务端网关（MCP 工具面 45 个 · 双库语义层 · 五层门禁 · 只读执行 · 留痕回放）
+# 服务端网关（MCP 工具面 48 个 · 双库语义层 · 五层门禁 · 只读执行 · 留痕回放）
 
 数据需求智能分析助手的服务端入口：对 Agent 暴露 MCP 工具，对内接入 Wren 语义层双库、
 自有元数据库与附件对象存储，对下接入 RAGFlow 知识底座。
@@ -49,10 +49,10 @@ docker compose up -d --build
 
 宿主机端口用 `18080` 而非 `8080`：`8080` 已被本项目 `demo-server.py` 长期占用。
 
-## 三、MCP 工具面（45 个 · 九域）
+## 三、MCP 工具面（48 个 · 九域）
 
-> 按落地批次分列：**M1–M3 第一批（28 个）** + **M4–M6 第二批（13 个）**。
-> 逐条入参默认值与返回要点，以仓库根 `README.md` §5.5 与项目文档《MCP 工具契约与注册说明》为事实源（`app.py` 增删工具须同批更新）。
+> 按落地批次分列：**M1–M3 第一批（28 个）** + **M4–M6 第二批（13 个）** + **后续补齐（7 个）**，合计 48 个。
+> 逐条入参默认值与返回要点，以 [MCP 工具参考](../docs/MCP_TOOLS.md) 与项目文档《MCP 工具契约与注册说明》为事实源（`app.py` 增删工具须同批更新）。
 
 ### M1 · 语义层与问数
 
@@ -135,6 +135,18 @@ docker compose up -d --build
 | `sql_run_list` | `demand_id=""`, `dataset=""`, `limit=20` | 跨需求执行留痕列表（时间倒序，可筛选） |
 | `sql_run_replay` | `demand_id`, `version=0` | 按版本精确复原「输入 → pack_version → SQL → 审查 → 结果」 |
 
+### 后续补齐 · 知识治理与工具完善（7）
+
+| 工具 | 入参 | 说明 |
+|---|---|---|
+| `demand_similar_precheck` | `title`, `description=""`, `top=5`, `threshold=0.55` | 提交前查重：返回相似需求候选与相似度；独立入口，**不写库** |
+| `knowledge_retire` | `citation_id`, `reason=""`, `actor=""` | 把某条知识引用标记为已下架 / 已回退（引用留痕治理） |
+| `knowledge_citation_list` | `demand_id=""`, `include_retired=False`, `limit=50` | 知识引用留痕记录（按时间倒序，可筛选） |
+| `knowledge_upload` | `filename`, `content_base64`, `content_type=""`, `actor=""` | 知识准入：上传；**同名文件返回 `duplicate=true` 并拒绝入库** |
+| `knowledge_document_status` | `document_id=""`, `limit=50` | 知识准入：解析轮询（`run` DONE/RUNNING/FAIL + `progress` + `chunk_count`） |
+| `knowledge_delete` | `document_id`, `actor=""` | 知识准入：撤库（只删知识底座文档，**不碰需求单与附件**） |
+| `sql_optimize` | `sql`, `dataset="B"` | SQL 静态等价重写（谓词下推 / 冗余 DISTINCT 移除 / CSE 保守跳过）；**不能证明等价就不改** |
+
 #### 两类消费者的边界（勿混发）
 
 `analysis_first_round` 的返回里有两组面向不同人的内容：
@@ -162,7 +174,7 @@ docker compose up -d --build
 
 | 文件 | 职责 |
 |---|---|
-| `app.py` | FastMCP 服务端：45 个工具、`/healthz` 路由、启动入口（启动时幂等建表） |
+| `app.py` | FastMCP 服务端：48 个工具、`/healthz` 路由、启动入口（启动时幂等建表） |
 | `wren.py` | Wren MCP 客户端（streamable-http，会话复用 + 失效重握手） |
 | `registry.py` | 数据集注册表（Wren 端点 + MDL 路径 + PG DSN），**换库只改注册项** |
 | `planner.py` | 确定性规划器兜底（A/B 两套意图库）+ 只读门禁 |
@@ -184,7 +196,7 @@ docker compose up -d --build
 ```bash
 # 在仓库根目录
 python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # 双探活
-python3 tools/mcp_acceptance_check.py                                 # MCP 工具面 45 个逐条核对
+python3 tools/mcp_acceptance_check.py                                 # MCP 工具面 48 个逐条核对
 python3 tools/gate_all.py --layers G0,G1                              # 静态 + 单元门禁（快跑，不写库）
 
 # 离线自证（改动脱敏 / 检索 / 闸门后随手复跑）

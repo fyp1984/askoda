@@ -16,13 +16,13 @@
 |---|---|---|---|
 | 1 | 健康与数据集 | 4 | `gateway_health` `datasets` `knowledge_health` `schema_version` |
 | 2 | 兜底规划与 Wren 直通 | 5 | `plan` `wren_manifest` `wren_dry_run` `wren_query` `ask` |
-| 3 | 需求受理 | 5 | `demand_create` `demand_get` `demand_list` `demand_summarize` `demand_set_status` |
+| 3 | 需求受理 | 6 | `demand_create` `demand_get` `demand_list` `demand_summarize` `demand_set_status` `demand_similar_precheck` |
 | 4 | 知识储备（检索 + 准入） | 7 | `knowledge_search` `knowledge_documents` `knowledge_retire` `knowledge_citation_list` `knowledge_upload` `knowledge_document_status` `knowledge_delete` |
 | 5 | 元数据字典 | 3 | `metadata_lookup` `metadata_glossary` `metadata_collect` |
 | 6 | 附件 | 3 | `attachment_put` `attachment_list` `attachment_url` |
 | 7 | 语义分析与确认闭环 | 7 | `analysis_first_round` `analysis_rounds` `analysis_get` `analysis_evidence` `confirmation_generate` `confirmation_list` `confirmation_answer` |
 | 8 | 结构化需求与上下文包 | 5 | `schema_scan` `requirement_structured` `requirement_get` `schema_candidates` `sql_context_pack` |
-| 9 | 生成 · 门禁 · 执行 | 7 | `sql_review` `sql_plan` `sql_generate` `sql_execute_readonly` `sql_run_get` `sql_run_replay` `sql_optimize` |
+| 9 | 生成 · 门禁 · 执行 | 8 | `sql_review` `sql_plan` `sql_generate` `sql_execute_readonly` `sql_run_get` `sql_run_list` `sql_run_replay` `sql_optimize` |
 
 合计 **48**。
 
@@ -52,15 +52,16 @@
 
 > `plan` / `ask` **只走确定性规划器**，不做语义分析与确认流转；后者是 `analysis_first_round` 的职责。
 
-#### 域 3 · 需求受理（5）
+#### 域 3 · 需求受理（6）
 
-| 工具                  | 入参                                                                                                                                                      | 返回要点                                                        | 用途   |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ---- |
-| `demand_create`     | ★`title` ★`business_context` ★`description` ★`expected_output` ★`contact`, `time_range=None`, `expected_finish_at=None`, `attachments=None`, `actor=""` | 需求单（**默认掩码版**）；四道校验不过 → `{ok:false, rejected:true, reason}` | 提交门户 |
-| `demand_get`        | ★`demand_id`, `reveal=false`, `actor=""`                                                                                                                | 单据详情 + 流转事件；`reveal=true` 返回原文并写 `reveal_original` 留痕       | 查单   |
-| `demand_list`       | `status=None`, `limit=20`, `offset=0`                                                                                                                   | 需求单列表（可按状态过滤）                                               | 看板   |
-| `demand_summarize`  | `demand_id=None`                                                                                                                                        | 给单号=单汇总；不给=全局看板                                             | 管理   |
-| `demand_set_status` | ★`demand_id` ★`status`, `note=None`, `actor=""`                                                                                                         | 状态流转，不可覆盖、逐条留痕                                              | 回退闭环 |
+| 工具                        | 入参                                                                                                                                                      | 返回要点                                                        | 用途   |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ---- |
+| `demand_create`           | ★`title` ★`business_context` ★`description` ★`expected_output` ★`contact`, `time_range=None`, `expected_finish_at=None`, `attachments=None`, `actor=""` | 需求单（**默认掩码版**）；四道校验不过 → `{ok:false, rejected:true, reason}` | 提交门户 |
+| `demand_get`              | ★`demand_id`, `reveal=false`, `actor=""`                                                                                                                | 单据详情 + 流转事件；`reveal=true` 返回原文并写 `reveal_original` 留痕       | 查单   |
+| `demand_list`             | `status=None`, `limit=20`, `offset=0`                                                                                                                   | 需求单列表（可按状态过滤）                                               | 看板   |
+| `demand_summarize`        | `demand_id=None`                                                                                                                                        | 给单号=单汇总；不给=全局看板                                             | 管理   |
+| `demand_set_status`       | ★`demand_id` ★`status`, `note=None`, `actor=""`                                                                                                         | 状态流转，不可覆盖、逐条留痕                                              | 回退闭环 |
+| `demand_similar_precheck` | ★`title`, `description=""`, `top=5`, `threshold=0.55`                                                                                                   | 提交前查重：返回相似需求候选与相似度；独立入口、不写库                                 | 提交门户 |
 
 状态取值：`待分析 / 分析中 / 待业务确认 / 待补充修改 / 待审核通过 / 已通过 / 已退回`。
 
@@ -136,7 +137,7 @@
 | `schema_candidates`      | ★`demand_id`, `dataset="B"`   | 主题表 / 关联路径 / 时间字段候选；只在 MDL 闭集内产生，未命中给 `miss_reason`                        | 生成准备  |
 | `sql_context_pack`       | ★`demand_id`, `dataset="B"`   | SQL 上下文包 + 溯源三件套 `schema_version` / `requirement_version` / `pack_version` | 生成准备  |
 
-#### 域 9 · 生成 · 门禁 · 执行（7）
+#### 域 9 · 生成 · 门禁 · 执行（8）
 
 | 工具                     | 入参                                                  | 返回要点                                                                       | 用途      |
 | ---------------------- | --------------------------------------------------- | -------------------------------------------------------------------------- | ------- |
@@ -144,6 +145,7 @@
 | `sql_plan`             | ★`demand_id`, `dataset="B"`                         | 计划草稿（不含 SQL 正文）；选不出唯一解给候选集合并标「需人工审核」                                       | 生成第 1 段 |
 | `sql_generate`         | ★`demand_id`, `dataset="B"`, `candidate_sql=None`   | SQL 初稿；`candidate_sql` 为空则回落确定性规划器；多条且差异过大时 `hold`                         | 生成第 2 段 |
 | `sql_execute_readonly` | ★`demand_id`, `dataset="B"`, `sql=None`, `actor=""` | 先过五层门禁，全过才执行；每次写一条 `sql_runs`（溯源齐全，可回放）                                    | 执行      |
+| `sql_optimize`         | ★`sql`, `dataset="B"`                               | SQL 静态等价重写（谓词下推 / 冗余 DISTINCT 移除 / CSE 保守跳过）；不能证明等价就不改                     | 优化      |
 | `sql_run_get`          | ★`demand_id`                                        | 该需求全部运行记录（生成 SQL / 门禁结果 / 结果校验 / 溯源版本号）                                    | 联调交付    |
 | `sql_run_list`         | `demand_id=""`, `dataset=""`, `limit=20`            | 跨需求执行留痕列表（时间倒序，可筛选）                                                        | 审计      |
 | `sql_run_replay`       | ★`demand_id`, `version=0`                           | 按版本精确复原当时的输入 → pack_version → SQL → 审查 → 结果                                | 审计回放    |
@@ -235,12 +237,12 @@ python3 tools/mcp_acceptance_check.py                                 # 工具�
 
 改 `gateway/app.py`（增删 `@mcp.tool`）后，按序执行：
 
-1. **同批更新文档**：项目文档工作空间《MCP 工具契约与注册说明》的逐工具契约与域计数 → 本 README 的双语域计数表与逐域工具表；
+1. **同批更新文档**：项目文档工作空间《MCP 工具契约与注册说明》的逐工具契约与域计数 → 本文件的域计数表（分组速查）与逐域工具表；
 2. **重建镜像**：`BUILDX_CONFIG="$PWD/.buildx" docker compose build gateway && docker compose up -d`；
 3. **核验工具面**：`tools/list` 的数量与清单须与文档一致（`python3 tools/mcp_acceptance_check.py`）；
 4. **跑回归**：`python3 tools/gate_all.py`（G0–G3 四层门禁），确认基线不退化；
 5. **同步镜像标签**与 `.env`（如涉及新环境变量）。
 
-> 联动红点（改工具面会牵动这些断言 / 清单，出改单时要一并扫）：`tools/mcp_acceptance_check.py` 的**计数与清单断言**、契约文档的域计数表、本 README 双语域计数表。
+> 联动红点（改工具面会牵动这些断言 / 清单，出改单时要一并扫）：`tools/mcp_acceptance_check.py` 的**计数与清单断言**、契约文档的域计数表、本文件的域计数表。
 
 ---

@@ -42,7 +42,7 @@ GATEWAY_MCP_URL = "http://127.0.0.1:18080/mcp"
 
 # 代码事实基线（实测值，用于判漂移）
 BASELINE = {
-    "tool_count": 45,
+    "tool_count": 48,
     "rules_count": 11,
     "adversarial_suites": 3,
     "gate_scripts_min": 40,
@@ -210,7 +210,7 @@ def sig_doc():
     if not os.path.isdir(DOC_ROOT):
         return evs
     tool_n = _facts_cache.get("tool_count")
-    # 扫描文档里提到的工具数（「41 个工具」「45 个工具」等）
+    # 扫描文档里提到的工具数（「41 个工具」「45 个工具」等，与 BASELINE["tool_count"] 比对）
     pat = re.compile(r"(4[0-9]|3[0-9])\s*个\s*(?:MCP\s*)?工具")
     stale = []
     for dirpath, dirnames, filenames in os.walk(DOC_ROOT):
