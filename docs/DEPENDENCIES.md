@@ -7,68 +7,77 @@
 
 ## 目录
 
-- [1· 远端 embedding 服务（知识检索的硬依赖）](#1-远端-embedding-服务知识检索的硬依赖)
-- [2 · 本机备用 embedding 与主备切换](#2-本机备用-embedding-与主备切换)
+- [1· 本机 embedding 服务（知识检索的硬依赖）](#1-本机-embedding-服务知识检索的硬依赖)
+- [2 · 远端 embedding（已停用，仅作回滚选项）](#2-远端-embedding已停用仅作回滚选项)
 - [3 · 知识底座尚未独立部署](#3--知识底座尚未独立部署请勿粉饰)
 
 ---
 
-这一节是**换机器部署前必读**。本项目不是全自包含的：知识检索这条链路依赖  
-**一台外部主机**，且**知识底座尚未独立部署**。不了解这一节，照 README 做完会得到一个  
-「其他功能都正常、唯独知识检索全断」的系统，且没有任何报错提示你缺了什么。
+这一节是**换机器部署前必读**。知识检索这条链路依赖 **embedding 服务**与  
+**知识底座（RAGFlow）**；其中知识底座目前仍跑在「旧绑定栈」里，尚未独立部署。  
+不了解这一节，照 README 做完会得到一个「其他功能都正常、唯独知识检索全断」的系统，  
+且没有任何报错提示你缺了什么。
 
-#### 1 远端 embedding 服务（知识检索的硬依赖）
+#### 1 本机 embedding 服务（知识检索的硬依赖）
 
-| 项             | 值                                |
-| ------------- | -------------------------------- |
-| 地址            | `http://100.103.240.78:18001/v1` |
-| Tailscale 节点名 | `sevensmile.tailb5e44d.ts.net`   |
-| 模型            | `bge-m3`（固定，不可换）                 |
-| 谁在用           | RAGFlow 每次检索时现调它算查询向量            |
+| 项    | 值                                     |
+| ---- | ------------------------------------- |
+| 地址   | `http://host.docker.internal:18002/v1` |
+| 宿主机端口 | `18002`（由 `TEI_EMBEDDING_PORT` 控制）      |
+| compose 服务 | `tei-embedding`（**默认启动**，无 profile 门槛） |
+| 模型   | `bge-m3`（固定，不可换）                       |
+| 谁在用  | RAGFlow 每次检索、每次文档入库时现调它算向量            |
 
 **断了会怎样**：知识检索**全断**，不是降级。RAGFlow 不缓存查询向量，  
-每次 `/api/v1/retrieval` 都要现调 embedding，所以这个地址一挂，  
-所有检索请求直接报 `EmbeddingError code=100`（表现为 `knowledge_search` 整条失败）。
+每次 `/api/v1/retrieval` 都要现调 embedding，所以这个服务一挂，  
+所有检索请求直接报 `EmbeddingError code=100`（表现为 `knowledge_search` 整条失败）；  
+文档上传也会卡在解析阶段（切分已完成、向量化失败，`chunk_count` 恒为 0）。
 
-**Tailscale 是前置条件**：这个地址是 Tailscale 内网地址，**不登录 Tailscale 就根本连不上**。  
-换机器部署时若本机没装/没登录 Tailscale，知识检索一定是不通的 —— 这不是配置错，是网络层不通。
-
-先自查连通性（不依赖本项目任何容器）：
+**启动与自查**：
 
 ```bash
+# 随主栈一起起（模型未拉取时先跑 ./.models/fetch_bge_m3.sh "$PWD/bge-m3"）
+docker compose up -d tei-embedding
+
 curl -s -m 8 --noproxy '*' -o /dev/null -w "HTTP=%{http_code}\n" \
-  -X POST "http://100.103.240.78:18001/v1/embeddings" \
+  -X POST "http://127.0.0.1:18002/v1/embeddings" \
   -H 'Content-Type: application/json' \
-  -d '{"input":"探活","model":"/models/bge-m3"}'
+  -d '{"input":"探活","model":"bge-m3"}'
 # 期望：HTTP=200
 ```
 
-#### 2 本机备用 embedding 与主备切换
-
-本机保留了一份 TEI 作为**备用**，但在 compose 里挂了 `profiles: ["local-embed"]`，  
-**默认不启动** —— `docker compose config --services` 里 `tei-embedding` 数量为 **0** 是正常的。
-
-需要它时（主挂了、或者想在本机跑）：
-
-```bash
-# 启动本机备用（首次需拉模型：./.models/fetch_bge_m3.sh "$PWD/bge-m3"）
-docker compose --profile local-embed up -d tei-embedding
-```
-
-> 宿主机端口由 `TEI_EMBEDDING_PORT` 控制，默认 `18002`。  
 > amd64 镜像在 arm64 上模拟运行，**模型加载 + warm up 实测约 40～180 秒**，  
 > 期间 `/health` 不通属正常，不要过早判定启动失败。
+>
+> **客户端批量上限必须 ≥16**：RAGFlow 的 OpenAI 兼容 embedding 客户端写死每批 16 条，  
+> 而 TEI 的 `--max-client-batch-size` 默认上限是 8，不改则每批都被 413 拒掉，  
+> 大文件整份解析失败（2026-10-08 实证）。compose 里已显式设为 32。
+
+#### 2 远端 embedding（已停用，仅作回滚选项）
+
+2026-10-06 曾把 embedding 迁到 seven smile 主机 `http://100.103.240.78:18001/v1`  
+（Tailscale 节点 `sevensmile.tailb5e44d.ts.net`，x86_64 原生）。**2026-10-08 起收回本机**，  
+原因是该主机**一周内多次中断**：负载被其它任务冲到 19~132，`/info` 秒回但 `/embeddings`  
+排队 30~50s、单批 76~120s，最终整份文档解析挂死 10 分钟以上。跨主机依赖让「上传知识文档」  
+这类基础功能随时不可用，且排障要跨两台机器。
+
+收回时已验证**权重同源、向量空间未变**（本机 `.models/bge-m3` 与远端 `bge-m3-onnx` 同一份权重）：  
+切换后用既有文档检索，「坪效」0.710 /「会员等级」0.774 仍正常召回，**已入库文档无需重建**。
+
+需要回滚时用 `tools/embedding_failover.sh`（改 RAGFlow MySQL 里的 `base_url`）：
 
 切换主备用 `tools/embedding_failover.sh`（改 RAGFlow MySQL 里的 `base_url`，  
 **实测改完立即生效，无需重启 RAGFlow**）：
 
-| 命令                                             | 作用                               |
-| ---------------------------------------------- | -------------------------------- |
-| `bash tools/embedding_failover.sh status`      | 看当前指向哪个 + 主备各自探活结果               |
-| `bash tools/embedding_failover.sh check`       | 只探活，主备都探，**不改任何东西**              |
-| `bash tools/embedding_failover.sh auto`        | 自动判断：主不通则切备，备不通则切回主（带 300s 冷却防抖） |
-| `bash tools/embedding_failover.sh switch-back` | 主 → 备（切本机 TEI，会自动把它拉起来）          |
-| `bash tools/embedding_failover.sh switch-main` | 备 → 主（切回远端）                      |
+| 命令                                             | 作用                                    |
+| ---------------------------------------------- | ------------------------------------- |
+| `bash tools/embedding_failover.sh status`      | 看当前指向哪个 + 主备各自探活结果                    |
+| `bash tools/embedding_failover.sh check`       | 只探活，主备都探，**不改任何东西**                   |
+| `bash tools/embedding_failover.sh auto`        | 自动判断：主不通则切备，备不通则切回主（带 300s 冷却防抖）      |
+| `bash tools/embedding_failover.sh switch-main` | 备 → 主（切回**本机** TEI，默认方向）              |
+| `bash tools/embedding_failover.sh switch-back` | 主 → 备（切到**远端**，仅回滚用）                  |
+
+> 主 = 本机 TEI（`host.docker.internal:18002`），备 = 远端（`100.103.240.78:18001`）。
 
 > 该脚本依赖 RAGFlow 的 MySQL 容器 `filebay-knowledge-trial-mysql-1`。  
 > 这个容器属于下面的「旧绑定栈」—— **如果那个栈没起，脚本读不到当前指向，`status` 会显示「读取失败」**。
