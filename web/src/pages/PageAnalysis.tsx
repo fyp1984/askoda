@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api, type E2eStatus } from '../api/client'
 import { Card, ErrorBox, Loading, PartialErrorsBox, RuleBadge } from '../components/ui'
+import RichText from '../components/RichText'
 
 const SLOT_ORDER = ['subject', 'granularity', 'time', 'scope', 'fields', 'risks'] as const
 
@@ -94,8 +95,8 @@ export default function PageAnalysis({
                   <div className="rule rule-blocking" key={`b${i}`}>
                     <RuleBadge severity="blocking" ruleId={r.rule_id} />
                     <div className="rule-body">
-                      <div className="rule-stmt">{r.statement}</div>
-                      {r.why ? <div className="rule-why">{r.why}</div> : null}
+                      <div className="rule-stmt"><RichText text={r.statement} /></div>
+                      {r.why ? <div className="rule-why"><RichText text={r.why} /></div> : null}
                     </div>
                   </div>
                 ))}
@@ -103,8 +104,8 @@ export default function PageAnalysis({
                   <div className="rule rule-warning" key={`w${i}`}>
                     <RuleBadge severity="warning" ruleId={r.rule_id} />
                     <div className="rule-body">
-                      <div className="rule-stmt">{r.statement}</div>
-                      {r.why ? <div className="rule-why">{r.why}</div> : null}
+                      <div className="rule-stmt"><RichText text={r.statement} /></div>
+                      {r.why ? <div className="rule-why"><RichText text={r.why} /></div> : null}
                     </div>
                   </div>
                 ))}
@@ -134,7 +135,7 @@ export default function PageAnalysis({
                       <ul className="slot-list">
                         {cands.map((c: any, i: number) => (
                           <li key={i}>
-                            <div className="slot-val">{c.value}</div>
+                            <div className="slot-val"><RichText text={c.value} /></div>
                             <div className="slot-meta">
                               置信度 {c.confidence}
                               {c.needs_confirmation ? <span className="chip chip-red">需确认</span> : null}
@@ -153,7 +154,7 @@ export default function PageAnalysis({
                       </ul>
                     )}
                     {body?.row_definition_notes ? (
-                      <div className="slot-notes">{body.row_definition_notes}</div>
+                      <div className="slot-notes"><RichText text={String(body.row_definition_notes)} /></div>
                     ) : null}
                   </div>
                 )
@@ -184,7 +185,7 @@ export default function PageAnalysis({
                       </td>
                       <td>{e.source}</td>
                       <td className="mono">{e.locator}</td>
-                      <td className="ev-content">{e.content}</td>
+                      <td className="ev-content"><RichText text={e.content} /></td>
                     </tr>
                   ))}
                 </tbody>

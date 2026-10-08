@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type MdlResp, type MdlTable } from '../api/client'
 import { Card, ErrorBox, Loading } from '../components/ui'
+import RichText from '../components/RichText'
 
 /**
  * 菜单① · 语义层 · MDL 字典（工作台默认首页）
@@ -149,7 +150,8 @@ export default function PageMdl({ dataset, onNotify }: { dataset: string; onNoti
               checked={includeHidden}
               onChange={(e) => setIncludeHidden(e.target.checked)}
             />
-            显示未建模列（AI 不可见）
+            {/* 说明性长句：允许自然换行，不套 .ds-lbl（那是给短标签的 nowrap） */}
+            <span>显示未建模列（AI 不可见）</span>
           </label>
         }
       >
@@ -186,7 +188,7 @@ export default function PageMdl({ dataset, onNotify }: { dataset: string; onNoti
 
             <h4 className="sec">字段清单</h4>
             <label className="ds-pick">
-              选择表
+              <span className="ds-lbl">选择表</span>
               <select value={picked} onChange={(e) => setPicked(e.target.value)}>
                 {tables.map((t) => (
                   <option key={t.table_name} value={t.table_name}>
@@ -227,7 +229,7 @@ export default function PageMdl({ dataset, onNotify }: { dataset: string; onNoti
                             )}
                             {c.is_sensitive ? <span className="chip chip-red">敏感</span> : null}
                           </td>
-                          <td className="snippet">{c.description || '-'}</td>
+                          <td className="snippet"><RichText text={c.description || '-'} /></td>
                         </tr>
                       )
                     })}
@@ -263,7 +265,7 @@ export default function PageMdl({ dataset, onNotify }: { dataset: string; onNoti
                 <span className="chip chip-green">通过</span>
               )}
             </p>
-            {dry?.error ? <div className="errbox"><div className="errbox-title">{String(dry.error)}</div></div> : null}
+            {dry?.error ? <div className="errbox"><div className="errbox-title">{<RichText text={String(dry.error)} />}</div></div> : null}
             <pre className="sqlbox small">{JSON.stringify(dry, null, 2)}</pre>
           </>
         ) : null}

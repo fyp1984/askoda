@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api, type E2eStatus } from '../api/client'
 import { Card, ErrorBox, Loading, PartialErrorsBox } from '../components/ui'
+import RichText from '../components/RichText'
 
 /**
  * 页3 · 口径确认
@@ -98,9 +99,11 @@ export default function PageConfirm({
                   <span className="q-slot">槽位：{q.slot}</span>
                   <span className="q-id">{q.question_id}</span>
                 </div>
-                <div className="q-title">{q.question}</div>
-                {q.reason ? <div className="q-reason">为什么要问：{q.reason}</div> : null}
-                {q.impact_scope ? <div className="q-impact">不确认的后果：{q.impact_scope}</div> : null}
+                {/* 问题/后果/选项都由后端 confirmation_generate 生成，
+                    原文含 markdown 强调与 HTML 片段 → 全部走 RichText */}
+                <div className="q-title"><RichText text={q.question} /></div>
+                {q.reason ? <div className="q-reason">为什么要问：<RichText text={q.reason} /></div> : null}
+                {q.impact_scope ? <div className="q-impact">不确认的后果：<RichText text={q.impact_scope} /></div> : null}
                 <div className="q-options">
                   {(q.options || []).map((opt: string, i: number) => (
                     <label className="opt" key={i}>
@@ -111,7 +114,7 @@ export default function PageConfirm({
                         checked={(answers[q.question_id] || '') === opt}
                         onChange={() => setAnswers((a) => ({ ...a, [q.question_id]: opt }))}
                       />
-                      <span>{opt}</span>
+                      <span><RichText text={opt} /></span>
                     </label>
                   ))}
                 </div>
@@ -138,8 +141,7 @@ export default function PageConfirm({
           <div className={`backfill${backfill.backfilled ? ' backfill-ok' : ' backfill-none'}`}>
             <h4 className="sec">
               上一条答复的回填结果
-              <span className="muted">（问题 {backfill.question}）</span>
-            </h4>
+              <span className="muted">（问题 <RichText text={backfill.question} />）</span>            </h4>
             <p>
               证据链 P2「业务确认」条数：
               <b className={backfill.p2_evidence_count > 0 ? 'ok-text' : 'bad-text'}>
@@ -180,7 +182,7 @@ export default function PageConfirm({
               <div className="p2-item" key={i}>
                 <span className="lv lv-P2">P2</span>
                 <span className="mono">{e.locator}</span>
-                <span>{e.content}</span>
+                <span><RichText text={e.content} /></span>
                 {e.answered_by ? <span className="muted">答复人：{e.answered_by}</span> : null}
               </div>
             ))}
@@ -203,9 +205,9 @@ export default function PageConfirm({
                 <tbody>
                   {items.map((i) => (
                     <tr key={i.confirmation_id}>
-                      <td className="ev-content">{i.question}</td>
+                      <td className="ev-content"><RichText text={i.question} /></td>
                       <td>{i.slot}</td>
-                      <td>{i.answer || '-'}</td>
+                      <td><RichText text={i.answer || '-'} /></td>
                       <td>
                         {i.answered ? (
                           <span className="chip chip-green">已答复 v{i.version}</span>

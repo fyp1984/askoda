@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { api, type E2eStatus, type GateLayer, type SqlExecResp, type SqlResp } from '../api/client'
 import { Card, ErrorBox, Loading, PartialErrorsBox } from '../components/ui'
+import RichText from '../components/RichText'
+import GapFiller from '../components/GapFiller'
 
 /**
  * 页4 · 看 SQL 与结果
@@ -22,6 +24,11 @@ export default function PageSql({
   const [cites, setCites] = useState<{ source?: string; items?: any[]; total?: number; degraded_reason?: string } | null>(null)
   const [busy, setBusy] = useState<'gen' | 'exec' | 'cit' | null>(null)
   const [error, setError] = useState<unknown>(null)
+  // 候选 SQL（Agent/技术人员手工提供）：走 candidate_sql 通道，
+  // 绕过确定性兜底 planner（planner 只认已建模意图，未命中即拒）。
+  // 网关侧 contract 一直是支持的（gateway/app.py: sql_generate 的 candidate_sql 参数），
+  // 缺的是界面入口 —— 没有它，A3 路径在界面上无法使用。
+  const [candidate, setCandidate] = useState('')
 
   if (!demandId) {
     return (
@@ -38,7 +45,8 @@ export default function PageSql({
     setError(null)
     setExec(null)
     try {
-      const r = await api.sqlGenerate(demandId, dataset)
+      const text = candidate.trim()
+      const r = await api.sqlGenerate(demandId, dataset, text || undefined)
       setSql(r)
       onRefresh()
     } catch (e) {
@@ -90,7 +98,21 @@ export default function PageSql({
             <button className="primary" onClick={gen} disabled={busy === 'gen'}>
               {busy === 'gen' ? '生成中…' : '生成 SQL'}
             </button>
-            <button onClick={run} disabled={busy === 'exec' || (!sql && !exec)}>
+            <button
+              onClick={run}
+              disabled={
+                busy === 'exec' ||
+                // 生成失败（无 SQL）时必须禁用 —— 否则会把空串送去执行，
+                // 报出「未建模表/列」之类与真实原因无关的误导性错误
+                (!sql && !exec) ||
+                !(sql?.revised_sql || sql?.sql_draft)
+              }
+              title={
+                sql?.revised_sql || sql?.sql_draft
+                  ? undefined
+                  : '还没有可执行的 SQL，请先成功生成'
+              }
+            >
               {busy === 'exec' ? '执行中…' : '执行取数'}
             </button>
             <button onClick={loadCites} disabled={busy === 'cit'}>
@@ -104,11 +126,40 @@ export default function PageSql({
         {busy === 'gen' ? <Loading tip="正在做取数计划与门禁校验…" /> : null}
         {busy === 'exec' ? <Loading tip="正在只读执行…" /> : null}
 
+        {/* 生成侧的真实失败原因——此前被丢弃，用户只看到「还没有生成 SQL」 */}
+        {(sql?.generation_risks || []).length > 0 && !sql?.sql_draft && !sql?.revised_sql ? (
+          <GapFiller
+            risks={sql!.generation_risks || []}
+            block={(sql as any).generation_block}
+            dataset={dataset}
+            onRetried={() => gen()}
+          />
+        ) : null}
+
         {!sql && !exec ? (
-          <p className="muted">
-            还没有生成 SQL。点右上角「生成 SQL」。
-            注意：若存在标红（阻断）的未确认口径，会被硬门禁挡下——先去「口径确认」页答复。
-          </p>
+          <>
+            <p className="muted">
+              还没有生成 SQL。点右上角「生成 SQL」。
+              注意：若存在标红（阻断）的未确认口径，会被硬门禁挡下——先去「口径确认」页答复。
+            </p>
+            <details className="candbox">
+              <summary>自动生成失败？在这里粘贴候选 SQL（走 Agent 路径）</summary>
+              <p className="muted">
+                确定性兜底只认<b>已建模的口径</b>（如门店维度销售额/坪效）。若你的需求涉及尚未建模的维度
+                （如会员活跃度），自动生成会「未命中即拒」。此时可由分析人员/Agent
+                按知识库口径写出 SQL 粘贴到此处，走 <code>candidate_sql</code> 通道——
+                网关与BFF 均已支持该参数，只是此前界面没有入口。
+              </p>
+              <textarea
+                className="candinput"
+                rows={6}
+                placeholder={`SELECT ...\nFROM ...\nWHERE ...`}
+                value={candidate}
+                onChange={(e) => setCandidate(e.target.value)}
+              />
+              <p className="muted">粘贴后点右上角「生成 SQL」，门禁会照常做语法/静态/只读/语义四层校验。</p>
+            </details>
+          </>
         ) : null}
 
         {sql?.sql_draft || sql?.revised_sql ? (
@@ -118,9 +169,9 @@ export default function PageSql({
             {sql.generator ? <p className="muted">生成器：{sql.generator}</p> : null}
             {(sql.generation_notes || []).length > 0 ? (
               <ul className="notes">
-                {sql.generation_notes!.map((n, i) => (
-                  <li key={i}>{n}</li>
-                ))}
+                  {sql.generation_notes!.map((n, i) => (
+                    <li key={i}><RichText text={String(n)} /></li>
+                  ))}
               </ul>
             ) : null}
           </>
@@ -155,7 +206,7 @@ export default function PageSql({
                           <span className="chip chip-red">未通过</span>
                         )}
                       </td>
-                      <td>{l.detail}</td>
+                      <td><RichText text={String(l.detail)} /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -175,7 +226,7 @@ export default function PageSql({
               ) : (
                 <span className="chip chip-red">不可交付</span>
               )}
-              <span className="muted"> {exec.deliverable_reason}</span>
+              <span className="muted"> <RichText text={String(exec.deliverable_reason)} /></span>
             </p>
             {cols.length > 0 ? (
               <div className="table-wrap">
@@ -262,7 +313,7 @@ export default function PageSql({
             {cites.degraded_reason ? (
               <div className="warnbox">
                 <div className="warnbox-title">注意：这份清单是降级结果</div>
-                <div className="warnbox-hint">{cites.degraded_reason}</div>
+                <div className="warnbox-hint"><RichText text={String(cites.degraded_reason)} /></div>
               </div>
             ) : null}
             <div className="table-wrap">
@@ -281,7 +332,7 @@ export default function PageSql({
                       <td>{c.n}</td>
                       <td>{c.document_name}</td>
                       <td>{c.similarity}</td>
-                      <td className="snippet">{c.snippet}</td>
+                      <td className="snippet"><RichText text={c.snippet} /></td>
                     </tr>
                   ))}
                 </tbody>
