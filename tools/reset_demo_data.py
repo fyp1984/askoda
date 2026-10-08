@@ -119,8 +119,10 @@ def _conn():
     try:
         import psycopg
     except ImportError:
-        print("[x] 宿主机缺少 psycopg。请用隔离虚拟环境运行：")
-        print("    /Users/FYP/.workbuddy/binaries/python/envs/default/bin/python tools/reset_demo_data.py")
+        print("[x] 宿主机缺少 psycopg。请先安装依赖再运行：")
+        print("    pip install \"psycopg[binary]\"")
+        print("  或者在网关容器内执行该脚本（容器已自带依赖）：")
+        print("    docker exec -it askoda sh -c \"cd /app && python tools/reset_demo_data.py\"")
         sys.exit(3)
     return psycopg.connect(db_dsn(), connect_timeout=10)
 

@@ -268,6 +268,17 @@ def _child_env(extra=None):
     env.setdefault("MDL_A_PATH", os.path.join(REPO_ROOT, "wren-docker", "workspace", "mdl.json"))
     env.setdefault("MDL_B_PATH", os.path.join(REPO_ROOT, "wren-docker-b", "workspace", "mdl.json"))
 
+    # 3b. 元数据库 DSN：与上面 MDL 同理——代码里已不再保留明文口令默认值
+    #（见 gateway/db.py），所以**宿主直跑门禁时必须显式给出**，否则
+    # `e2e_verify.py` 的落库核对阶段会报「ASSISTANT_DB_DSN 未配置」而整条G3 红。
+    # 容器内由 compose 注入；宿主直跑按 compose 的同一套端口兜底。
+    # 显式设置了 env 时不覆盖（`setdefault`）。
+    if not (env.get("ASSISTANT_DB_DSN") or "").strip():
+        pg_port = env.get("ASSISTANT_PG_PORT", "15434")
+        env["ASSISTANT_DB_DSN"] = (
+            "postgresql://assistant:assistant@127.0.0.1:%s/assistant" % pg_port
+        )
+
     # 4. 逐脚本前置变量（PER_SCRIPT_ENV）——优先级最高，覆盖上面的兜底值
     if extra:
         env.update({k: str(v) for k, v in extra.items()})
@@ -455,10 +466,14 @@ def _g0_env_selfcheck(report_list):
 
 
 def run_g0(report_list):
-    """G0 总入口：环境自检 → py_compile(gateway + tools) → requirements 基线。"""
+    """G0 总入口：环境自检 → py_compile(gateway + tools + bff) → requirements 基线。"""
     _g0_env_selfcheck(report_list)
     _g0_py_compile("gateway/*.py", report_list)
     _g0_py_compile("tools/*.py", report_list)
+    # bff/ 一并纳入：它是承压面（对外 HTTP 入口），语法坏掉会直接 502，
+    # 而 BFF 已在 compose 编排内（不再是"宿主手工起的旁路进程"），
+    # 所以它的语法问题必须由门禁拦住，而不是等页面打不开才发现。
+    _g0_py_compile("bff/*.py", report_list)
     _g0_requirements_baseline(report_list)
 
 
