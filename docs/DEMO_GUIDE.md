@@ -64,41 +64,38 @@ curl -s -m 10 http://127.0.0.1:18081/api/v1/health | python3 -m json.tool
 **通过标准**：`status=ok`、A/B 两个 dataset 都 `ok:true`、`meta_db.ok=true`、`knowledge.ok=true`。
 任一项 false 就先修那一项再继续，别带着半个栈演示。
 
-### 0.2 远端 embedding 是否可达
+### 0.2 本机 embedding 是否可达
 
-知识检索的向量服务是**主备**结构：主为远端 TEI，备为本机 TEI（`18002`）。
+知识检索的向量服务是**主备**结构：**主为本机 TEI（`18002`），备为远端**（2026-10-08 起
+本机升为主用，远端因一周内多次中断降级为回滚选项）。
 RAGFlow 里的 `base_url` 是静态字符串，**不会自己切**，主挂了检索直接全断。
 
 ```bash
 bash tools/embedding_failover.sh check
 ```
 
-实测输出（主备都通，当前用主）：
-
-```
---- 探活（不改动任何东西）---
-  主（seven smile（主））✅ 通
-  备（本机 TEI（备））✅ 通
-```
-
 ```bash
 bash tools/embedding_failover.sh status
 ```
 
-实测输出：
+实测输出（当前指向本机主用）：
 
 ```
-  RAGFlow 当前指向：100.103.240.78:18001
-  当前用：主（seven smile（主））
+  主（本机 TEI（主））：host.docker.internal:18002
+  备（远端（备））：100.103.240.78:18001
+  RAGFlow 当前指向：host.docker.internal:18002
+  当前用：主（本机 TEI（主））
 ```
-
-**是否要起本地备用**：默认**不用**。`tei-embedding` 服务实测已在跑
-（`curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:18002/health` → `200`），
-且 `check` 显示主备双通。只有主不通时才需要切换：
 
 ```bash
-bash tools/embedding_failover.sh auto       # 主不通则自动切备
-# 或手动：switch-back（切本机）/ switch-main（切回主）
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:18002/health   # 期望 200
+```
+
+**只有本机主用不通时才需要切换**：
+
+```bash
+bash tools/embedding_failover.sh auto        # 主不通则自动切备
+# 或手动：switch-main（切回本机主用）/ switch-back（切到远端，仅回滚）
 ```
 
 > 切换只改 RAGFlow MySQL 里的 `base_url`，**无需重启 RAGFlow**，改完立即生效。
