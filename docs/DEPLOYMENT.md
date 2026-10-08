@@ -598,11 +598,11 @@ curl -s http://127.0.0.1:18081/api/v1/health | python3 -m json.tool
 curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool
 ```
 
-### 本机 embedding（备用，需要时才开）
+### 本机 embedding（主用，默认随主栈启动）
 
 ```bash
-# 启动
-docker compose --profile local-embed up -d tei-embedding
+# 启动（模型未拉取时先跑 ./.models/fetch_bge_m3.sh "$PWD/bge-m3"）
+docker compose up -d tei-embedding
 
 # 验证（应返回 200）
 curl -s -m 10 -X POST http://127.0.0.1:18002/embed \

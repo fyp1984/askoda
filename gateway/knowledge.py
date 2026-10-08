@@ -284,6 +284,35 @@ def health():
         }
 
 
+def _parse_error_text(row):
+    """取文档解析失败的原因。
+
+    实测（2026-10-08，1296 块的 xlsx 上传）：RAGFlow **把失败原因放在 `progress_msg`**，
+    形如「…[ERROR]Generate embedding error:Embedding request failed…」；
+    而 `error_msg` 恒为空。只取 `error_msg` 会让前端拿到空错误，界面上只剩
+    「解析失败」四个字，运维无从下手——本次正是靠直连底座翻 `progress_msg` 才定位到
+    「embedding 批大小 16 > 上限 8」。因此失败时从 `progress_msg` 里挑信息量最大的
+    那条 `[ERROR]` 行；抽不到就退化为进度日志末尾片段（仍然比空串有用）。
+    """
+    msg = (row.get("error_msg") or row.get("parse_error") or "").strip()
+    if msg:
+        return msg
+    # 只在**失败**时翻进度日志：正常/解析中的文档 progress_msg 是正常日志，
+    # 原样返回会让前端把「解析完成」当成错误原因显示出来。
+    if str(row.get("run") or "").upper() != "FAIL":
+        return ""
+    pm = (row.get("progress_msg") or "").strip()
+    if not pm:
+        return ""
+    # 取**最长**的一条 [ERROR]，不是最后一条：实测日志顺序是
+    # 「[ERROR]Generate embedding error: <含 413 详情的根因>」→「[ERROR][Exception]: <一句话>」，
+    # 取最后一条只能拿到那句短的，根因反而丢了。
+    errs = [l.strip() for l in pm.splitlines() if "[ERROR]" in l]
+    if errs:
+        return max(errs, key=len)[:500]
+    return pm[-300:]
+
+
 def list_documents(limit=50):
     ds_id = DATASET_ID
     if not ds_id:
@@ -308,7 +337,7 @@ def list_documents(limit=50):
                 "chunk_count": r.get("chunk_count"),
                 "size": r.get("size"),
                 "created_at": r.get("create_time"),
-                "parse_error": r.get("error_msg") or r.get("parse_error") or "",
+                "parse_error": _parse_error_text(r),
             }
             for r in rows
         ],

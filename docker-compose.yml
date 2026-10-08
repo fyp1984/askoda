@@ -214,10 +214,11 @@ services:
   #
   # 为什么需要它
   # ------------
-  # RAGFlow 里 `tenant_model_instance.extra.base_url` 原先写死远端 TEI
-  # `http://100.103.240.78:18001/v1`，该主机已不可达（Connection refused）。
+  # RAGFlow 里 `tenant_model_instance.extra.base_url` 现在指向**本机**
+  # `http://host.docker.internal:18002/v1`（2026-10-08 从远端主机收回，见下方注释）。
   # RAGFlow 自己**不缓存查询向量**，每次 `/api/v1/retrieval` 都要现调 embedding，
-  # 于是所有检索直接失败：EmbeddingError code=100。
+  # 每次文档入库也要现算分块向量 —— 这个服务一挂，检索直接失败
+  # （EmbeddingError code=100），文档上传则会卡在解析阶段、chunk_count 恒为 0。
   #
   # 为什么必须是 bge-m3
   # -------------------
@@ -230,24 +231,23 @@ services:
   # kill（实测 ExitCode=137 OOMKilled=true）。降并发后可稳定常驻，实测 /health 200。
   # ------------------------------------------------------------------
   # ------------------------------------------------------------------
-  # 【已停用 2026-10-06】本机 embedding 已迁至 seven smile 主机
-  #   地址：http://100.103.240.78:18001/v1（Tailscale 节点 sevensmile.tailb5e44d.ts.net）
-  #   切换依据：交叉比对三句话余弦相似度全部 = 1.000000（同一份权重），
-  #            30 轮 × 3 问 = 90 次检索全过，召回 3/18/19 与迁移前一致，
-  #            m2_verify 22/22、gate_all --strict 111 项全绿。
-  #   停用原因：本机 TEI 仅占 2.1GiB/15.66GiB、CPU 1.77%，不是资源瓶颈；
-  #            而远端是 x86_64 原生（本机是 amd64 模拟），性能更好且不占本机资源。
+  # 【本机为主用 · 2026-10-08 起】embedding 收回本机，不再依赖远端主机。
+  #   背景：2026-10-06 曾迁至 seven smile 主机 http://100.103.240.78:18001/v1。
+  #        实测该主机**一周内多次中断**（负载被其它自动化任务冲到 19~132，
+  #        /info 秒回但 /embeddings 排队 30~50s、单批 76~120s，直至整份文档
+  #        解析挂死 10 分钟以上）。跨主机依赖让「上传知识文档」这类基础功能
+  #        随时不可用，且排障要跨两台机器，成本远高于省下的那点本机资源。
+  #   收回依据：① 权重同源（.models/bge-m3 与远端 bge-m3-onnx 为同一份），
+  #            切换后用既有文档做检索验证，「坪效」0.710 /「会员等级」0.774
+  #            仍能召回——**向量空间未变，已入库文档无需重建**；
+  #            ② 本机单批 16 条实测 3.9s，比远端快一个数量级。
   #
-  #   ⚠️ 保留本段定义以便回滚。若要回退到本机：
-  #      1) 用 profile 启动：docker compose --profile local-embed up -d tei-embedding
-  #      2) 把 RAGFlow 的 base_url 改回 http://host.docker.internal:18002/v1
-  #         （备份在 .models/backup/）
-  #      3) 模型权重需先拉取：./.models/fetch_bge_m3.sh "$PWD/bge-m3"
-  #
-  #   正常使用无需启动本机 TEI；embedding 由远端提供。
+  #   如需临时停用本机 TEI（省资源）：docker compose stop tei-embedding
+  #   回滚到远端：把 RAGFlow 租户的 tenant_model_instance.extra.base_url
+  #               改回 http://100.103.240.78:18001/v1（改完需重启 RAGFlow）
+  #   模型权重未拉取时：./.models/fetch_bge_m3.sh "$PWD/bge-m3"
   # ------------------------------------------------------------------
   tei-embedding:
-    profiles: ["local-embed"]          # 默认不启动，需显式 --profile local-embed
     image: infiniflow/text-embeddings-inference:cpu-1.8
     container_name: askoda-tei-embedding
     restart: unless-stopped
@@ -262,8 +262,14 @@ services:
       - "2"
       - "--max-batch-tokens"
       - "2048"
+      # ⚠️ 客户端批量上限**必须 ≥16**：RAGFlow 的 OpenAI 兼容 embedding 客户端
+      #    写死每批 16 条（rag/llm/embedding_model.py: batch_size = 16），
+      #    而 TEI 该参数默认上限是 8 → 每批都被 413 拒掉，
+      #    大文件（实测 1296 块的 xlsx）整份解析 FAIL、chunk_count=0。
+      #    小文件分块数不超 8 时不触发，所以只在真实业务文档上暴露。
+      #    （2026-10-08 实证，与远端 sevensmile 的 ekos-tei-embedding 同步改为 32）
       - "--max-client-batch-size"
-      - "8"
+      - "32"
     environment:
       RAYON_NUM_THREADS: "4"
       MKL_ENABLE_INSTRUCTIONS: "AVX2"

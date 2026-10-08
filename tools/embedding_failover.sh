@@ -3,12 +3,18 @@
 #
 # 背景：知识库检索依赖 embedding 服务。RAGFlow 的 base_url 是**静态字符串**，
 #      服务一旦不可用，检索立即全断且不报错（本栈实测踩过：恒 0 命中极难归因）。
-#      本机保留 TEI 作为**备用**，compose 里带 profiles:["local-embed"] 默认不启动。
 #
-# 策略：远端为主、本机为备。切换有冷却与回切保护，避免抖动。
+# 策略（2026-10-08 起）：**本机为主、远端为备**。
+#      远端 TEI（100.103.240.78:18001）一周内多次中断，已不再作为主用；
+#      本机 tei-embedding 随主栈默认启动（compose 里已无 profile 门槛）。
+#      本脚本保留用于回滚/演练：需要时可一键切回远端。切换有冷却与回切保护，避免抖动。
+#
+# ⚠️ 探活超时 ≠ 服务挂：大文档入库时 TEI 会排队（实测 30~50s），用 8s 探活会把
+#     忙碌误判成宕机、`auto` 会把好服务切走。故探活默认 45s（EMBED_PROBE_TIMEOUT），
+#     且 `auto` **不要在入库高峰期跑**。
 #
 # ⚠️ 换机器部署时必须改这三个配置（否则会去连开发机的内网地址，必然失败）：
-#      EMBED_PRIMARY_URL        远端 embedding 的 host:port
+#      EMBED_PRIMARY_URL        本机 TEI 的 host:port（须与 compose 的 TEI_EMBEDDING_PORT 一致）
 #      EMBED_BACKUP_URL         本机 TEI 的 host:port（须与 compose 的 TEI_EMBEDDING_PORT 一致）
 #      RAGFLOW_MYSQL_CONTAINER  你自己的 RAGFlow MySQL 容器名
 #    写进项目根的 .env 即可（本脚本会读）：
@@ -35,11 +41,12 @@ cd "$(dirname "$0")/.." || exit 1
 # ---------- 配置（可用 .env 覆盖）----------
 [ -f .env ] && set -a && . ./.env 2>/dev/null && set +a
 
-# 远端主服务。默认值是开发机上的地址，**换机器部署务必改**。
-PRIMARY_URL="${EMBED_PRIMARY_URL:-100.103.240.78:18001}"
-PRIMARY_NAME="${EMBED_PRIMARY_NAME:-远端（主）}"
-BACKUP_URL="${EMBED_BACKUP_URL:-host.docker.internal:18002}"
-BACKUP_NAME="本机 TEI（备）"
+# 主服务=本机 TEI（容器侧走 host.docker.internal）。**换机器部署务必核对端口**。
+PRIMARY_URL="${EMBED_PRIMARY_URL:-host.docker.internal:18002}"
+PRIMARY_NAME="${EMBED_PRIMARY_NAME:-本机 TEI（主）}"
+# 备=远端 TEI（2026-10-08 起因频繁中断降级为备，仅作回滚选项）
+BACKUP_URL="${EMBED_BACKUP_URL:-100.103.240.78:18001}"
+BACKUP_NAME="${EMBED_BACKUP_NAME:-远端（备）}"
 
 # RAGFlow 的 MySQL 容器名（改 embedding base_url 要写进它自己的库）
 MYSQL_C="${RAGFLOW_MYSQL_CONTAINER:-filebay-knowledge-trial-mysql-1}"
@@ -57,10 +64,12 @@ probe() {
     host.docker.internal:*) hp="127.0.0.1:${hp#host.docker.internal:}" ;;
   esac
   local code
-  code=$(curl -s -m 8 --noproxy '*' -o /dev/null -w "%{http_code}" \
+  # 超时放宽到 45s：大文档入库时本机 TEI 排队实测 30~50s，用 8s 会**误判为不通**，
+  # `auto` 会据此把主切走 —— 那是把好服务换掉，比不切更糟。
+  code=$(curl -s -m "${EMBED_PROBE_TIMEOUT:-45}" --noproxy '*' -o /dev/null -w "%{http_code}" \
          -X POST "http://${hp}/v1/embeddings" \
          -H 'Content-Type: application/json' \
-         -d '{"input":"探活","model":"/models/bge-m3"}' 2>/dev/null)
+         -d '{"input":"探活","model":"bge-m3"}' 2>/dev/null)
   [ "$code" = "200" ]
 }
 
@@ -102,8 +111,19 @@ ensure_backup_up() {
   if probe "$BACKUP_URL"; then
     return 0
   fi
-  echo "  本机备用 TEI 未就绪，尝试启动（compose profile: local-embed）…"
-  docker compose --profile local-embed up -d tei-embedding >/dev/null 2>&1
+  # 备可能是本机 TEI（能自己拉起），也可能是远端（拉不起来，只能提示）。
+  # 2026-10-08 起主=本机、备=远端，所以这里必须按 BACKUP_URL 判断，不能无脑起容器。
+  case "$BACKUP_URL" in
+    *host.docker.internal*|*127.0.0.1*|*localhost*)
+      echo "  本机备用 TEI 未就绪，尝试启动…"
+      docker compose up -d tei-embedding >/dev/null 2>&1
+      ;;
+    *)
+      echo "  备用是远端服务（$BACKUP_URL），本脚本无法代为启动。"
+      echo "  请到那台主机上确认 TEI 容器在跑后再重试。"
+      return 1
+      ;;
+  esac
   local arch_hint=""
   case "$(uname -m 2>/dev/null)" in
     arm64|aarch64) arch_hint="（Apple Silicon 走 amd64 模拟，需 40~180s）" ;;
@@ -158,7 +178,7 @@ cmd_status() {
   echo ""
   echo "  --- 探活 ---"
   probe "$PRIMARY_URL" && echo "    主 ✅ 通" || echo "    主 ❌ 不通"
-  probe "$BACKUP_URL"  && echo "    备 ✅ 通" || echo "    备 ⚠️ 不通（需 --profile local-embed 启动）"
+  probe "$BACKUP_URL"  && echo "    备 ✅ 通" || echo "    备 ⚠️ 不通（本机备可用 docker compose up -d tei-embedding 启动）"
   echo ""
   if [ "$cur" = "$PRIMARY_URL" ]; then
     echo "  当前用：主（${PRIMARY_NAME}）"
