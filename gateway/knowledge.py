@@ -33,6 +33,8 @@ RAGFlow v0.26.4 原生检索接口 `POST /api/v1/retrieval`（自带 OIDC/API-Ke
 返回的每条 `citation` 都带 `document_id / document_name / chunk_id / positions`，
 下游（M3 证据编排、M5 交付说明）据此回溯到"哪篇文档、哪一段"。
 """
+import csv
+import io
 import json
 import os
 import re
@@ -41,6 +43,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import xml.etree.ElementTree as ET
+import zipfile
 
 API_BASE = os.getenv("KNOWLEDGE_API_URL", "http://127.0.0.1:19380/api/v1")
 API_KEY = os.getenv("KNOWLEDGE_API_KEY", "").strip()
@@ -62,6 +66,15 @@ ALLOWED_SUFFIXES = (
 )
 # 单个文档大小上限（RAGFlow 侧也有限制，这里先挡住明显超大的）。
 MAX_UPLOAD_BYTES = int(os.getenv("KNOWLEDGE_MAX_UPLOAD_MB", "32")) * 1024 * 1024
+
+# 单个单元格的字符上限。超过这个值的单元格**不能入库**——见 scan_oversized_cells
+# 的注释：它会让 embedding 服务静默卡死，整份文档解析失败且看不到原因。
+# 2048 与 TEI 的 --max-batch-tokens 对齐（实测 2500 字仍安全、6000 字必卡）。
+# 正常业务单元格远达不到：实测该业务 xlsx 单元格长度中位 4 字符、p95 64 字符。
+MAX_CELL_CHARS = int(os.getenv("KNOWLEDGE_MAX_CELL_CHARS", "2048"))
+# 预检最多报多少处。超大表格可能有成百上千处超标，全报会把错误信息撑爆；
+# 前 20 处已足够定位到「是哪张表的哪一类字段」。
+MAX_CELL_REPORT = 20
 
 # 实测校准后的默认检索参数
 DEFAULT_THRESHOLD = 0.1
@@ -386,6 +399,178 @@ def _all_document_names():
     return names
 
 
+_XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_XLSX_REL_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+
+
+def _xlsx_cell_text(cell, shared):
+    """取单元格文本。xlsx 有三种存法，少一种就会漏检：
+    t="s"（共享字符串，v 里存下标）/ t="inlineStr"（内联）/ 默认（数字等原文）。
+    """
+    t = cell.get("t")
+    if t == "inlineStr":
+        is_el = cell.find(_XLSX_NS + "is")
+        if is_el is None:
+            return ""
+        return "".join(x.text or "" for x in is_el.iter(_XLSX_NS + "t"))
+    v = cell.find(_XLSX_NS + "v")
+    if v is None or v.text is None:
+        return ""
+    if t == "s":
+        try:
+            idx = int(v.text)
+        except ValueError:
+            return ""
+        return shared[idx] if 0 <= idx < len(shared) else ""
+    return v.text
+
+
+def _xlsx_sheets(zf, names):
+    """sheet 名 → 表 XML 路径。拿不到 rels 就退化为按路径排序，宁可少查也不报错。"""
+    if "xl/workbook.xml" not in names:
+        return [
+            ("Sheet%d" % i, p)
+            for i, p in enumerate(
+                sorted(n for n in names if n.startswith("xl/worksheets/")), 1
+            )
+        ]
+    out = []
+    try:
+        rels = {}
+        if "xl/_rels/workbook.xml.rels" in names:
+            rr = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+            for rel in rr:
+                rels[rel.get("Id")] = rel.get("Target") or ""
+        wb = ET.fromstring(zf.read("xl/workbook.xml"))
+        for sh in wb.iter(_XLSX_NS + "sheet"):
+            target = rels.get(sh.get(_XLSX_REL_NS + "id"), "")
+            path = target.lstrip("/")
+            if path and not path.startswith("xl/"):
+                path = "xl/" + path
+            if path in names:
+                out.append((sh.get("name") or "Sheet", path))
+    except Exception:
+        pass
+    return out
+
+
+def _scan_xlsx(content, limit):
+    """扫 xlsx 里超过 limit 字符的单元格。只用标准库：xlsx 本质是 zip + XML，
+    红线五不放行 openpyxl 这类新增运行时依赖，自己解析完全够用。
+    """
+    hits = []
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(content))
+    except Exception:
+        return hits  # 不是合法 xlsx：交给 RAGFlow 报错，预检不抢着判
+    try:
+        names = set(zf.namelist())
+        shared = []
+        if "xl/sharedStrings.xml" in names:
+            try:
+                root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+                shared = [
+                    "".join(x.text or "" for x in si.iter(_XLSX_NS + "t"))
+                    for si in root.findall(_XLSX_NS + "si")
+                ]
+            except Exception:
+                shared = []
+        for sname, path in _xlsx_sheets(zf, names):
+            try:
+                root = ET.fromstring(zf.read(path))
+            except Exception:
+                continue
+            for cell in root.iter(_XLSX_NS + "c"):
+                text = _xlsx_cell_text(cell, shared)
+                if text and len(text) > limit:
+                    hits.append({
+                        "location": "%s!%s" % (sname, cell.get("r") or "?"),
+                        "sheet": sname,
+                        "cell": cell.get("r") or "?",
+                        "chars": len(text),
+                        "preview": text[:40],
+                    })
+                    if len(hits) >= MAX_CELL_REPORT:
+                        return hits
+    finally:
+        zf.close()
+    return hits
+
+
+def _scan_csv(content, limit):
+    hits = []
+    try:
+        text = content.decode("utf-8", errors="replace")
+    except Exception:
+        return hits
+    try:
+        for row_no, row in enumerate(csv.reader(io.StringIO(text)), 1):
+            for col_no, val in enumerate(row, 1):
+                if len(val) > limit:
+                    hits.append({
+                        "location": "第%d行第%d列" % (row_no, col_no),
+                        "sheet": "(CSV)",
+                        "cell": "R%dC%d" % (row_no, col_no),
+                        "chars": len(val),
+                        "preview": val[:40],
+                    })
+                    if len(hits) >= MAX_CELL_REPORT:
+                        return hits
+    except Exception:
+        return hits
+    return hits
+
+
+def scan_oversized_cells(filename, content, limit=None):
+    """上传前扫描表格里的超长单元格，判断能不能安全入库。
+
+    为什么要拦这一道
+    ----------------
+    RAGFlow 的 naive 分块**对超长 excel 行不切分**：即便 dataset 配了
+    `chunk_token_num=512`，一个 32767 字符的单元格（Excel 单元格上限）也会被
+    整段作为一块送进 embedding。而 TEI 处理单条超过 `--max-batch-tokens`(2048)
+    的文本会**静默卡死**——进程不退出、健康检查仍是 healthy，但 CPU 掉到 1%、
+    探活 60s 无响应，只能重启。整份文档最终 `run=FAIL / chunk_count=0`，
+    前端只看到「解析失败」四个字，看不到任何原因。
+
+    实测依据（2026-10-09，非推断）：
+    - 单条 1500 / 2000 / 2500 字正常返回（6~10s），**6000 字必卡**；
+    - 连发 12 批正常长度（16 条 × 100 字）全部通过 —— 不是累积性故障，
+      只跟**单条长度**有关；
+    - 含 36 个超长单元格的真实 xlsx 每次都精确卡死在同一批（progress=0.71003），
+      100% 可复现。
+    - 调大 TEI 参数救不了：16384、8192 都在 warm up 阶段被 OOM 静默杀掉
+      （无 panic 日志、RestartCount 连续 +1），12g 上限撑不住。
+
+    为什么只查单元格、不查"整行拼接长度"
+    --------------------------------------
+    正常行拼接几十列也可能过千字符，按行判会误伤正常文件；而实测元凶就是单个
+    超长单元格（32767 字符）。判单元格最准，也能直接指出「哪张表哪个格子」
+    让用户去改。实测该业务 xlsx 单元格长度中位仅 4 字符、p95 64 字符，
+    2048 的阈值离正常数据很远，不存在误杀。
+
+    返回
+    ----
+    {"ok": True,  "checked": True}                    —— 扫过，没问题
+    {"ok": True,  "checked": False}                   —— 类型不支持预检，放行
+    {"ok": False, "checked": True, "cells": [...]}    —— 有会打断入库的超长内容
+    """
+    limit = int(limit or MAX_CELL_CHARS)
+    suffix = os.path.splitext(str(filename or ""))[1].lower()
+    if suffix == ".xlsx":
+        hits = _scan_xlsx(content, limit)
+    elif suffix == ".csv":
+        hits = _scan_csv(content, limit)
+    else:
+        # .xls 是旧二进制格式，标准库解不开（红线五不放行新增依赖）；
+        # 其余类型（md/pdf/docx…）由 RAGFlow 按 chunk_token_num 切分，
+        # 不会产出超长块。这些一律放行——预检是保护，不能变成新的阻断源。
+        return {"ok": True, "checked": False, "limit": limit}
+    if hits:
+        return {"ok": False, "checked": True, "limit": limit, "cells": hits}
+    return {"ok": True, "checked": True, "limit": limit}
+
+
 def upload_document(filename, content, content_type="", dataset_id=""):
     """上传一份文档并触发解析，返回新文档的 id 与解析状态。
 
@@ -433,6 +618,27 @@ def upload_document(filename, content, content_type="", dataset_id=""):
             "duplicate": True,
             "document_id": (dup or {}).get("id", ""),
             "run": (dup or {}).get("run", ""),
+        }
+
+    # 上传前预检：表格里的超长单元格会让 embedding 静默卡死，整份文档解析失败
+    # 且前端只显示「解析失败」看不到原因（实测依据见 scan_oversized_cells 注释）。
+    # 放在防重**之后**：不改动既有任何分支的判定顺序，只在真要上传前加一道闸。
+    scan = scan_oversized_cells(name, content)
+    if not scan.get("ok"):
+        cells = scan.get("cells") or []
+        detail = "；".join(
+            "%s（%d 字符）" % (c.get("location"), c.get("chars")) for c in cells[:5]
+        )
+        tail = "（仅列出前 %d 处）" % len(cells) if len(cells) >= MAX_CELL_REPORT else ""
+        return {
+            "ok": False,
+            "error": "文件里有超长单元格（单格超过 %d 字符），会导致入库时 embedding "
+                     "卡死、整份文档解析失败且看不到原因。%s%s。"
+                     "请先把这些单元格拆成多行或多列再上传。"
+                     % (scan.get("limit"), detail or "（位置未能定位）", tail),
+            "oversized": True,
+            "cells": cells,
+            "limit": scan.get("limit"),
         }
 
     resp = _upload(
