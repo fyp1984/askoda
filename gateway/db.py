@@ -16,6 +16,18 @@ P0 硬指标「换库 0 行代码」立刻失效——换数据源时会把网�
 --------
 按线程缓存连接并带健康检查；PG 未就绪时给明确报错而不是抛裸异常，便于 `/healthz`
 把元数据库也纳入探活。
+
+DSN 从哪来
+---------
+**只从环境变量 `ASSISTANT_DB_DSN` 读，代码里不留明文口令默认值。**
+
+早期版本这里硬编码了 `postgresql://assistant:assistant@...`，开发期确实方便，
+但代价是：仓库里存着一份能直接连上库的口令，而交付对象是"拿到就能跑的人"——
+他们不该继承我们的口令。且默认值会掩盖配置错误：变量名打错时会静默回退到
+那条明文 DSN，表现为"连到了某个库但数据不对"，比直接报错难查得多。
+
+于是改成：缺失即明确报错（见 `_resolve_dsn`）。开发/自测的默认值由
+`docker-compose.yml` 与 `.env.example` 承担——**配置归配置，代码归代码**。
 """
 import json
 import os
@@ -28,10 +40,31 @@ except ImportError:  # 本地无驱动时允许模块导入，功能调用时才
     psycopg = None
 
 
-DSN = os.getenv(
-    "ASSISTANT_DB_DSN",
-    "postgresql://assistant:assistant@127.0.0.1:15434/assistant",
-)
+# 变量名 + 一句人话提示：让配置错误表现为"该配什么没配"，而不是连错库。
+DSN_ENV = "ASSISTANT_DB_DSN"
+
+# 兼容引用：历史代码/脚本可能 import 这个常量。用 `get` 懒取值，
+# 不在 import 期就抛错——否则连「只想 import 一下看函数签名」都会失败。
+def _dsn():
+    """取元数据库 DSN；未配置时抛带修复指引的 DBError。"""
+    v = (os.getenv(DSN_ENV) or "").strip()
+    if not v:
+        raise DBError(
+            "%s 未配置：请在环境变量或 .env 中设置 PostgreSQL 连接串，"
+            "例如 postgresql://<user>:<password>@<host>:5432/<db>"
+            "（参考 .env.example 与《部署手册》）。"
+            "代码里不再保留明文口令默认值——配置缺失应当报错，不该静默连到某个库。"
+            % DSN_ENV
+        )
+    return v
+
+
+def __getattr__(name):
+    # 仅在外部访问 DSN 这个名字时触发（兼容 `from db import DSN`）
+    if name == "DSN":
+        return _dsn()
+    raise AttributeError(name)
+
 
 _local = threading.local()
 
@@ -46,7 +79,7 @@ class DBError(RuntimeError):
 def _connect():
     if psycopg is None:
         raise DBError("未安装 psycopg（容器内应随 requirements.txt 安装）")
-    return psycopg.connect(DSN, autocommit=True, connect_timeout=10)
+    return psycopg.connect(_dsn(), autocommit=True, connect_timeout=10)
 
 
 def conn():
@@ -89,6 +122,16 @@ def execute(sql, params=None):
         return cur.rowcount
 
 
+def _endpoint_hint():
+    """给探活用的端点描述；DSN 未配置时如实说"未配置"，不抛。
+
+    `healthy()` 的失败分支本身不能再抛——否则探活响应会变成 500，
+    调用方（compose healthcheck / G3 探活）看不到"是配置缺失还是库挂了"。
+    """
+    v = (os.getenv(DSN_ENV) or "").strip()
+    return v.split("@")[-1] if v else "(%s 未配置)" % DSN_ENV
+
+
 def healthy():
     t0 = time.time()
     try:
@@ -96,13 +139,13 @@ def healthy():
         return {
             "ok": True,
             "database": row["db"],
-            "endpoint": DSN.split("@")[-1],
+            "endpoint": _endpoint_hint(),
             "ms": int((time.time() - t0) * 1000),
         }
     except Exception as e:
         return {
             "ok": False,
-            "endpoint": DSN.split("@")[-1],
+            "endpoint": _endpoint_hint(),
             "error": "%s: %s" % (type(e).__name__, str(e)[:200]),
             "ms": int((time.time() - t0) * 1000),
         }

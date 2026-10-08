@@ -857,13 +857,29 @@ def rules(bundle, state):
         fire("R3", "需求涉及多值/拼接，未说明取值顺序与拼接方式", level="warning")
 
     # R4 未确认关键口径不得高置信输出
+    #
+    # ⚠️ 两个循环读的是**不同层级**，曾导致「业务方已确认、界面仍报 R4 阻断」：
+    #   · 循环1 读 state["slots"][slot]["candidates"][*]["needs_confirmation"]（逐候选）
+    #   · 循环2 读 state[key]["needs_confirmation"]（槽位顶层 flag）
+    # 而 time / granularity 这两个 key 只存在于 state["slots"] 里，
+    # state 顶层没有 → 循环2 永远取到 {} → 判不出问题。
+    # 现在统一从 slots 取，并额外尊重「已被业务确认回填」的槽位：
+    # 有 filled_by_confirmation_ids 说明业务方已答复，不再要求确认。
     low = []
-    for slot, s in (state.get("slots") or {}).items():
+    slots = state.get("slots") or {}
+    for slot, s in slots.items():
+        if not isinstance(s, dict):
+            continue
         for c in (s.get("candidates") or []):
-            if c.get("needs_confirmation"):
+            if isinstance(c, dict) and c.get("needs_confirmation"):
                 low.append("%s=%s" % (slot, c.get("value")))
     for key in ("granularity", "time"):
-        blk = state.get(key) or {}
+        blk = slots.get(key) or {}
+        if not isinstance(blk, dict):
+            continue
+        # 业务方已答复 → 该槽位不再要求确认（与 _backfill_slots_from_confirmations 对齐）
+        if blk.get("filled_by_confirmation_ids"):
+            continue
         if blk.get("needs_confirmation") or blk.get("need_confirmation"):
             low.append(key)
     if low:

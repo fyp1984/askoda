@@ -114,7 +114,12 @@ services:
   # ------------------------------------------------------------------
   gateway:
     build:
-      context: ./gateway
+      # context 必须是**仓库根**而不是 ./gateway：
+      #   门禁脚本在仓库根的 tools/ 下，容器内需要它们才能跑 G2/G3。
+      #   早前 context=./gateway 时 tools/ 进不了镜像，每次 build 后都得手工
+      #   `docker cp tools/. askoda:/app/tools/` 补救，否则门禁假红。
+      context: .
+      dockerfile: gateway/Dockerfile
       args:
         PIP_INDEX: ${PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
     image: askoda-gateway:0.3.0

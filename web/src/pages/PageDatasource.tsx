@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { Card, ErrorBox, Loading } from '../components/ui'
+import RichText from '../components/RichText'
 
 /**
  * 菜单③ · 数据源接入
@@ -166,7 +167,7 @@ export default function PageDatasource({
           候选只在 MDL 闭集内产生，不连物理库猜字段；未命中会给 miss_reason，不猜不填。
         </p>
         <label className="ds-pick">
-          需求单号
+          <span className="ds-lbl">需求单号</span>
           <input
             className="textinput"
             placeholder="DR-…"
@@ -179,13 +180,13 @@ export default function PageDatasource({
           <>
             {cand?.ok === false ? (
               <div className="errbox">
-                <div className="errbox-title">{String(cand.error || '生成失败')}</div>
+                <div className="errbox-title">{<RichText text={String(cand.error || '生成失败')} />}</div>
               </div>
             ) : null}
             {cand?.miss_reason ? (
               <div className="warnbox">
                 <div className="warnbox-title">未命中候选</div>
-                <div className="warnbox-hint">{String(cand.miss_reason)}</div>
+                <div className="warnbox-hint"><RichText text={String(cand.miss_reason)} /></div>
               </div>
             ) : null}
             <pre className="sqlbox small">{JSON.stringify(cand, null, 2)}</pre>

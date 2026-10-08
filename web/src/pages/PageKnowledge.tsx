@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { Card, ErrorBox, Loading } from '../components/ui'
+import RichText from '../components/RichText'
 
 /**
  * 菜单② · 知识储备
@@ -313,9 +314,10 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
             {uploadMsg.kind === 'ok' ? (
               <div className="okbox-title">已提交</div>
             ) : (
-              <div className="errbox-title">{uploadMsg.text}</div>
+              /* text 里可能是后端 r.error / 异常 message 原文，走 RichText 防止星号与标签外露 */
+              <div className="errbox-title"><RichText text={uploadMsg.text} /></div>
             )}
-            {uploadMsg.kind === 'ok' ? <div>{uploadMsg.text}</div> : null}
+            {uploadMsg.kind === 'ok' ? <div><RichText text={uploadMsg.text} /></div> : null}
             {uploadMsg.action ? (
               <div style={{ marginTop: 6 }}>
                 <button onClick={uploadMsg.action.onClick}>{uploadMsg.action.label}</button>
@@ -397,7 +399,7 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
           }}
         />
         {searchBusy ? <Loading tip="正在检索知识库…" /> : null}
-        {search?.error ? <div className="errbox"><div className="errbox-title">{String(search.error)}</div></div> : null}
+        {search?.error ? <div className="errbox"><div className="errbox-title">{<RichText text={String(search.error)} />}</div></div> : null}
 
         {hits.length > 0 ? (
           <div className="table-wrap">
@@ -414,7 +416,7 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
                   <tr key={i}>
                     <td>{c.document_name || '-'}</td>
                     <td className="mono">{c.similarity ?? '-'}</td>
-                    <td className="snippet">{c.content || c.snippet || '-'}</td>
+                    <td className="snippet"><RichText text={c.content || c.snippet || '-'} /></td>
                   </tr>
                 ))}
               </tbody>

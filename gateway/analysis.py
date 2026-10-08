@@ -99,6 +99,75 @@ def rounds(demand_id):
     return {"demand_id": demand_id, "count": len(rows), "rounds": rows}
 
 
+def _recheck_rule_r4(slots, stored_risks):
+    """按**当前** slots 重算 R4，修正存量结论里已过期的「未确认」阻断。
+
+    背景（2026-10-07 实测发现）：
+      `rule_check` 是分析那一轮算好后落库的（见 save_round）。业务方随后在
+      「口径确认」页答复，槽位 `needs_confirmation` 已被 `_backfill_slots_from_confirmations`
+      置 False，但**存量 risks 里那条 R4 阻断不会自动消失**——
+      于是界面出现「确认页显示已答复、分析页仍报未确认」的矛盾。
+
+    这里做最小修正：只重算 R4，其余规则结论沿用存量（它们不依赖确认状态）。
+    已确认的口径（filled_by_confirmation_ids 非空）不再计入 R4 阻断。
+    """
+    try:
+        stored = json.loads(stored_risks) if isinstance(stored_risks, str) else (stored_risks or {})
+    except Exception:  # noqa: BLE001
+        return stored_risks, False
+
+    if not isinstance(stored, dict):
+        return stored_risks, False
+
+    low = []
+    for slot, s in (slots or {}).items():
+        if not isinstance(s, dict):
+            continue
+        for c in (s.get("candidates") or []):
+            if isinstance(c, dict) and c.get("needs_confirmation"):
+                low.append("%s=%s" % (slot, c.get("value")))
+    for key in ("granularity", "time"):
+        blk = (slots or {}).get(key) or {}
+        if not isinstance(blk, dict):
+            continue
+        if blk.get("filled_by_confirmation_ids"):
+            continue  # 业务方已答复
+        if blk.get("needs_confirmation") or blk.get("need_confirmation"):
+            low.append(key)
+
+    out = dict(stored)
+    changed = False
+    for field in ("blocking_risks", "triggered_rules", "warning_risks"):
+        items = out.get(field)
+        if not isinstance(items, list):
+            continue
+        kept = []
+        for it in items:
+            # blocking/triggered 里是 dict（rule_id/id），warning 里可能是字符串
+            if isinstance(it, str):
+                rid = it
+            elif isinstance(it, dict):
+                rid = it.get("rule_id") or it.get("id") or it.get("rule")
+            else:
+                rid = None
+            if rid == "R4" and not low:
+                changed = True
+                continue  # 确认已完成 → 撤掉这条过期结论
+            kept.append(it)
+        out[field] = kept
+    # mandatory_confirmations 是**纯字符串数组**（如 ['R4']），不是 dict —— 上一版
+    # 只按 dict 取 rule_id 会漏掉它，导致 blocking_risks 清了但强制确认项还挂着 R4。
+    mand = out.get("mandatory_confirmations")
+    if isinstance(mand, list) and not low:
+        kept_m = [m for m in mand if m != "R4"]
+        if len(kept_m) != len(mand):
+            changed = True
+        out["mandatory_confirmations"] = kept_m
+    if not changed:
+        return stored_risks, False
+    return out, True
+
+
 def get_round(demand_id, round_no=None):
     """取某一轮完整结果（默认最新一轮）。"""
     if round_no is None:
@@ -115,6 +184,19 @@ def get_round(demand_id, round_no=None):
     )
     if not r:
         raise AnalysisError("轮次不存在：%s round=%s" % (demand_id, round_no))
+    # 规则结论按当前 slots 重算 R4（确认答复后不再报过期阻断），并顺手落库保持一致
+    _slots_now = json.loads(r["slots"]) if isinstance(r["slots"], str) else (r["slots"] or {})
+    _risks_now, _changed = _recheck_rule_r4(_slots_now, r["risks"])
+    if _changed:
+        try:
+            db.execute(
+                "UPDATE analysis_rounds SET risks=%s WHERE demand_id=%s AND round_no=%s",
+                (db.dumps(_risks_now), demand_id, round_no),
+            )
+            r = dict(r)
+            r["risks"] = db.dumps(_risks_now)
+        except Exception:  # noqa: BLE001
+            pass
     return {
         "demand_id": r["demand_id"],
         "round_no": r["round_no"],
@@ -471,6 +553,18 @@ def first_round(demand_id, dataset="B", actor="analyst", persist=True):
     slots_backfilled, slots_affected = _backfill_slots_from_confirmations(
         demand_id, result["slots"]
     )
+
+    # ⚠️ 顺序陷阱（2026-10-07 实测定位）：
+    #   build() 内部先算 rules()，那时业务方还没答复 → R4 正确地报「未确认 time」；
+    #   随后的 _backfill_slots_from_confirmations 把 time 置为已确认，
+    #   但 **rules 的结论不会被自动重算** → 存库/返回的都还是「未确认」的旧结论。
+    #   于是界面出现「口径确认页显示已答复、语义分析页仍报 R4 阻断」的矛盾，
+    #   且因 R4 属 mandatory 阻断，业务方永远走不到出数。
+    # 修法：回填发生后，按当前 slots 重算 R4 并同步进 result，再落库。
+    if slots_backfilled:
+        _risks_fixed, changed = _recheck_rule_r4(result["slots"], result["rule_check"])
+        if changed:
+            result["rule_check"] = _risks_fixed
 
     round_no = _save_round(demand_id, dataset, bundle, result, actor) if persist else None
 

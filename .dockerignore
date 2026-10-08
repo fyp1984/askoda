@@ -1,0 +1,31 @@
+# ── Docker 构建上下文排除（context 已是仓库根，见 docker-compose.yml）──
+# 不排除会让 2.2GB 模型权重 + 132MB node_modules 传进构建上下文，
+# 构建变慢且镜像层无谓变大。真正需要进镜像的只有 gateway/ 与 tools/。
+
+# 大件：本地模型权重（2.2GB，宿主机本地跑 TEI 用，不进网关镜像）
+.models/
+# 前端依赖与构建产物（BFF 镜像自带 static，不从这里取）
+web/node_modules/
+web/dist/
+web/.vite/
+
+# 版本控制与工具缓存
+.git/
+.buildx/
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# 归档与临时产物
+_archive/
+tmp/
+**/gate-report.json
+**/gate-report.md
+**/.DS_Store
+**/*.log
+
+# 文档（非运行必需；需要时按需放开）
+# docs/

@@ -289,6 +289,23 @@ export type SqlResp = {
   revised_sql?: string | null
   generator?: string
   generation_notes?: string[]
+  /**
+   * 生成侧拒绝/风险说明（如「未命中已建模意图」）。
+   * 此前类型里漏了它 → 前端拿不到真实失败原因，只显示「还没有生成 SQL」，
+   * 用户看不出到底是口径问题还是建模缺失。这是 2026-10-07 演示暴露的缺陷。
+   */
+  generation_risks?: string[]
+  /** 结构化的拒绝说明，供界面排版（标题/差距/责任方/分步指引），非日志原文 */
+  generation_block?: {
+    blocked?: boolean
+    title?: string
+    reason?: string
+    guide?: string
+    supported?: string
+    gap?: string
+    guide_steps?: string[]
+    needs?: { kind?: string; owner?: string }
+  }
   field_mapping?: unknown[]
   review?: {
     status: string

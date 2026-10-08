@@ -188,7 +188,7 @@ export default function App() {
           </button>
         ))}
         <label className="ds-pick">
-          数据集
+          <span className="ds-lbl">数据集</span>
           <select value={dataset} onChange={(e) => setDataset(e.target.value)}>
             <option value="B">B 库 · 零售会员域</option>
             <option value="A">A 库 · 电商域</option>

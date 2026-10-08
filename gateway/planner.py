@@ -374,6 +374,60 @@ def plan_b(dataset, nl):
     ms = _months_in(t)
     m1 = ms[0] if ms else None
 
+    # ── 会员活跃度与购买频次（2026-10-07 依知识库第九节补齐）────────────────
+    # 口径来源：knowledge/01-指标口径说明书·零售会员域.md 第九节「会员活跃度与购买频次」
+    #（业务方 2026-10-07 补充，与 _backfill 回填、P2 证据链同源）。
+    # 之前只有门店维度意图（复购用户数/复购率/坪效/销量），会员维度未建模 → 需求被「未命中即拒」。
+    #
+    # 三条口径约束（第九节 9.1 / 9.2 / 9.4）：
+    #   ① 只统计 order_status='已完成'，不含已退款（退款在退款月单独计，不冲减原月）
+    #   ② 活跃度按下单频次（订单笔数）降序；并列依次比订单总量 → member_id，保证可复现
+    #   ③ 「使用频次」类行为指标本数据域无埋点，**不得用购买频次替代**
+    _MEMBER_ACT_KEYS = ("活跃客户", "最活跃", "会员活跃", "活跃会员", "购买频次", "下单频次", "订单频次")
+    if any(k in t for k in _MEMBER_ACT_KEYS):
+        if any(k in t for k in ("使用频次", "访问频次", "浏览", "停留", "登录")):
+            # 行为类指标无数据源 → 如实拒绝，不拿购买频次顶替
+            return _refuse(
+                "B",
+                "未建模拦截：零售会员域无行为类数据",
+                "本数据域没有登录/浏览/操作行为埋点，「使用频次/访问频次/停留时长」不可计算",
+                "如需该指标，请先接入行为数据源并在语义层建模；"
+                "若只想看购买频次，请把口径改为「购买频次/下单频次」",
+            )
+        _act_cols = "COUNT(DISTINCT o.order_id) AS 购买频次, COUNT(DISTINCT o.order_date) AS 下单天数, SUM(o.pay_amount) AS 订单总量"
+        if "各门店" in t or "按门店" in t:
+            return _ok(
+                "B",
+                "活跃会员·门店月（购买频次口径）",
+                "SELECT s.store_name, m.member_name AS 客户, %s "
+                "FROM dwd_order_di o JOIN dim_member m ON o.member_id = m.member_id "
+                "JOIN dim_store s ON o.store_id = s.store_id "
+                "WHERE o.order_status = '已完成' "
+                "GROUP BY s.store_name, m.member_name "
+                "ORDER BY 购买频次 DESC, 订单总量 DESC, m.member_name ASC" % _act_cols,
+                _objects(dataset, ["dwd_order_di", "dim_member", "dim_store"]),
+                steps_extra=[
+                    "口径：只统计已完成订单（order_status='已完成'）",
+                    "排序：购买频次降序 → 订单总量降序 → member_name 升序（可复现）",
+                    "来源：知识库第九节「会员活跃度与购买频次」9.1/9.2",
+                ],
+            )
+        return _ok(
+            "B",
+            "活跃会员排行（购买频次口径）",
+            "SELECT m.member_name AS 客户, %s "
+            "FROM dwd_order_di o JOIN dim_member m ON o.member_id = m.member_id "
+            "WHERE o.order_status = '已完成' "
+            "GROUP BY m.member_name "
+            "ORDER BY 购买频次 DESC, 订单总量 DESC, m.member_name ASC" % _act_cols,
+            _objects(dataset, ["dwd_order_di", "dim_member"]),
+            steps_extra=[
+                "口径：只统计已完成订单（order_status='已完成'）",
+                "排序：购买频次降序 → 订单总量降序 → member_name 升序（可复现）",
+                "来源：知识库第九节「会员活跃度与购买频次」9.1/9.2",
+            ],
+        )
+
     if "复购用户数" in t:
         if "按门店" in t or "各门店" in t:
             return _ok(
@@ -559,12 +613,77 @@ def plan_b(dataset, nl):
             "GROUP BY date_trunc('month', order_date) ORDER BY 月份",
             _objects(dataset, ["dwd_order_di"]),
         )
+    # ── 未命中：把「缺什么」讲清楚，并给出可执行的补全清单 ──
+    # 诉求（用户原话，2026-10-07）：系统应明确提示业务/技术人员补全什么，
+    # 而不是让人靠猜或反复调试。本处给出：已支持清单 + 差距分析 + 两条补全路径。
+    _supported = _supported_intents_b(t)
+    _gap = _explain_gap_b(dataset, t)
+    _guide = (
+        "请按以下顺序补齐后重试（不需要改代码）：\n"
+        "① 业务口径 → 在知识库《01-指标口径说明书·零售会员域》补充该口径定义"
+        "（含计算公式、统计范围、排除项、并列排序规则），"
+        "由业务方确认口径、技术方落文档；\n"
+        "② 语义建模 → 在 gateway/planner.py 的 plan_b 中登记该意图"
+        "（参照同文件内既有意图写法，SQL 必须只引用 MDL 可见对象）；\n"
+        "③ 补齐后重新点「生成 SQL」，系统会重新对齐。"
+    )
     return _refuse(
         "B",
-        "未命中已建模意图",
-        "受控生成约束：问题未对齐任何已建模口径/意图，拒绝生成（未命中即拒）",
-        "先在语义层补充建模，或参考已支持的示例",
+        "未命中已建模意图：%s" % (_gap or "该问题未对齐任何已建模口径"),
+        "受控生成约束：问题未对齐任何已建模口径/意图，拒绝生成（未命中即拒）。"
+        "已支持：%s。当前差距：%s" % (_supported, _gap),
+        _guide,
     )
+
+
+def _supported_intents_b(t):
+    """列出 B 库当前已支持的口径名（给用户一个可对照的清单）。"""
+    names = []
+    if "复购用户数" in t or "复购率" in t:
+        names += ["复购用户数·门店月", "复购用户数·总月", "复购率·门店月"]
+    if "坪效" in t:
+        names.append("门店坪效")
+    if "销售额" in t or "订单金额" in t or "销售金额" in t:
+        names.append("销售额·门店/时间")
+    if "订单量" in t or "订单数" in t or "销量" in t:
+        names.append("订单量·门店/时间")
+    if "最活跃" in t or "活跃客户" in t or "购买频次" in t or "下单频次" in t:
+        names.append("活跃会员排行（购买频次口径）")
+    if "券" in t or "核销" in t:
+        names.append("（券核销相关口径「待上架」，当前不可用）")
+    return "、".join(names) if names else "（无匹配：当前需求未触及任何已建模口径）"
+
+
+def _explain_gap_b(dataset, t):
+    """说清缺的是什么：数据没有 / 口径未定义 / 字段未标注，三类分开说。"""
+    gaps = []
+    # 1) 物理数据缺失：B 库没有相关表
+    try:
+        models = set((dataset.models or {}).keys())
+    except Exception:
+        models = set()
+    kw_table = {
+        "库存": ["库存", "stock", "inventory"],
+        "仓储": ["仓储", "仓库", "warehouse"],
+        "物流": ["物流", "配送", "shipping", "logistics"],
+        "商品类目": ["品类", "类目", "category"],
+        "客单价": ["客单价", "均价"],
+    }
+    for human, kws in kw_table.items():
+        if any(k in t for k in kws):
+            hit = [m for m in models if any(k in m.lower() for k in kws)]
+            if not hit:
+                gaps.append("**数据缺失**：B 库无「%s」相关表（当前 8 表：%s）"
+                            % (human, "、".join(sorted(models)) or "未读到"))
+    # 2) 口径存在但未定义
+    if not gaps:
+        if "分" in t or "层" in t or "分级" in t or "分层" in t:
+            gaps.append("**口径未定义**：`member_status`/`grade` 有枚举值，但"
+                        "「消费分层」的划分标准未在知识库定义（多少消费额算高价值？）")
+        else:
+            gaps.append("**口径未建模**：该问题涉及的业务口径尚未在知识库《指标口径说明书》登记"
+                        "（需明确：计算公式、统计范围、排除项、并列排序规则）")
+    return "；".join(gaps)
 
 
 _PLANNERS = {"A": plan_a, "B": plan_b}

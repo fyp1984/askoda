@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api, type E2eStatus, type SqlExecResp, type SqlResp } from '../api/client'
 import { Card, ErrorBox, Loading, PartialErrorsBox } from '../components/ui'
+import RichText from '../components/RichText'
 import DemandStatusActions from '../components/DemandStatusActions'
 import AuditReplay from '../components/AuditReplay'
 import ResultChart from '../components/ResultChart'
@@ -178,7 +179,7 @@ export default function PageDelivery({
               ) : (
                 <span className="chip chip-red">不可交付</span>
               )}
-              <span className="muted"> {exec.deliverable_reason}</span>
+              <span className="muted"> <RichText text={exec.deliverable_reason} /></span>
             </p>
           </>
         ) : null}

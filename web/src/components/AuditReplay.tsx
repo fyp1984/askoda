@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import RichText from './RichText'
 import {
   api,
   type GateLayer,
@@ -232,7 +233,7 @@ export default function AuditReplay({ demandId }: { demandId: string }) {
                           <span className="chip chip-red">未通过</span>
                         )}
                       </td>
-                      <td className="snippet">{l.detail}</td>
+                      <td className="snippet"><RichText text={l.detail} /></td>
                     </tr>
                   ))}
                 </tbody>
@@ -281,7 +282,7 @@ export default function AuditReplay({ demandId }: { demandId: string }) {
                     <tr key={c.citation_id}>
                       <td>{c.document_name || <span className="muted">（无文档名）</span>}</td>
                       <td className="mono">{c.chunk_id || '-'}</td>
-                      <td className="snippet">{c.question || '-'}</td>
+                      <td className="snippet"><RichText text={c.question || '-'} /></td>
                       <td>
                         {c.retired_at ? (
                           <span className="chip chip-muted">已失效</span>
