@@ -42,7 +42,19 @@ code, .mono, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, m
 .badge-n, .badge-r { margin-left: 6px; border-radius: 9px; padding: 0 6px; font-size: 11px; color: #fff; }
 .badge-n { background: var(--warn); }
 .badge-r { background: var(--danger); }
-.ds-pick { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+/* 标签 + 控件 并排选择器（语义层选表 / 选列）。
+ * 原来只有 `margin-left:auto` + flex，浏览器按内容分配空间 →
+ * 中文标签（"需求号"/"选择表"）被挤到最窄，逐字竖排。
+ * 修法：标签 `flex:0 0 auto` 不参与压缩，控件 `flex:1 1 auto` 自适应。 */
+.ds-pick { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+/* ★ 标签文字必须包在子元素里（.ds-lbl / label）。
+ *   直接写成 `<label class="ds-pick">数据集<select/></label>` 时，文字是
+ *   **匿名 flex 子项**，任何子选择器都够不着它，窄屏仍会被压成「数据/集」两行
+ *   —— 2026-10-08 窄屏截图实测抓到，勿回退。 */
+.ds-pick > label,
+.ds-pick > .ds-lbl { flex: 0 0 auto; white-space: nowrap; }
+.ds-pick > select,
+.ds-pick > input { flex: 1 1 auto; min-width: 0; max-width: 100%; }
 
 .main { padding-top: 16px; }
 .page { display: flex; flex-direction: column; gap: 14px; }
@@ -60,11 +72,23 @@ button { border: 1px solid var(--line); background: #fff; border-radius: 6px; pa
 button:disabled { opacity: .5; cursor: not-allowed; }
 
 .form { display: flex; flex-direction: column; gap: 14px; }
-.field { display: flex; flex-direction: column; gap: 4px; }
-.field-label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+/* 标签不折行：中文标签被容器挤压时会逐字竖排（「需求号」→「需求/号」），
+ * 在窄容器里必须 nowrap + 允许裁剪，而不是挤压变形。
+ * ★ 只作用于「纯文本短标签」。不要扩到 `.form label` 或裸 `label` ——
+ *   `<label class="opt">` 承载的是整句选项文本（如「按订单支付时间统计」），
+ *   强加 nowrap 会横向溢出被裁掉；`.form label` 是 `.field` 容器，
+ *   加 overflow:hidden 会把里面输入框的 focus 描边一起裁掉。 */
+.field-label, .kv-label {
+  font-size: 12px; color: var(--muted); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* 选项/说明类整句文本：明确允许换行 + 允许收缩（防竖排、防溢出） */
+.opt, .q-title, .q-reason, .q-impact, .lineval, .gaptitle, .colhead, .tip, .upmsg { min-width: 0; overflow-wrap: anywhere; }
 .req { color: var(--danger); font-style: normal; margin-left: 6px; font-size: 11px; }
 .field input, .field textarea, .field select {
   border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: inherit; width: 100%;
+  min-width: 0; /* grid/flex 子项默认 min-width:auto，会撑破容器 */
 }
 .field input:focus, .field textarea:focus, .field select:focus { outline: 2px solid rgba(31,95,208,.25); border-color: var(--primary); }
 .field input.invalid, .field textarea.invalid { border-color: var(--danger); background: #fffafa; }
@@ -74,7 +98,18 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .actions { display: flex; align-items: center; gap: 12px; }
 .hint-inline { color: var(--muted); font-size: 12px; }
 
-.errbox { border: 1px solid #f0c2be; background: var(--danger-bg); border-radius: 6px; padding: 10px 12px; margin: 10px 0; }
+/* 失败回执（唯一一处定义；勿在文件后段再写一份 —— 重复定义会互相覆盖） */
+.errbox {
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #f0c2be;
+  border-left: 4px solid #c8342b;
+  border-radius: 6px;
+  background: var(--danger-bg);
+  color: #7a2020;
+}
+.errbox ul { margin: 6px 0; padding-left: 20px; }
+.errbox li { margin: 3px 0; }
 .errbox-title { color: var(--danger); font-weight: 600; }
 .errbox-code { margin-left: 8px; font-size: 11px; background: rgba(200,52,43,.12); padding: 1px 6px; border-radius: 4px; }
 .errbox-hint { margin-top: 4px; font-size: 12px; color: #8a2b24; }
@@ -167,7 +202,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .linkbtn:hover { color: var(--primary-d); }
 .linkbtn:disabled { color: var(--muted); cursor: not-allowed; text-decoration: none; }
 
-.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
+/* 表格容器：超宽时横向滚动，而不是把内容压扁。
+ * ★ 类名以组件实际使用为准 —— 全仓用的是 `.table-wrap`（13 处）。
+ *   曾误写成 `.tablewrap` / `.gridwrap`，选择器永不命中，等于没加固。 */
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: 6px; }
 table.grid { border-collapse: collapse; width: 100%; font-size: 12px; }
 table.grid th, table.grid td { border-bottom: 1px solid var(--line); padding: 7px 9px; text-align: left; vertical-align: top; }
 table.grid th { background: #f2f4f7; font-weight: 600; white-space: nowrap; }
@@ -175,8 +213,14 @@ table.grid tr:last-child td { border-bottom: none; }
 .row-p2 { background: #f4fbf7; }
 .row-ok td { background: #fbfdfc; }
 .row-bad td { background: var(--danger-bg); }
-.ev-content { max-width: 380px; }
-.snippet { max-width: 460px; font-size: 11px; color: var(--muted); }
+/* 证据链/引用类单元格：宽度自适应 + 内容可换行。
+ * 原先写死 max-width:380px/460px，在窄容器里会与表格挤压叠加，
+ * 把相邻的标签列压成竖排单字。改为比例上限，并允许内容自然换行。 */
+.ev-content { max-width: 46ch; min-width: 22ch; }
+.snippet { max-width: 56ch; min-width: 22ch; font-size: 11px; color: var(--muted); }
+/* 表格单元格默认不撑破容器 */
+table.grid td, table.grid th { word-break: break-word; }
+table.grid td:first-child, table.grid th:first-child { white-space: nowrap; }
 
 .lv { display: inline-block; font-size: 10px; font-weight: 700; background: #eef2f7; border-radius: 3px; padding: 1px 5px; margin-right: 6px; }
 .lv-P2 { background: var(--ok-bg); color: var(--ok); }
@@ -290,10 +334,185 @@ table.grid tr:last-child td { border-bottom: none; }
 .tabs.sub { margin-top: -6px; }
 .tabs.sub .tab { font-size: 12.5px; padding: 5px 12px; }
 
+/* ⚠️ 断点顺序必须「从大到小」写。
+ * 三者特异性相同，靠**源码顺序**决胜：若 720 写在 1100 前面，
+ * 1100 里的 .ev-content 上限会在 ≤720 的屏幕上反过来覆盖 720 的「铺满」意图。 */
+@media (max-width: 1100px) {
+  .shell { padding: 14px 16px 40px; }
+  .ev-content { max-width: 38ch; }
+  .snippet { max-width: 44ch; }
+}
 @media (max-width: 720px) {
   .field-row { grid-template-columns: 1fr; }
   .trace { flex-direction: column; gap: 10px; }
   /* 窄屏：图表容器必须允许收缩，否则 ResponsiveContainer 量到宽度 0 会白屏 */
   .chart-frame > div { min-width: 0; }
   .chart-why { flex-direction: column; gap: 4px; }
+  /* ── 窄屏防挤压（2026-10-08）：中文标签在 flex 里被压成竖排单字 ── */
+  .shell { padding: 12px 12px 32px; }
+  /* 窄屏下证据/引用列改为铺满，取消 ch 上限 */
+  .ev-content, .snippet { max-width: 100%; min-width: 0; }
+  .ds-pick { margin-left: 0; width: 100%; }
+  .ds-pick > select, .ds-pick > input { flex: 1 1 100%; }
+  .colcard { flex: 1 1 100%; min-width: 0; }
+  .gaptabs { overflow-x: auto; }
+  table.grid { font-size: 12px; }
+  table.grid th, table.grid td { padding: 6px 7px; }
 }
+@media (max-width: 520px) {
+  .shell { padding: 10px 10px 28px; }
+  .card-head { padding: 10px 12px; }
+  .card-head h3 { font-size: 14px; }
+  /* 极窄屏：表头与固定列放弃 nowrap，否则整表横向溢出到无法阅读 */
+  table.grid th { white-space: normal; }
+  table.grid td:first-child, table.grid th:first-child { white-space: normal; }
+}
+/* ── SQL 页：候选 SQL 输入（candidate_sql 通道，A3 路径）── */
+.candbox {
+  margin-top: 12px;
+  border: 1px solid var(--line, #e3e6ea);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--soft, #fafbfc);
+}
+.candbox > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--brand, #2b5fd9);
+  outline: none;
+}
+.candbox[open] > summary { margin-bottom: 8px; }
+.candbox code {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.candinput {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  padding: 8px 10px;
+  border: 1px solid var(--line, #d8dce2);
+  border-radius: 6px;
+  resize: vertical;
+}
+/* ── 生成失败：把真实原因显眼呈现 ── */
+/* （.errbox 样式统一在前文定义，此处不再重复，避免后者覆盖前者导致底色/描边不一致） */
+
+/* ── 知识补全卡片 GapFiller（重构：卡片式分层，不再堆叠日志原文）── */
+.gapcard {
+  border: 1px solid #e2b4b4;
+  border-left: 4px solid #d64545;
+  border-radius: 8px;
+  background: #fffaf9;
+  overflow: hidden;
+  margin: 12px 0 16px;
+}
+.gaphead {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 12px 16px; background: #fdf1f0; flex-wrap: wrap;
+}
+.gaphead-l { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.gapkind {
+  flex: 0 0 auto; padding: 2px 10px; border-radius: 12px;
+  background: #d64545; color: #fff; font-size: 12px; font-weight: 700; white-space: nowrap;
+}
+.gaptitle { font-size: 15px; font-weight: 600; color: #7a2020; line-height: 1.5; }
+.gapowner { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.gapowner .lbl { font-size: 12px; color: #a08080; }
+.gapowner .val {
+  font-size: 12.5px; font-weight: 600; color: #8a3a3a;
+  background: #fff; border: 1px solid #e0bcbc; padding: 2px 9px; border-radius: 10px;
+}
+.gaptabs {
+  display: flex; gap: 0; padding: 0 16px;
+  background: #fdf1f0; border-bottom: 1px solid #eccfcf;
+  /* 三页签在极窄屏可能超宽：给滚动而不让它把卡片撑破 */
+  overflow-x: auto;
+}
+.gaptabs button {
+  flex: 0 0 auto; white-space: nowrap;
+  padding: 8px 16px; font-size: 13.5px; cursor: pointer;
+  background: transparent; border: none; border-bottom: 2px solid transparent;
+  color: #9a6a6a; font-weight: 500;
+  transition: color .12s ease, background .12s ease;
+}
+/* hover 只改文字色，**不动background** —— 否则移开光标后底色消失、选中态被覆盖 */
+.gaptabs button:hover:not(.on) { color: #7a2020; background: rgba(255, 255, 255, 0.6); }
+/* 选中态：文字深红 + 底部指示线 + 极淡底色，三者同在，任何 hover 都不覆盖 */
+.gaptabs button.on,
+.gaptabs button.on:hover {
+  color: #b32323;
+  background: #fde8e8;
+  border-bottom: 2px solid #d64545;
+  font-weight: 700;
+}
+.gapbody { padding: 14px 16px; background: #fff; }
+.two-col { display: flex; gap: 14px; flex-wrap: wrap; }
+.colcard {
+  flex: 1 1 260px;
+  /* ★ 用 min(240px,100%) 而不是写死 240px：
+   *   写死时若容器可用宽度 < 240px（极窄屏 / 侧栏挤压），
+   *   卡片会被子项 min-width 顶出容器形成横向溢出。 */
+  min-width: min(240px, 100%);
+  border: 1px solid #e6e8eb;
+  border-radius: 6px; padding: 10px 12px; background: #fcfcfd;
+}
+.colhead { font-size: 13px; font-weight: 700; color: #444; margin-bottom: 6px; }
+.asslist { margin: 0 0 6px; padding-left: 18px; font-size: 12.5px; max-height: 200px; overflow: auto; color: #555; }
+.asslist li { margin: 2px 0; }
+.tip { font-size: 12.5px; color: #7a7a7a; margin: 4px 0 0; line-height: 1.6; }
+.line { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px dashed #eee; align-items: flex-start; }
+.line:last-of-type { border-bottom: none; }
+.linelbl {
+  flex: 0 0 auto; min-width: 88px; padding: 2px 9px; border-radius: 10px;
+  font-size: 12px; font-weight: 700; text-align: center;
+  /* 标签不参与压缩、不折行（折行会把「当前差距」变竖排） */
+  white-space: nowrap;
+}
+.linelbl.ok { background: #e9f6ec; color: #2d7a45; }
+.linelbl.no { background: #fdecec; color: #a83a3a; }
+.lineval { font-size: 13.5px; line-height: 1.7; color: #333; }
+.rawdetail { margin-top: 10px; font-size: 12.5px; color: #8a8a8a; }
+.rawdetail summary { cursor: pointer; }
+.rawdetail ul { margin: 6px 0 0; padding-left: 18px; word-break: break-all; }
+.fillsteps { margin: 0; padding-left: 22px; }
+.fillsteps li { margin: 8px 0; font-size: 13.5px; line-height: 1.7; color: #333; }
+.upbox { margin-top: 14px; padding: 11px 13px; background: #f5f9ff; border: 1px solid #cfe0f5; border-radius: 6px; }
+.upbox input[type='file'] { font-size: 13px; margin: 6px 0 2px; }
+.upmsg { margin: 4px 0 0; font-size: 12.5px; color: #23508f; }
+.donebox { margin-top: 12px; padding: 11px 13px; background: #f4fbf6; border: 1px solid #c7e7d2; border-radius: 6px; }
+.donebox ul { margin: 4px 0; padding-left: 20px; }
+.donebox li { margin: 3px 0; font-size: 13px; color: #2f6b45; }
+.gapfoot {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 11px 16px; background: #fafafa; border-top: 1px solid #eee;
+}
+
+/* ── 行内格式化：把后端 markdown/HTML 转成排版元素（RichText 渲染）──
+   ★ 这段曾因分两次追加而重复定义过 .rt-code / .rt-strong，
+     后者覆盖前者造成样式不一致——已合并为单一定义。勿再拆分追加。 */
+.rt-line { white-space: pre-wrap; word-break: break-word; }
+.rt-strong { font-weight: 700; color: #8a1f1f; }
+.rt-em { font-style: italic; }
+.rt-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em; background: #f3f4f6; color: #374151;
+  padding: 1px 5px; border-radius: 4px; border: 1px solid #e5e7eb;
+  /* ★ 不能 nowrap：`dim_member_daily_active_summary` 这类长标识符
+   *   在 46ch 的窄单元格里 nowrap 会整格横向溢出，把相邻列挤出视口。 */
+  word-break: break-word; overflow-wrap: anywhere;
+}
+/* 证据链/引用类表格里的多行内容：行距与左边距更宽松，便于阅读长原文 */
+.ev-content, .snippet { line-height: 1.75; }
+.ev-content .rt-line, .snippet .rt-line { display: block; }
+
+/* ══════════════════════════════════════════════════════════════
+   布局加固：防止窄容器挤压（用户 2026-10-08 截图：标签被压成竖排单字）
+   ══════════════════════════════════════════════════════════════ */
+
+/* flex/grid 子项默认 min-width:auto，内容过宽会撑破容器 */
+.page > *, .form > *, .field > *, .field-row > *, .shell > * { min-width: 0; }
+

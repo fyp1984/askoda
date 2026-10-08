@@ -1,8 +1,11 @@
 import React from 'react'
 import type { PartialError } from '../api/client'
 import { ApiError } from '../api/client'
+import RichText from './RichText'
 
-/** 统一错误展示：必须显式呈现 hint（「下一步该干什么」），不允许只报错不指路。 */
+/** 统一错误展示：必须显式呈现 hint（「下一步该干什么」），不允许只报错不指路。
+ *  ★ message / hint 多数直接来自 BFF 与网关的错误串，可能夹带 markdown 强调或
+ *    HTML 片段（RAGFlow 类组件常用 `<code>` 包裹字段名）→ 一律走 RichText。 */
 export function ErrorBox({ error }: { error: unknown }) {
   if (!error) return null
   const e = error as ApiError
@@ -11,10 +14,10 @@ export function ErrorBox({ error }: { error: unknown }) {
   return (
     <div className="errbox">
       <div className="errbox-title">
-        {e.message || '出错了'}
+        <RichText text={e.message || '出错了'} />
         {code ? <code className="errbox-code">{code}</code> : null}
       </div>
-      {hint ? <div className="errbox-hint">怎么办：{hint}</div> : null}
+      {hint ? <div className="errbox-hint">怎么办：<RichText text={hint} /></div> : null}
     </div>
   )
 }
@@ -29,8 +32,8 @@ export function PartialErrorsBox({ errors }: { errors: PartialError[] }) {
         {errors.map((e, i) => (
           <li key={i}>
             <strong>{BLOCK_LABEL[e.block] || e.block}</strong>
-            <span className="warnbox-msg">{e.message}</span>
-            {e.hint ? <div className="warnbox-hint">怎么办：{e.hint}</div> : null}
+            <span className="warnbox-msg"><RichText text={e.message} /></span>
+            {e.hint ? <div className="warnbox-hint">怎么办：<RichText text={e.hint} /></div> : null}
           </li>
         ))}
       </ul>
