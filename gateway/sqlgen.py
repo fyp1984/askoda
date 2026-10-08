@@ -476,6 +476,67 @@ def plan(demand_id, dataset="B"):
 # ---------------------------------------------------------------------------
 # 第二段：generate · 产出 SQL 初稿并立即审查
 # ---------------------------------------------------------------------------
+def _extract_between(text, start, end):
+    """从 text 里截取 start 与 end 之间的片段；缺失返回 ''。"""
+    if not text:
+        return ""
+    i = text.find(start)
+    if i < 0:
+        return ""
+    i += len(start)
+    j = text.find(end, i) if end else len(text)
+    if j < 0:
+        j = len(text)
+    return text[i:j].strip().rstrip("。；;")
+
+
+def _split_guide(guide):
+    """把多行 guide 拆成前端可逐条排版的步骤数组。"""
+    if not guide:
+        return []
+    steps = []
+    for raw in guide.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # 去掉「① 」「1. 」这类序号前缀，由前端统一编号
+        for pre in ("①", "②", "③", "④", "⑤"):
+            if line.startswith(pre):
+                line = line[len(pre):].strip()
+                break
+        if line[:2].rstrip(".").isdigit() or (line[:1].isdigit() and line[1:2] in ".、"):
+            line = line[2:].strip() if line[1:2] in ".、" else line[1:].strip()
+        if line:
+            steps.append(line)
+    return steps
+
+
+def _classify_gap(gap_text):
+    """按差距类型分类，供前端着色与指派责任方。
+
+    判定用**成对的关键词**而不是单句穷举：写测试时实测踩到过——
+    原来只认「无行为类数据」这一句，于是「该表没有行为类数据」被判成
+    「口径未建模」，责任方虽然都是"业务+技术"看不出大碍，但前端着色分错类，
+    演示时口径与数据两类差距混在一起讲不清。
+    「数据缺失」类同理：只认字面「数据缺失」会漏掉「表不存在」「没有这张表」等说法。
+    """
+    g = gap_text or ""
+    if (
+        "数据缺失" in g
+        or "无行为类数据" in g
+        or "行为类数据" in g
+        or "表不存在" in g
+        or "没有这张表" in g
+        or "无表" in g
+    ):
+        return {"kind": "数据缺失", "owner": "业务方 + 技术方"}
+    if "口径未定义" in g or "口径不明" in g or "未定义" in g:
+        return {"kind": "口径未定义", "owner": "业务方"}
+    if "待上架" in g:
+        return {"kind": "口径待上架", "owner": "技术方"}
+    return {"kind": "口径未建模", "owner": "业务方 + 技术方"}
+
+
 def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
     """生成 SQL 初稿（§4.8 二段式）。立即过 gates.review（L5 此时 skipped，正常）。
 
@@ -497,6 +558,7 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
     field_mapping = []
     generation_notes = []
     generation_risks = []
+    generation_block = None
 
     # 判定多候选（M6-2 F3）：非空 list/tuple[str] 且 len>=2 时，当作多候选分支
     is_multi = False
@@ -570,13 +632,36 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
             planned = planner_mod.plan(ds, nl)
         sql_draft = planned.get("sql") or ""
         if planned.get("blocked"):
+            #结构化返回，勿再拼成机器格式字符串（2026-10-07 用户反馈：
+            #   「有很多文档格式的文字输出，排版不友好」——那正是把
+            #   intent=/reason=/guide= 拼在一起直接透出所致）。
+            # 一行摘要仍留在 generation_risks 供日志/Agent 阅读，
+            # 界面排版走 generation_block 结构化字段。
+            _intent = planned.get("intent") or ""
+            _reason = (planned.get("reason") or "")[:400]
+            _guide = (planned.get("guide") or "")[:600]
             generation_risks.append(
-                "确定性兜底 planner 拒绝生成：intent=%s reason=%s guide=%s" % (
-                    planned.get("intent"),
-                    (planned.get("reason") or "")[:200],
-                    (planned.get("guide") or "")[:200],
-                )
+                "确定性兜底 planner 拒绝生成：%s" % (_intent or "未命中已建模意图")
             )
+            # title 只放类型化结论，不要把整段描述重复一遍（界面另有 gap 行）
+            _kind_title = _classify_gap(
+                _extract_between(_reason, "当前差距：", None)
+            )["kind"]
+            generation_block = {
+                "blocked": True,
+                "title": _kind_title,
+                # 差距说明：去掉 "已支持：…当前差距：" 这类前缀噪声，
+                # 拆成「已支持」「当前差距」两段，前端各自排版
+                "reason": _reason,
+                "guide": _guide,
+                "supported": _extract_between(_reason, "已支持：", "。当前差距："),
+                "gap": _extract_between(_reason, "当前差距：", None) or _reason,
+                "guide_steps": [
+                    x for x in _split_guide(_guide)
+                    if not x.startswith("请按以下顺序") and not x.startswith("不需要改代码")
+                ],
+                "needs": _classify_gap(_extract_between(_reason, "当前差距：", None) or _reason),
+            }
         else:
             generation_notes.append(
                 "确定性兜底命中 intent=%s；引用 MDL 对象 %d 个" % (
@@ -610,6 +695,7 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
         "field_mapping": field_mapping,
         "generation_notes": generation_notes,
         "generation_risks": generation_risks,
+        "generation_block": generation_block,
         "generator": generator_label,
         "review": review,
     }

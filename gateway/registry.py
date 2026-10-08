@@ -58,6 +58,11 @@ def _safe_dsn(dsn):
 
 def _load():
     # 容器内走服务名；本地开发可经环境变量覆盖为 127.0.0.1:9000 / 9002
+    #
+    # `pg_dsn` 说明：它只被**元数据采集**用到（collect.py 直连 PG 读表结构与字段），
+    # 语义层取数走 Wren HTTP、不碰它。所以这里**不再硬编码明文口令默认值**——
+    # 未配置就留空，让用到它的采集步骤报「该配 WREN_PG_A_DSN」，
+    # 而不是在任何用到 DSN 的地方都默默连上我们那个库。
     reg = {
         "A": Dataset(
             key="A",
@@ -65,9 +70,7 @@ def _load():
             domain="电商（订单 / 商品 / 客户 / 退款）",
             wren_url=os.getenv("WREN_A_URL", "http://127.0.0.1:9000"),
             mdl_path=os.getenv("MDL_A_PATH", "/workspace-a/mdl.json"),
-            pg_dsn=os.getenv(
-                "WREN_PG_A_DSN", "postgresql://test:test@127.0.0.1:15432/test"
-            ),
+            pg_dsn=(os.getenv("WREN_PG_A_DSN") or "").strip(),
         ),
         "B": Dataset(
             key="B",
@@ -75,9 +78,7 @@ def _load():
             domain="零售（订单 / 门店 / 会员 / 复购 / 升降级）",
             wren_url=os.getenv("WREN_B_URL", "http://127.0.0.1:9002"),
             mdl_path=os.getenv("MDL_B_PATH", "/workspace-b/mdl.json"),
-            pg_dsn=os.getenv(
-                "WREN_PG_B_DSN", "postgresql://test:test@127.0.0.1:15433/retail"
-            ),
+            pg_dsn=(os.getenv("WREN_PG_B_DSN") or "").strip(),
         ),
     }
     return reg

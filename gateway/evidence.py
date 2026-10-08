@@ -281,6 +281,20 @@ def build_lexicon(dataset="B"):
             )
         # 定义句里的核心词组也当词条（如「活跃用户数」「复购用户数」）
         for phrase in _phrases_from_text(text):
+            # 过滤**对比语境里的被指对象**——实测踩过的真实案例：
+            # 「下单天数频次」的定义写作「统计窗口内有下单的自然日天数。
+            #  与购买频次（**订单笔数**）不同，一个会员一天多单只算 1 天。」
+            # 括号里的「订单笔数」是**被拿来对比的另一个指标**，却被切成词条
+            # 抢先匹配上 `SYNONYMS["订单数"]` 的目标位——于是真正的口语别名
+            # 「订单笔数」的`synonym_of` 指向「下单天数频次」，完全指错字段。
+            #
+            # 判据（两个都算碎片）：短语自身含否定/比较词；或短语在**原句里**
+            # 紧跟在括���之后并以「不同/区别」收尾。宁可少收词，也不要指错字段。
+            if any(x in phrase for x in ("不是", "也不是", "可指", "不含", "不算",
+                                          "而非", "区别", "不同于", "不是同一")):
+                continue
+            if _in_contrast_context(phrase, text):
+                continue
             terms.append(
                 {
                     "term": phrase,
@@ -492,14 +506,35 @@ SYNONYMS = {
 
 
 def _expand_aliases(terms):
-    """把口语别名挂到真实词条上；找不到目标的关键词直接跳过（宁可少，不可错）。"""
+    """把口语别名挂到真实词条上；找不到目标的关键词直接跳过（宁可少，不可错）。
+
+    目标词条的选取分两档（实测踩过，两个方向都踩过）
+    ----------------------------------------------
+    · **优先真实列**（`kind` 以 `column` 开头）——最可靠，别名挂上去一定能落字段。
+    · 列里找不到时，才允许用「概念完全相等」的 glossary 词条兜底。
+      必须**完全相等**，不能用 `in` 包含匹配：否则 `当月订单数`（column）
+      与 `也不是订单数`（glossary_phrase，是整句口径切出的半截短语）
+      同时含「订单数」，按长度优先会选中后者——别名就挂到了一个**不是列**
+      的词条上，于是「订单笔数」永远召不回真实字段。
+
+    宁可少也不错：两类都找不到就不挂别名，宁可让人工确认，也不要指错字段。
+    """
     out = []
     for concept, aliases in SYNONYMS.items():
-        cands = [
-            t
-            for t in terms
-            if concept in t["term"] and t.get("locator") and not (t.get("kind") or "").endswith("_alias")
+        real = [
+            t for t in terms
+            if concept in t["term"]
+            and t.get("locator")
+            and not (t.get("kind") or "").endswith("_alias")
+            and (t.get("kind") or "").startswith("column")
         ]
+        exact = [
+            t for t in terms
+            if t["term"] == concept
+            and t.get("locator")
+            and not (t.get("kind") or "").endswith("_alias")
+        ]
+        cands = real or exact
         if not cands:
             continue
         cands.sort(key=lambda x: (_kind_prio(x), len(x["term"])))
@@ -565,6 +600,53 @@ def _phrases_from_text(text):
         if 2 <= len(seg) <= 8 and re.search(r"[\u4e00-\u9fa5]", seg):
             out.append(seg)
     return out
+
+
+#: 对比语境标志：短语被这些词引导时，它不是独立术语，而是句子的成分。
+#:
+#: 实测踩过的真实案例：`下单天数频次` 的定义写作
+#: 「统计窗口内有下单的自然日天数。与购买频次（订单笔数）不同，……」
+#: 括号里的「订单笔数」是**被对比的另一个指标**，却被切成词条抢先占了
+#: `SYNONYMS["订单数"]` 的目标位——真正的口语别名「订单笔数」于是被指向
+#: 「下单天数频次」，完全指错字段。
+_CONTRAST_CUES = ("不同", "区别", "不同于", "而非", "而不是", "不是", "不等于",
+                  "≠", "!=", "相比", "对照", "vs")
+
+
+def _in_contrast_context(phrase, text):
+    """判断短语在原句里是否处于「被对比 / 被引用」的位置。
+
+    三种形态（都算片段，不该成为术语）：
+      ① 短语紧跟中文括号之后，句中随后出现「不同/区别」——典型的「与 X（短语）不同」；
+      ② 短语前带「不是 / 不同于 / 而非」这类否定引导；
+      ③ 短语后紧跟 `≠` / `!=`。
+
+    **判不出来时一律返回 False**（当作正常术语收下）：误收的代价只是多一条
+    弱匹配，误弃的代价是把真实术语丢掉——两相比较，宁可误收。
+    """
+    if not phrase or not text:
+        return False
+    i = text.find(phrase)
+    if i < 0:
+        return False
+
+    after = text[i + len(phrase):]
+
+    # ① 形如「（短语）不同」
+    if text[max(0, i - 1):i] in ("（", "("):
+        tail = after.lstrip("）) 、,，。；;")
+        if any(cue in tail[:6] for cue in _CONTRAST_CUES):
+            return True
+
+    # ② 形如「不是短语」
+    head = text[max(0, i - 4):i]
+    if any(cue in head for cue in ("不是", "不同于", "而非", "而不是", "不等于")):
+        return True
+
+    # ③ 形如「短语≠…」
+    if after[:2] in ("≠", "!="):
+        return True
+    return False
 
 
 def match_terms(text, lexicon, min_len=2):
