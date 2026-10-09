@@ -73,7 +73,7 @@
 | --------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- | --------- |
 | `knowledge_search`          | ★`question`, `top_k=5`, `threshold=0.1`, `vector_weight=0.7`, `demand_id=""`, `round_no=0` | 带来源引用：`document_name` / `chunk_id` / `positions`；传 `demand_id` 时把引用登记进 `knowledge_citations` | 取证        |
 | `knowledge_documents`       | `limit=50`                                                                                 | 已入库文档（名称 / 解析状态 / 分块数 / 更新时间）                                                                | 知识储备      |
-| `knowledge_upload`          | ★`filename`, ★`content_base64`, `content_type=""`, `actor=""`                              | `document_ids` + `parse_started`；**同名会返回 `duplicate=true` 并拒绝入库**                            | 知识准入 · 上传 |
+| `knowledge_upload`          | ★`filename`, ★`content_base64`, `content_type=""`, `actor=""`                              | `document_ids` + `parse_started` + `dedup_checked`；**同名返回 `duplicate=true`**；表格含超长单元格返回 `oversized=true`（附 `cells` 位置表）；`note` 汇总解析/防重/预检提示 | 知识准入 · 上传 |
 | `knowledge_document_status` | `document_id=""`, `limit=50`                                                               | 逐份文档的 `run`（DONE/RUNNING/FAIL）+ `progress` + `chunk_count`                                   | 解析轮询      |
 | `knowledge_delete`          | ★`document_id`, `actor=""`                                                                 | 撤库结果；只删 RAGFlow 文档，不碰需求单与附件                                                                  | 知识准入 · 撤库 |
 | `knowledge_retire`          | ★`citation_id`, `reason=""`, `actor=""`                                                    | 把某条知识引用标记为已下架/已回退                                                                            | 引用留痕治理    |
@@ -87,11 +87,16 @@
 > **口语化问句易 0 命中**：RAGFlow 对「坪效怎么算」这类疑问句常返回 0 条，  
 > 需去掉疑问词改问「坪效 面积」才召回。这是底座特性，不是故障。
 >
-> **准入侧两处实测**：① 解析是**异步**的，上传后须轮询  
+> **准入侧三处实测**：① 解析是**异步**的，上传后须轮询  
 > `knowledge_document_status`到 `run=DONE` 才算可被检索命中；  
 > ② **同名文件会被 RAGFlow 静默改名**（`x.md` → `x(1).md`），  
 > 同一口径两版并存会让召回自相矛盾，故本工具**在入库前拦下同名**并返回  
-> `duplicate=true`，前端据此提供「撤掉库中那份再重传」的一键入口。
+> `duplicate=true`，前端据此提供「撤掉库中那份再重传」的一键入口；  
+> ③ **表格里超过 2048 字符的单元格会让 embedding 服务静默卡死**  
+> （进程不退出、健康检查仍绿，但不再出量），整份文档最终解析失败且看不到原因。  
+> 故 xlsx / csv 在入库前先扫一遍，命中即返回 `oversized=true` 并附 `cells` 位置表  
+> （`表名!坐标` + 字符数），用户可直接定位去拆。`.xls` 是旧二进制格式扫不了，  
+> 放行但在 `note` 里提示「建议另存为 .xlsx」。
 >
 > **部署前提**：本域依赖 RAGFlow 与 embedding 服务，
 > 详见[《部署手册》关于知识库功能](DEPLOYMENT.md#关于知识库功能可选)

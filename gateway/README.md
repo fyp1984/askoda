@@ -142,7 +142,7 @@ docker compose up -d --build
 | `demand_similar_precheck` | `title`, `description=""`, `top=5`, `threshold=0.55` | 提交前查重：返回相似需求候选与相似度；独立入口，**不写库** |
 | `knowledge_retire` | `citation_id`, `reason=""`, `actor=""` | 把某条知识引用标记为已下架 / 已回退（引用留痕治理） |
 | `knowledge_citation_list` | `demand_id=""`, `include_retired=False`, `limit=50` | 知识引用留痕记录（按时间倒序，可筛选） |
-| `knowledge_upload` | `filename`, `content_base64`, `content_type=""`, `actor=""` | 知识准入：上传；**同名文件返回 `duplicate=true` 并拒绝入库** |
+| `knowledge_upload` | `filename`, `content_base64`, `content_type=""`, `actor=""` | 知识准入：上传；**同名返回 `duplicate=true`**；xlsx/csv 含超长单元格（>2048 字符）返回 `oversized=true` 并附位置表，两者均拒绝入库；返回 `dedup_checked` 标明本次是否真做了重名检查 |
 | `knowledge_document_status` | `document_id=""`, `limit=50` | 知识准入：解析轮询（`run` DONE/RUNNING/FAIL + `progress` + `chunk_count`） |
 | `knowledge_delete` | `document_id`, `actor=""` | 知识准入：撤库（只删知识底座文档，**不碰需求单与附件**） |
 | `sql_optimize` | `sql`, `dataset="B"` | SQL 静态等价重写（谓词下推 / 冗余 DISTINCT 移除 / CSE 保守跳过）；**不能证明等价就不改** |

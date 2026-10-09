@@ -372,21 +372,30 @@ def _resolve_dataset_id():
 
 
 def _all_document_names():
-    """取数据集内**全部**文档名（按 total 翻页）。
+    """取数据集内**全部**文档名（按 total 翻页），返回 (names, reachable)。
 
     `page_size` 服务端上限 100，一次请求拿不全；防重判断必须看全量，
-    否则文档多了会漏判、把重复件放进去。取不到就返回空集合——
-    此时宁可放过重复，也不能把正常上传一起拦死。
+    否则文档多了会漏判、把重复件放进去。
+
+    ⚠️ `reachable=False` 表示**没能确认库里到底有哪些文档**（底座不可达、
+    或查询中途被拒/失败），此时 `names` 可能不完整，**防重不能当真**。
+
+    实测踩到的坑（2026-10-09）：原先这里 `except KnowledgeError: return names`
+    会把失败吞成空集合，于是防重**静默失效**——重复文档照常入库，调用方毫无察觉。
+    起因是宿主直跑时 `KNOWLEDGE_API_URL` 配的 `host.docker.internal`（容器侧域名，
+    宿主解析不了）。**配置错误被"宁可放过"的容错一起掩盖了**。
+    所以取不全必须如实上报，由上层提示"本次未做重名检查"；
+    仍然不阻断上传——同一口径重复入库是脏，但阻断正常入库是瘫，前者可接受。
     """
     ds_id = _resolve_dataset_id()
     if not ds_id:
-        return set()
+        return set(), False
     names, page = set(), 1
     try:
         while page <= 50:  # 上限 50 页 = 5000 份，够用且不会打爆上游
             d = _get("/datasets/%s/documents?page=%d&page_size=100" % (ds_id, page))
             if d.get("code") != 0:
-                break
+                return names, False  # 服务端拒了，等于没查到，不能当"确认无重名"
             data = d.get("data") or {}
             rows = data.get("docs") or []
             names.update((r.get("name") or "") for r in rows if isinstance(r, dict))
@@ -395,8 +404,8 @@ def _all_document_names():
                 break
             page += 1
     except KnowledgeError:
-        return names
-    return names
+        return names, False
+    return names, True
 
 
 _XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -562,10 +571,18 @@ def scan_oversized_cells(filename, content, limit=None):
     elif suffix == ".csv":
         hits = _scan_csv(content, limit)
     else:
-        # .xls 是旧二进制格式，标准库解不开（红线五不放行新增依赖）；
+        # 一律放行——预检是保护，不能变成新的阻断源。
+        # 但 .xls 是**真盲区**：它是旧二进制格式，标准库解不开
+        # （红线五不放行 openpyxl 这类新增依赖），里面照样可能有超长单元格，
+        # 照样会把 embedding 打死。所以放行同时如实带出风险提示，
+        # 让调用方能告诉用户"建议另存为 .xlsx"。
         # 其余类型（md/pdf/docx…）由 RAGFlow 按 chunk_token_num 切分，
-        # 不会产出超长块。这些一律放行——预检是保护，不能变成新的阻断源。
-        return {"ok": True, "checked": False, "limit": limit}
+        # 不会产出超长块，无需提示。
+        note = ""
+        if suffix == ".xls":
+            note = (".xls 是旧二进制格式，上传前无法扫描；若含超长单元格仍会让"
+                    "解析卡死，建议另存为 .xlsx 再传")
+        return {"ok": True, "checked": False, "limit": limit, "note": note}
     if hits:
         return {"ok": False, "checked": True, "limit": limit, "cells": hits}
     return {"ok": True, "checked": True, "limit": limit}
@@ -604,7 +621,9 @@ def upload_document(filename, content, content_type="", dataset_id=""):
     # 这里在入库前拦下并如实报出已有文档的 id，让前端提示"要换就先撤库"。
     # 注意分页：`page_size` 服务端上限 100（技能第四节），一次拉 1000 会被截断，
     # 文档多了就会漏判，所以这里按 total 翻页取全量名字。
-    existing = _all_document_names()
+    # `dedup_ok=False` 表示没能确认库里有什么，此时**不阻断**（见 _all_document_names
+    # 注释）但必须如实带出 `dedup_checked=false`，别让调用方以为查过了。
+    existing, dedup_ok = _all_document_names()
     if name in existing:
         listed = list_documents(limit=100)
         dup = next(
@@ -623,7 +642,10 @@ def upload_document(filename, content, content_type="", dataset_id=""):
     # 上传前预检：表格里的超长单元格会让 embedding 静默卡死，整份文档解析失败
     # 且前端只显示「解析失败」看不到原因（实测依据见 scan_oversized_cells 注释）。
     # 放在防重**之后**：不改动既有任何分支的判定顺序，只在真要上传前加一道闸。
+    dedup_note = "" if dedup_ok else "知识库不可达，本次未做重名检查（可能重复入库）"
+
     scan = scan_oversized_cells(name, content)
+    precheck_note = scan.get("note") or ""  # 如 .xls 无法扫描的风险提示
     if not scan.get("ok"):
         cells = scan.get("cells") or []
         detail = "；".join(
@@ -676,6 +698,9 @@ def upload_document(filename, content, content_type="", dataset_id=""):
     except KnowledgeError as e:
         parse_note = "已入库但触发解析失败：%s" % str(e)[:160]
 
+    # 三类提示合并进同一个 note：解析触发失败 / 防重没做成 / 预检没覆盖。
+    # 分开成多个字段会让调用方逐个去判，合并后"有话要说"一眼能看到。
+    notes = [x for x in (parse_note, dedup_note, precheck_note) if x]
     return {
         "ok": True,
         "dataset_id": ds_id,
@@ -683,7 +708,8 @@ def upload_document(filename, content, content_type="", dataset_id=""):
         "document_ids": ids,
         "size": len(content),
         "parse_started": not parse_note,
-        "note": parse_note,
+        "dedup_checked": dedup_ok,
+        "note": "；".join(notes),
         # 前端据此轮询 document_status，不阻塞在本次调用上
         "status_hint": "解析为异步，请用 document_status 查询进度",
     }

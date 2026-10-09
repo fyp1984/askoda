@@ -162,6 +162,12 @@ def main():
 
     r = kb.scan_oversized_cells("旧表.xls", b"\xd0\xcf\x11\xe0old binary")
     check("旧版 xls 解不开→放行（预检不阻断）", r.get("ok") is True and r.get("checked") is False, str(r))
+    # .xls 是**真盲区**（标准库解不开，里面照样可能有超长单元格），
+    # 放行可以，但必须把风险说出来，不能让用户以为"没报错就是安全的"。
+    check("xls 带出「无法扫描」风险提示", "无法扫描" in (r.get("note") or ""), str(r))
+
+    r_md = kb.scan_oversized_cells("说明.md", "# 标题\n正常的 markdown 内容".encode("utf-8"))
+    check("md 不带提示（RAGFlow 会按块切分，非盲区）", not (r_md.get("note") or ""), str(r_md))
 
     r = kb.scan_oversized_cells("数据.csv", "a,b,c\n1,2,3\n".encode("utf-8"))
     check("短字段 CSV 放行", r.get("ok") is True, str(r))
@@ -228,6 +234,39 @@ def main():
     check("非 zip 内容按「解析不了」放行", r.get("ok") is True, str(r))
     r = kb.scan_oversized_cells("空.csv", b"")
     check("空 CSV 放行", r.get("ok") is True, str(r))
+
+    # ---- 5. 防重不能静默失效 ----
+    # 原先 except 里直接 `return names`（空集合），等于告诉上层"库里没文档、放心传"，
+    # 于是重复文档照常入库而调用方毫无察觉。现在必须回 reachable=False。
+    print("\n[5] 防重取不到时必须如实上报，不能静默当「无重名」")
+    old_ds, old_get = kb.DATASET_ID, kb._get
+    kb.DATASET_ID = "ds-test"
+
+    def _boom(path):
+        raise kb.KnowledgeError("模拟底座不可达")
+
+    kb._get = _boom
+    try:
+        names, ok = kb._all_document_names()
+    finally:
+        kb._get = old_get
+    check("底座不可达 → reachable=False", ok is False, str(ok))
+
+    kb._get = lambda p: {"code": 109, "message": "模拟鉴权失败"}
+    try:
+        names, ok = kb._all_document_names()
+    finally:
+        kb._get = old_get
+    check("服务端拒了也算没查到（不等于无重名）", ok is False, str(ok))
+
+    kb._get = lambda p: {"code": 0, "data": {"docs": [{"name": "已有.md"}], "total": 1}}
+    try:
+        names, ok = kb._all_document_names()
+    finally:
+        kb._get = old_get
+        kb.DATASET_ID = old_ds
+    check("正常取到 → reachable=True 且拿到名字",
+          ok is True and "已有.md" in names, str((ok, sorted(names))))
 
     print("\n" + ("全部通过" if not FAILURES else "失败 %d 项：%s" % (len(FAILURES), FAILURES)))
     return 1 if FAILURES else 0
