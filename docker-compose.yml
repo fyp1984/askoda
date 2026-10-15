@@ -1,5 +1,11 @@
 # 数据需求智能分析助手 · 服务端一键起停编排
 #
+# 定位（2026-10-15 拍板，入基线 TECH-7）：
+#   本工程是 **EKOS 产品底座上的一个应用场景**，不另起炉灶。
+#   业务数据底座统一走 EKOS 的 ekos-postgres（宿主 15432，pgvector）；
+#   embedding 走本机 TEI（bge-m3）；知识引擎经 ekos-ragflow-proxy :19380。
+#   本工程自建的只有「元数据库」（需求单 / 留痕 / 术语表 / 审计，宿主 15434）。
+#
 # 范围：gateway（MCP 服务端）+ 模拟库 A（电商域）+ 模拟库 B（零售会员域）
 #
 # 用法：
@@ -10,42 +16,54 @@
 #
 # 说明：
 # - 命名：工程名 askoda —— compose 项目名 / 容器名 / 镜像名 / 数据卷名 / 附件桶名统一使用它。
-# - 数据卷 wren-pgdata / wren-pgdata-b 为 external，指向单栈时代已存在的数据卷，
-#   升级编排后历史数据与已部署 MDL 保持不变（零迁移）。
-# - 单栈 compose（wren-docker/ 、wren-docker-b/）保留作单库调试用；
-#   与本编排共用同一数据卷与容器名，**不可同时起两套**。
+# - [2026-10-12 数据库统一治理] 原 wren-postgres-a / wren-postgres-b 两个模拟库容器
+#   已下线，A/B 库收编进 EKOS 的 ekos-postgres（宿主 15432，库 test / retail）。
+#   Wren 引擎经 wren-docker*/workspace/connection_info.json 指向它；
+#   网关的元数据采集经 WREN_PG_A_DSN / WREN_PG_B_DSN 指向它。
+#   旧卷 wren-pgdata / wren-pgdata-b **保留不删**，是本次治理的回滚保险。
+#   详见 03-架构与设计/技术底座统一与本地资源盘点-数据需求智能分析助手-2026-10-15.md
+# - [2026-10-15] 网关的 MDL 改为**打进镜像**（/app/mdl/{a,b}.json），不再 bind mount；
+#   启动时做MDL 可读性自检，读不到直接拒绝启动（防L2 静态规则静默失效）。
+#   wren-mcp-a/b 仍挂 workspace 目录——它们的 connection_info.json 需随时热改。
+# - 单栈 compose（wren-docker/ 、wren-docker-b/）保留作单库调试用；**不可与本编排同时起两套**。
 name: askoda
 
 services:
   # ------------------------------------------------------------------
   # 模拟库 A · 电商域（6 表）
   # ------------------------------------------------------------------
-  wren-postgres-a:
-    image: postgres:15-alpine
-    container_name: wren-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: test
-      POSTGRES_PASSWORD: test
-      POSTGRES_DB: test
-    ports:
-      - "15432:5432"
-    volumes:
-      - ./wren-docker/postgres/init:/docker-entrypoint-initdb.d:ro
-      - wren-pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U test -d test"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+  # [2026-10-12 数据库统一治理] wren-postgres 已收编为 ekos-postgres
+  # （pgvector/pgvector:0.8.0-pg16-bookworm，宿主 15432，库 test/ekos_ds_kb）。
+  # 本服务段注释保留：如需恢复单栈调试，取消注释并按 wren-docker/ 单栈 compose 操作，
+  # 注意 15432 已被 ekos-postgres 占用，恢复前需先停 ekos-postgres。
+  # wren-postgres-a:
+  #   image: postgres:15-alpine
+  #   container_name: wren-postgres
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: test
+  #     POSTGRES_PASSWORD: test
+  #     POSTGRES_DB: test
+  #   ports:
+  #     - "15432:5432"
+  #   volumes:
+  #     - ./wren-docker/postgres/init:/docker-entrypoint-initdb.d:ro
+  #     - wren-pgdata:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U test -d test"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
 
   wren-mcp-a:
     image: ghcr.io/canner/wren-engine-ibis:latest
     container_name: wren-mcp
     restart: unless-stopped
-    depends_on:
-      wren-postgres-a:
-        condition: service_healthy
+    # [2026-10-12] depends_on wren-postgres-a 已随数据库统一治理移除；
+    # 引擎经 connection_info.json 连 ekos-postgres（host.docker.internal:15432, db=test）
+    # depends_on:
+    #   wren-postgres-a:
+    #     condition: service_healthy
     environment:
       ENABLE_MCP_SERVER: "true"
       MCP_TRANSPORT: streamable-http
@@ -66,32 +84,36 @@ services:
   # ------------------------------------------------------------------
   # 模拟库 B · 零售会员域（8 表）
   # ------------------------------------------------------------------
-  wren-postgres-b:
-    image: postgres:15-alpine
-    container_name: wren-postgres-b
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: test
-      POSTGRES_PASSWORD: test
-      POSTGRES_DB: retail
-    ports:
-      - "15433:5432"
-    volumes:
-      - ./wren-docker-b/postgres/init:/docker-entrypoint-initdb.d:ro
-      - wren-pgdata-b:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U test -d retail"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+  # [2026-10-12 数据库统一治理] wren-postgres-b 已收编为 ekos-postgres
+  # （宿主 15432，库 retail）。本服务段注释保留，恢复逻辑同模拟库 A 注释说明。
+  # wren-postgres-b:
+  #   image: postgres:15-alpine
+  #   container_name: wren-postgres-b
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: test
+  #     POSTGRES_PASSWORD: test
+  #     POSTGRES_DB: retail
+  #   ports:
+  #     - "15433:5432"
+  #   volumes:
+  #     - ./wren-docker-b/postgres/init:/docker-entrypoint-initdb.d:ro
+  #     - wren-pgdata-b:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U test -d retail"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
 
   wren-mcp-b:
     image: ghcr.io/canner/wren-engine-ibis:latest
     container_name: wren-mcp-b
     restart: unless-stopped
-    depends_on:
-      wren-postgres-b:
-        condition: service_healthy
+    # [2026-10-12] depends_on wren-postgres-b 已随数据库统一治理移除；
+    # 引擎经 connection_info.json 连 ekos-postgres（host.docker.internal:15432, db=retail）
+    # depends_on:
+    #   wren-postgres-b:
+    #     condition: service_healthy
     environment:
       ENABLE_MCP_SERVER: "true"
       MCP_TRANSPORT: streamable-http
@@ -144,14 +166,14 @@ services:
       # 容器内走服务名，不经宿主机回环
       WREN_A_URL: "http://wren-mcp-a:9000"
       WREN_B_URL: "http://wren-mcp-b:9000"
-      MDL_A_PATH: "/workspace-a/mdl.json"
-      MDL_B_PATH: "/workspace-b/mdl.json"
+      MDL_A_PATH: "/app/mdl/a.json"
+      MDL_B_PATH: "/app/mdl/b.json"
       # --- M2 新增 ---
       # 网关自有元数据库（需求单 / 元数据字典 / 流转留痕）
       ASSISTANT_DB_DSN: "postgresql://assistant:assistant@assistant-postgres:5432/assistant"
       # 元数据采集用的数据源直连串（仅采集结构，查询一律走语义层）
-      WREN_PG_A_DSN: "postgresql://test:test@wren-postgres-a:5432/test"
-      WREN_PG_B_DSN: "postgresql://test:test@wren-postgres-b:5432/retail"
+      WREN_PG_A_DSN: "postgresql://test:test@host.docker.internal:15432/test"
+      WREN_PG_B_DSN: "postgresql://test:test@host.docker.internal:15432/retail"
       # 附件对象存储
       MINIO_ENDPOINT: "assistant-minio:9000"
       MINIO_ACCESS_KEY: "assistant"
@@ -166,10 +188,14 @@ services:
     ports:
       # 宿主机 18080（8080 已被本项目 demo-server 长期占用）
       - "${GATEWAY_HOST_PORT:-18080}:8080"
-    volumes:
-      # MDL 语义层按数据集挂载；换库只换挂载与注册项，不改网关代码
-      - ./wren-docker/workspace/mdl.json:/workspace-a/mdl.json:ro
-      - ./wren-docker-b/workspace/mdl.json:/workspace-b/mdl.json:ro
+    # [2026-10-15] 原先这里 bind mount 了两份 MDL（/workspace-a|workspace-b/mdl.json）。
+    # 已改为**打进镜像**（gateway/Dockerfile → /app/mdl/{a,b}.json，MDL_A/B_PATH 指向它）：
+    #   起因是实测到 bind mount 源在 ~/Documents 下时，容器内以 root 也可能读不到
+    #   （PermissionError: [Errno 1] Operation not permitted，2026-10-15，守护进程重启后恢复），
+    #   而读不到时 L2 静态规则会被rules.evaluate_all() 静默跳过。
+    #   换库只换镜像内文件 + 注册项，不改网关代码；改 MDL 需 rebuild（~2s）。
+    # 另：wren-mcp-a/b 仍挂 ./wren-docker*/workspace:/workspace —— 它们的
+    #   connection_info.json 需要随时改指向（接真实库时热改），不能进镜像。
 
   # ------------------------------------------------------------------
   # BFF（Backend for Frontend）· 前端产物同源托管

@@ -56,6 +56,7 @@ import collect as collect_mod
 import db
 import demand as demand_mod
 import knowledge
+import mdl_check
 import metadata as metadata_mod
 import planner as planner_mod
 import registry
@@ -1343,6 +1344,15 @@ def main():
         print("⚠️ 元数据库初始化失败（%s: %s），相关工具将不可用" % (type(e).__name__, str(e)[:160]))
     for ds in registry.DATASETS.values():
         print("  数据集 %s -> %s" % (ds.key, ds.wren_url + "/mcp"))
+
+    # MDL 启动自检（C 方案）：MDL 是 L2 静态规则（R5/R6 等）的唯一输入。
+    # 读不到时 rules.evaluate_all() 会把异常吞成 RULE_INTERNAL_ERROR 后继续，
+    # sql_review 照样返回「警告」——规则整层失效而无人知晓。宁可起不来。
+    _mdl = mdl_check.selfcheck()
+    print(mdl_check.render(_mdl))
+    if not _mdl["ok"]:
+        raise SystemExit(2)
+
     mcp.run(transport="streamable-http", host=HOST, port=PORT, path=MCP_PATH)
 
 

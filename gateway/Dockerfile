@@ -18,9 +18,19 @@ COPY tools/ ./tools/
 #契约文件
 COPY gateway/contracts/ ./contracts/
 
+# MDL 打进镜像（A 方案，2026-10-15）——不再依赖 bind mount。
+# 为什么：bind mount 源在 ~/Documents 下，容器内**以 root 也可能读不到**
+# （PermissionError: [Errno 1] Operation not permitted，实测 2026-10-15，
+#  Docker 守护进程重启后恢复）。读不到时 L2 静态规则会被静默跳过。
+# 代价：改 MDL 需重新 build（实测 ~2s，依赖层缓存）。
+COPY wren-docker/workspace/mdl.json   /app/mdl/a.json
+COPY wren-docker-b/workspace/mdl.json /app/mdl/b.json
+
 ENV GATEWAY_HOST=0.0.0.0 \
     GATEWAY_PORT=8080 \
     GATEWAY_MCP_PATH=/mcp \
+    MDL_A_PATH=/app/mdl/a.json \
+    MDL_B_PATH=/app/mdl/b.json \
     PYTHONUNBUFFERED=1
 
 EXPOSE 8080
