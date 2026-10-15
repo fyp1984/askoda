@@ -154,8 +154,6 @@ services:
         condition: service_started
       assistant-postgres:
         condition: service_healthy
-      assistant-minio:
-        condition: service_started
     extra_hosts:
       # 容器内直连宿主机的 RAGFlow 独立栈知识底座 API（127.0.0.1:19380 在容器内不可达）
       - "host.docker.internal:host-gateway"
@@ -174,11 +172,14 @@ services:
       # 元数据采集用的数据源直连串（仅采集结构，查询一律走语义层）
       WREN_PG_A_DSN: "postgresql://test:test@host.docker.internal:15432/test"
       WREN_PG_B_DSN: "postgresql://test:test@host.docker.internal:15432/retail"
-      # 附件对象存储
-      MINIO_ENDPOINT: "assistant-minio:9000"
-      MINIO_ACCESS_KEY: "assistant"
-      MINIO_SECRET_KEY: "assistant123"
-      MINIO_BUCKET: "askoda-attachments"
+      # 附件对象存储：2026-10-15 起改用 **EKOS 统一对象存储**（ekos-minio，EKOS 冻结端口 19000/19001）。
+      # 走 host.docker.internal 而非服务名：ekos-minio 属 EKOS 的 compose 项目（网络不同，
+      # 本工程不接入它的网络，避免编排耦合）；与 WREN_PG_* / KNOWLEDGE_API_URL 同一口径。
+      # 凭据从环境变量注入、不落明文（与 db.py / registry.py 的纪律一致）。
+      MINIO_ENDPOINT: "${MINIO_ENDPOINT:-host.docker.internal:19000}"
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY:?请在 .env 或环境变量中提供 EKOS MinIO 用户名}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:?请在 .env 或环境变量中提供 EKOS MinIO 密钥}"
+      MINIO_BUCKET: "${MINIO_BUCKET:-askoda-attachments}"
       # RAGFlow v0.26.4 原生检索接口（无 FileBay 兜底分支）。
       # 注意：19380 入口目前是 nginx 代理，backend 仍是旧绑定栈内的 ragflow-cpu
       # ——「RAGFlow 独立栈」在物理上尚未成立，见 P1-1。
@@ -370,9 +371,13 @@ services:
     environment:
       MINIO_ROOT_USER: assistant
       MINIO_ROOT_PASSWORD: assistant123
-    ports:
-      - "${ASSISTANT_MINIO_PORT:-19000}:9000"
-      - "${ASSISTANT_MINIO_CONSOLE_PORT:-19001}:9001"
+    # [2026-10-15] 本服务已停用：附件对象存储改用 EKOS 统一对象存储（ekos-minio，
+    # 宿主 19000/19001 = 本工程原先占用的同一组端口，两边只能留一个）。
+    # 服务段与 askoda-minio-data 卷**保留不删**（数据 40.9 kB，且便于回滚）；
+    # 但**不再发布端口**，避免 `docker compose up -d` 时把 19000/19001 抢回去。
+    # 原端口映射：
+    #   - "${ASSISTANT_MINIO_PORT:-19000}:9000"
+    #   - "${ASSISTANT_MINIO_CONSOLE_PORT:-19001}:9001"
     volumes:
       - askoda-minio-data:/data
 
