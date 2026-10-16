@@ -1,5 +1,11 @@
 # 数据需求智能分析助手 · 服务端一键起停编排
 #
+# 定位（2026-10-15 拍板，入基线 TECH-7）：
+#   本工程是 **EKOS 产品底座上的一个应用场景**，不另起炉灶。
+#   业务数据底座统一走 EKOS 的 ekos-postgres（宿主 15432，pgvector）；
+#   embedding 走本机 TEI（bge-m3）；知识引擎经 ekos-ragflow-proxy :19380。
+#   本工程自建的只有「元数据库」（需求单 / 留痕 / 术语表 / 审计，宿主 15434）。
+#
 # 范围：gateway（MCP 服务端）+ 模拟库 A（电商域）+ 模拟库 B（零售会员域）
 #
 # 用法：
@@ -10,42 +16,54 @@
 #
 # 说明：
 # - 命名：工程名 askoda —— compose 项目名 / 容器名 / 镜像名 / 数据卷名 / 附件桶名统一使用它。
-# - 数据卷 wren-pgdata / wren-pgdata-b 为 external，指向单栈时代已存在的数据卷，
-#   升级编排后历史数据与已部署 MDL 保持不变（零迁移）。
-# - 单栈 compose（wren-docker/ 、wren-docker-b/）保留作单库调试用；
-#   与本编排共用同一数据卷与容器名，**不可同时起两套**。
+# - [2026-10-12 数据库统一治理] 原 wren-postgres-a / wren-postgres-b 两个模拟库容器
+#   已下线，A/B 库收编进 EKOS 的 ekos-postgres（宿主 15432，库 test / retail）。
+#   Wren 引擎经 wren-docker*/workspace/connection_info.json 指向它；
+#   网关的元数据采集经 WREN_PG_A_DSN / WREN_PG_B_DSN 指向它。
+#   旧卷 wren-pgdata / wren-pgdata-b **保留不删**，是本次治理的回滚保险。
+#   详见 03-架构与设计/技术底座统一与本地资源盘点-数据需求智能分析助手-2026-10-15.md
+# - [2026-10-15] 网关的 MDL 改为**打进镜像**（/app/mdl/{a,b}.json），不再 bind mount；
+#   启动时做MDL 可读性自检，读不到直接拒绝启动（防L2 静态规则静默失效）。
+#   wren-mcp-a/b 仍挂 workspace 目录——它们的 connection_info.json 需随时热改。
+# - 单栈 compose（wren-docker/ 、wren-docker-b/）保留作单库调试用；**不可与本编排同时起两套**。
 name: askoda
 
 services:
   # ------------------------------------------------------------------
   # 模拟库 A · 电商域（6 表）
   # ------------------------------------------------------------------
-  wren-postgres-a:
-    image: postgres:15-alpine
-    container_name: wren-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: test
-      POSTGRES_PASSWORD: test
-      POSTGRES_DB: test
-    ports:
-      - "15432:5432"
-    volumes:
-      - ./wren-docker/postgres/init:/docker-entrypoint-initdb.d:ro
-      - wren-pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U test -d test"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+  # [2026-10-12 数据库统一治理] wren-postgres 已收编为 ekos-postgres
+  # （pgvector/pgvector:0.8.0-pg16-bookworm，宿主 15432，库 test/ekos_ds_kb）。
+  # 本服务段注释保留：如需恢复单栈调试，取消注释并按 wren-docker/ 单栈 compose 操作，
+  # 注意 15432 已被 ekos-postgres 占用，恢复前需先停 ekos-postgres。
+  # wren-postgres-a:
+  #   image: postgres:15-alpine
+  #   container_name: wren-postgres
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: test
+  #     POSTGRES_PASSWORD: test
+  #     POSTGRES_DB: test
+  #   ports:
+  #     - "15432:5432"
+  #   volumes:
+  #     - ./wren-docker/postgres/init:/docker-entrypoint-initdb.d:ro
+  #     - wren-pgdata:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U test -d test"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
 
   wren-mcp-a:
     image: ghcr.io/canner/wren-engine-ibis:latest
     container_name: wren-mcp
     restart: unless-stopped
-    depends_on:
-      wren-postgres-a:
-        condition: service_healthy
+    # [2026-10-12] depends_on wren-postgres-a 已随数据库统一治理移除；
+    # 引擎经 connection_info.json 连 ekos-postgres（host.docker.internal:15432, db=test）
+    # depends_on:
+    #   wren-postgres-a:
+    #     condition: service_healthy
     environment:
       ENABLE_MCP_SERVER: "true"
       MCP_TRANSPORT: streamable-http
@@ -66,32 +84,36 @@ services:
   # ------------------------------------------------------------------
   # 模拟库 B · 零售会员域（8 表）
   # ------------------------------------------------------------------
-  wren-postgres-b:
-    image: postgres:15-alpine
-    container_name: wren-postgres-b
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: test
-      POSTGRES_PASSWORD: test
-      POSTGRES_DB: retail
-    ports:
-      - "15433:5432"
-    volumes:
-      - ./wren-docker-b/postgres/init:/docker-entrypoint-initdb.d:ro
-      - wren-pgdata-b:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U test -d retail"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+  # [2026-10-12 数据库统一治理] wren-postgres-b 已收编为 ekos-postgres
+  # （宿主 15432，库 retail）。本服务段注释保留，恢复逻辑同模拟库 A 注释说明。
+  # wren-postgres-b:
+  #   image: postgres:15-alpine
+  #   container_name: wren-postgres-b
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: test
+  #     POSTGRES_PASSWORD: test
+  #     POSTGRES_DB: retail
+  #   ports:
+  #     - "15433:5432"
+  #   volumes:
+  #     - ./wren-docker-b/postgres/init:/docker-entrypoint-initdb.d:ro
+  #     - wren-pgdata-b:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U test -d retail"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
 
   wren-mcp-b:
     image: ghcr.io/canner/wren-engine-ibis:latest
     container_name: wren-mcp-b
     restart: unless-stopped
-    depends_on:
-      wren-postgres-b:
-        condition: service_healthy
+    # [2026-10-12] depends_on wren-postgres-b 已随数据库统一治理移除；
+    # 引擎经 connection_info.json 连 ekos-postgres（host.docker.internal:15432, db=retail）
+    # depends_on:
+    #   wren-postgres-b:
+    #     condition: service_healthy
     environment:
       ENABLE_MCP_SERVER: "true"
       MCP_TRANSPORT: streamable-http
@@ -132,8 +154,6 @@ services:
         condition: service_started
       assistant-postgres:
         condition: service_healthy
-      assistant-minio:
-        condition: service_started
     extra_hosts:
       # 容器内直连宿主机的 RAGFlow 独立栈知识底座 API（127.0.0.1:19380 在容器内不可达）
       - "host.docker.internal:host-gateway"
@@ -144,19 +164,22 @@ services:
       # 容器内走服务名，不经宿主机回环
       WREN_A_URL: "http://wren-mcp-a:9000"
       WREN_B_URL: "http://wren-mcp-b:9000"
-      MDL_A_PATH: "/workspace-a/mdl.json"
-      MDL_B_PATH: "/workspace-b/mdl.json"
+      MDL_A_PATH: "/app/mdl/a.json"
+      MDL_B_PATH: "/app/mdl/b.json"
       # --- M2 新增 ---
       # 网关自有元数据库（需求单 / 元数据字典 / 流转留痕）
       ASSISTANT_DB_DSN: "postgresql://assistant:assistant@assistant-postgres:5432/assistant"
       # 元数据采集用的数据源直连串（仅采集结构，查询一律走语义层）
-      WREN_PG_A_DSN: "postgresql://test:test@wren-postgres-a:5432/test"
-      WREN_PG_B_DSN: "postgresql://test:test@wren-postgres-b:5432/retail"
-      # 附件对象存储
-      MINIO_ENDPOINT: "assistant-minio:9000"
-      MINIO_ACCESS_KEY: "assistant"
-      MINIO_SECRET_KEY: "assistant123"
-      MINIO_BUCKET: "askoda-attachments"
+      WREN_PG_A_DSN: "postgresql://test:test@host.docker.internal:15432/test"
+      WREN_PG_B_DSN: "postgresql://test:test@host.docker.internal:15432/retail"
+      # 附件对象存储：2026-10-15 起改用 **EKOS 统一对象存储**（ekos-minio，EKOS 冻结端口 19000/19001）。
+      # 走 host.docker.internal 而非服务名：ekos-minio 属 EKOS 的 compose 项目（网络不同，
+      # 本工程不接入它的网络，避免编排耦合）；与 WREN_PG_* / KNOWLEDGE_API_URL 同一口径。
+      # 凭据从环境变量注入、不落明文（与 db.py / registry.py 的纪律一致）。
+      MINIO_ENDPOINT: "${MINIO_ENDPOINT:-host.docker.internal:19000}"
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY:?请在 .env 或环境变量中提供 EKOS MinIO 用户名}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:?请在 .env 或环境变量中提供 EKOS MinIO 密钥}"
+      MINIO_BUCKET: "${MINIO_BUCKET:-askoda-attachments}"
       # RAGFlow v0.26.4 原生检索接口（无 FileBay 兜底分支）。
       # 注意：19380 入口目前是 nginx 代理，backend 仍是旧绑定栈内的 ragflow-cpu
       # ——「RAGFlow 独立栈」在物理上尚未成立，见 P1-1。
@@ -166,10 +189,14 @@ services:
     ports:
       # 宿主机 18080（8080 已被本项目 demo-server 长期占用）
       - "${GATEWAY_HOST_PORT:-18080}:8080"
-    volumes:
-      # MDL 语义层按数据集挂载；换库只换挂载与注册项，不改网关代码
-      - ./wren-docker/workspace/mdl.json:/workspace-a/mdl.json:ro
-      - ./wren-docker-b/workspace/mdl.json:/workspace-b/mdl.json:ro
+    # [2026-10-15] 原先这里 bind mount 了两份 MDL（/workspace-a|workspace-b/mdl.json）。
+    # 已改为**打进镜像**（gateway/Dockerfile → /app/mdl/{a,b}.json，MDL_A/B_PATH 指向它）：
+    #   起因是实测到 bind mount 源在 ~/Documents 下时，容器内以 root 也可能读不到
+    #   （PermissionError: [Errno 1] Operation not permitted，2026-10-15，守护进程重启后恢复），
+    #   而读不到时 L2 静态规则会被rules.evaluate_all() 静默跳过。
+    #   换库只换镜像内文件 + 注册项，不改网关代码；改 MDL 需 rebuild（~2s）。
+    # 另：wren-mcp-a/b 仍挂 ./wren-docker*/workspace:/workspace —— 它们的
+    #   connection_info.json 需要随时改指向（接真实库时热改），不能进镜像。
 
   # ------------------------------------------------------------------
   # BFF（Backend for Frontend）· 前端产物同源托管
@@ -214,10 +241,11 @@ services:
   #
   # 为什么需要它
   # ------------
-  # RAGFlow 里 `tenant_model_instance.extra.base_url` 原先写死远端 TEI
-  # `http://100.103.240.78:18001/v1`，该主机已不可达（Connection refused）。
+  # RAGFlow 里 `tenant_model_instance.extra.base_url` 现在指向**本机**
+  # `http://host.docker.internal:18002/v1`（2026-10-08 从远端主机收回，见下方注释）。
   # RAGFlow 自己**不缓存查询向量**，每次 `/api/v1/retrieval` 都要现调 embedding，
-  # 于是所有检索直接失败：EmbeddingError code=100。
+  # 每次文档入库也要现算分块向量 —— 这个服务一挂，检索直接失败
+  # （EmbeddingError code=100），文档上传则会卡在解析阶段、chunk_count 恒为 0。
   #
   # 为什么必须是 bge-m3
   # -------------------
@@ -230,24 +258,23 @@ services:
   # kill（实测 ExitCode=137 OOMKilled=true）。降并发后可稳定常驻，实测 /health 200。
   # ------------------------------------------------------------------
   # ------------------------------------------------------------------
-  # 【已停用 2026-10-06】本机 embedding 已迁至 seven smile 主机
-  #   地址：http://100.103.240.78:18001/v1（Tailscale 节点 sevensmile.tailb5e44d.ts.net）
-  #   切换依据：交叉比对三句话余弦相似度全部 = 1.000000（同一份权重），
-  #            30 轮 × 3 问 = 90 次检索全过，召回 3/18/19 与迁移前一致，
-  #            m2_verify 22/22、gate_all --strict 111 项全绿。
-  #   停用原因：本机 TEI 仅占 2.1GiB/15.66GiB、CPU 1.77%，不是资源瓶颈；
-  #            而远端是 x86_64 原生（本机是 amd64 模拟），性能更好且不占本机资源。
+  # 【本机为主用 · 2026-10-08 起】embedding 收回本机，不再依赖远端主机。
+  #   背景：2026-10-06 曾迁至 seven smile 主机 http://100.103.240.78:18001/v1。
+  #        实测该主机**一周内多次中断**（负载被其它自动化任务冲到 19~132，
+  #        /info 秒回但 /embeddings 排队 30~50s、单批 76~120s，直至整份文档
+  #        解析挂死 10 分钟以上）。跨主机依赖让「上传知识文档」这类基础功能
+  #        随时不可用，且排障要跨两台机器，成本远高于省下的那点本机资源。
+  #   收回依据：① 权重同源（.models/bge-m3 与远端 bge-m3-onnx 为同一份），
+  #            切换后用既有文档做检索验证，「坪效」0.710 /「会员等级」0.774
+  #            仍能召回——**向量空间未变，已入库文档无需重建**；
+  #            ② 本机单批 16 条实测 3.9s，比远端快一个数量级。
   #
-  #   ⚠️ 保留本段定义以便回滚。若要回退到本机：
-  #      1) 用 profile 启动：docker compose --profile local-embed up -d tei-embedding
-  #      2) 把 RAGFlow 的 base_url 改回 http://host.docker.internal:18002/v1
-  #         （备份在 .models/backup/）
-  #      3) 模型权重需先拉取：./.models/fetch_bge_m3.sh "$PWD/bge-m3"
-  #
-  #   正常使用无需启动本机 TEI；embedding 由远端提供。
+  #   如需临时停用本机 TEI（省资源）：docker compose stop tei-embedding
+  #   回滚到远端：把 RAGFlow 租户的 tenant_model_instance.extra.base_url
+  #               改回 http://100.103.240.78:18001/v1（改完需重启 RAGFlow）
+  #   模型权重未拉取时：./.models/fetch_bge_m3.sh "$PWD/bge-m3"
   # ------------------------------------------------------------------
   tei-embedding:
-    profiles: ["local-embed"]          # 默认不启动，需显式 --profile local-embed
     image: infiniflow/text-embeddings-inference:cpu-1.8
     container_name: askoda-tei-embedding
     restart: unless-stopped
@@ -260,10 +287,32 @@ services:
       - "cls"
       - "--tokenization-workers"
       - "2"
+      # ⚠️【单条文本超过这个值，TEI 会被打死，且是静默的】
+      #    实测（2026-10-09）：单条 1500/2000/2500 字正常（6~10s）；**6000 字直接卡死**
+      #    ——进程不退出、`healthy` 仍为真，但 CPU 掉到 1%、探活 60s 无响应，只能重启。
+      #    连发 12 批正常长度（16 条×100 字）全部通过，证明**不是累积性故障，只跟单条长度有关**。
+      #
+      # ⚠️【谁会撞上这条线】：RAGFlow 的 naive 分块对 **超长 excel 行不切分**——
+      #    即便 dataset 配了 `chunk_token_num: 512`，一个 32767 字符的单元格（Excel 单元格
+      #    上限）会被**整段作为一块**输出，远超 2048。实测「新_BOZ_信贷系统数据调研.xlsx」
+      #    （含 36 个 2000+ 字符单元格）每次都精确地卡死在同一批（progress=0.71003，第 5 批，
+      #    约第 65~80 块 = 刚进入「字段分析」sheet）。这不是偶发，是 100% 可复现。
+      #
+      # ⚠️ 但不能靠调大本参数来解：实测 16384、8192 **都在 warm up 阶段被 OOM 杀掉**
+      #    （无 panic 日志、无声重启，RestartCount 连续 +1），12g 上限撑不住大批注意力矩阵。
+      #    本机只有 24G 内存且已在 swap，抬内存上限的可行性需单独评估。
+      #    ⇒ 结论：**2048 是本机当前唯一能稳定启动的值**；真正的修复在数据侧/分块侧
+      #       （上传前打散超长单元格），不是在这里调参。
       - "--max-batch-tokens"
       - "2048"
+      # ⚠️ 客户端批量上限**必须 ≥16**：RAGFlow 的 OpenAI 兼容 embedding 客户端
+      #    写死每批 16 条（rag/llm/embedding_model.py: batch_size = 16），
+      #    而 TEI 该参数默认上限是 8 → 每批都被 413 拒掉，
+      #    大文件（实测 1296 块的 xlsx）整份解析 FAIL、chunk_count=0。
+      #    小文件分块数不超 8 时不触发，所以只在真实业务文档上暴露。
+      #    （2026-10-08 实证，与远端 sevensmile 的 ekos-tei-embedding 同步改为 32）
       - "--max-client-batch-size"
-      - "8"
+      - "32"
     environment:
       RAYON_NUM_THREADS: "4"
       MKL_ENABLE_INSTRUCTIONS: "AVX2"
@@ -322,9 +371,13 @@ services:
     environment:
       MINIO_ROOT_USER: assistant
       MINIO_ROOT_PASSWORD: assistant123
-    ports:
-      - "${ASSISTANT_MINIO_PORT:-19000}:9000"
-      - "${ASSISTANT_MINIO_CONSOLE_PORT:-19001}:9001"
+    # [2026-10-15] 本服务已停用：附件对象存储改用 EKOS 统一对象存储（ekos-minio，
+    # 宿主 19000/19001 = 本工程原先占用的同一组端口，两边只能留一个）。
+    # 服务段与 askoda-minio-data 卷**保留不删**（数据 40.9 kB，且便于回滚）；
+    # 但**不再发布端口**，避免 `docker compose up -d` 时把 19000/19001 抢回去。
+    # 原端口映射：
+    #   - "${ASSISTANT_MINIO_PORT:-19000}:9000"
+    #   - "${ASSISTANT_MINIO_CONSOLE_PORT:-19001}:9001"
     volumes:
       - askoda-minio-data:/data
 

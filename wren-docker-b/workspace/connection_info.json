@@ -1,8 +1,8 @@
 {
   "properties": {
     "dataSource": "postgres",
-    "host": "wren-postgres-b",
-    "port": "5432",
+    "host": "host.docker.internal",
+    "port": "15432",
     "user": "test",
     "password": "test",
     "database": "retail"
