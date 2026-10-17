@@ -264,3 +264,8 @@ $VENV tools/reset_demo_data.py --apply --purge-attachments  # 连同附件对象
 7. **MDL 只在容器内可达**：`MDL_A_PATH` / `MDL_B_PATH` 默认是容器内路径（`/workspace-a/mdl.json`），宿主机直跑网关代码时读不到，P7（表关系）会失败。这不是缺陷，而是编排设计（MDL 以只读卷挂载）；要宿主机复现，把 `MDL_B_PATH` 指向 `wren-docker-b/workspace/mdl.json` 即可。**重要的是失败时不会静默**：`degraded_sources` 会报出 P7 缺失、R1 未生效、置信度压到 0.50 上限。
 8. **镜像标签与版本号同步**：编排里 `image: askoda-gateway:0.3.0`，与 `gateway/app.py` 的 `GATEWAY_VERSION` 一致。**升版本号时两处要一起改**，否则运维侧看标签会误判。
 9. **网关启动时建表**：`db.init_schema()` 挂在 `main()` 里（幂等）。此前只有 `tools/collect_metadata.py` 会调它，导致「全新部署 + 首次调用」必然失败且要到第一次写库才暴露。元数据库未就绪时不阻断启动，只打警告——探活会把状态如实报成 `degraded`。
+10. **网关代码打进镜像，改代码要 rebuild 才生效**：编排里 `gateway` 只有 MDL 两个只读挂载，`.py` 全靠 `Dockerfile` 的 `COPY . .` 烘进镜像。所以 `docker restart` **不会**换代码——它只是用同一个镜像重新起进程，容器内还是旧文件。改完代码要 `docker compose build gateway`（或 `up -d --build`）。
+    - 实测耗时（2026-10-07，OrbStack + 有依赖层缓存）：**约 1.8 秒**；加 `--no-cache` 冷构建约 **30 秒**（要重装 pip 依赖）。日常改代码不需要 `--no-cache`。
+    - **没有热重载**：FastMCP 4.x 的 `mcp.run()` 不接受 `reload` 参数（实测 fastmcp 4.0.10 的签名只有 `transport / show_banner / transport_kwargs`），uvicorn 的 `--reload` 用不上。所以「改完立刻生效」的最快路径就是 rebuild，实测 1.8 秒，通常比重启还快。
+    - 宿主直跑（不重建）也可以：`PYTHONPATH=. MDL_A_PATH=../wren-docker/workspace/mdl.json MDL_B_PATH=../wren-docker-b/workspace/mdl.json python app.py`，改完直接重跑进程即可，适合只验逻辑不验容器的场合。
+    - **OrbStack 上会看到一行报错，别被它打断**：`failed to update builder last activity time: rename …/buildx/activity/.tmp-xxx … operation not permitted`。这是 buildx 想更新「最后活动时间戳」这个元数据时被系统拦，**与 `BUILDX_CONFIG` 设没设无关**（实测设与不设都会出现），**不影响构建产物**——镜像照常产出，容器照常起来。判断构建是否成功要看有没有 `Image askoda-gateway:0.3.0 Built`，别看这行。
