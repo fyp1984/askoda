@@ -226,7 +226,7 @@ $PY tools/reset_demo_data.py --apply       # 确认无误后真的清
 | ② 知识储备 | 知识资产与检索 | 4 篇治理文档、检索命中与相似度 |
 | ③ 数据源接入 | Schema 版本与差异 | schema_version 稳定性、主题表候选 |
 | ④ 需求分析 · SQL 生成 | 提交→分析→确认→生成 | **系统反问什么**（业务人员最关心的部分） |
-| ⑤ SQL 联调 · 交付 | 执行、结果、导出、审计回放 | 五层门禁记录、生产脚本、**完整判断链回放** |
+| ⑤ SQL 联调 · 交付 | 执行、结果、导出、审计回放 | 门禁记录、生产脚本、**完整判断链回放** |
 
 菜单④ 内部 5 个分步：需求列表 → 提交需求 → 语义分析 → 口径确认 → SQL 生成。
 
@@ -311,7 +311,7 @@ $PY tools/reset_demo_data.py --apply       # 确认无误后真的清
 
 **第 7 步 · 菜单④ → SQL 生成**，点「生成 SQL」
 
-**预期看到**：门禁 5 层全过（L5 结果断言在生成阶段 skip，执行时才跑），得到：
+**预期看到**：门禁各层全过（L5 结果断言在生成阶段 skip，执行时才跑），得到：
 
 ```sql
 SELECT s.store_name, SUM(o.pay_amount) AS 销售额
@@ -327,7 +327,7 @@ GROUP BY s.store_name
 ```
 Wren 执行成功：3 行 × 2 列（dataset=B, generator=deterministic-planner）
 可交付 | 行数/样本正常（3 行 × 2 列）
-门禁 7 层：L1-L5 全过，L-SQLFluff / L-GX 跳过（一期未启用）
+门禁：L1-L5 全过，L-SQLFluff / L-GX 跳过（一期未启用）
 列：['store_name', '销售额']
   上海旗舰店  5988.5
   北京朝阳店  1963.0
@@ -352,7 +352,7 @@ Wren 执行成功：3 行 × 2 列（dataset=B, generator=deterministic-planner�
   pack_version cae38180 | schema_version 76471e8d | requirement_version 1 | 结果行数 3
   ① 当时的结构化需求  → 槽位全部取到（subject/time/granularity/...）
   ② 当时执行的 SQL    → 与上面一致
-  ③ 门禁各层结论      → 7 层逐条列出通过/跳过
+  ③ 门禁各层结论      → 各层逐条列出通过/跳过
   ④ 结果断言          → 未检出可疑信号
   ⑤ 知识引用          → 6 条，指向 01-/03- 两篇治理文档
   快照缺口            → 无（gaps 为空）
@@ -456,7 +456,7 @@ contact         : 演示用户
 time_range      : 最近30天
 ```
 
-**实测结果**（`DR-20261007-CEZX`）：四步全通，门禁 7 层通过，输出 3 行 × 2 列，
+**实测结果**（`DR-20261007-CEZX`）：四步全通，门禁各层通过，输出 3 行 × 2 列，
 审计回放 2 个版本、`gaps` 为空、6 条知识引用。
 
 > ⚠️ **已知局限（如实告知）**：实际生成的 SQL 只覆盖了**销售额**，

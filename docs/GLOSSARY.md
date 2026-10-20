@@ -145,15 +145,24 @@ HuggingFace 官方的 **embedding 模型推理服务**。把文本转成 1024 �
 
 | 层 | 做什么 |
 |---|---|
-| L1 | 写操作检测（`is_write`）——只读工具链下禁止任何写操作 |
+| L1 | **语法校验**（SQLGlot 解析，解析不出有效语句/语法错即阻断，并级联跳过 L2~L5） |
 | L2 | SQL 静态规则（即 REGISTRY 那 11 条） |
-| L3 | SQLGlot 语法解析 |
+| L3 | **只读校验**——语句根节点必须在 `Select`/`With` 白名单内，多语句也拒 |
 | L4 | Wren `dry_run` 语义试跑（不真取数） |
 | L5 | 结果断言（校验行数/样本是否合理） |
 
 SQLFluff 与 Great Expectations 留了插槽但**默认关闭**，一期未实现。
 
-> 权威来源：`gateway/gates.py` 文件头 + `load_sql_five_layer_gates()` 文档串
+> ⚠️ **不要按层号猜职责**，以 `gates.py` 里 `layers[]` 的 `("layer","name")` 字面为准。
+>
+> ⚠️ **只读防线在 L3，不在 L1，也不在 `is_write`**：`is_write()` 与 L3 判同一个
+> 白名单（`_READONLY_ROOT`），但它**不是门禁的一层**——`review()` 主链路不调用它，
+> 全仓调用点只有它自己的定义与 `tools/gates_selftest.py` 的自测。它是给调用方做
+> 前置判断用的（只要一个 bool）。所以**不存在**一个统一的「写操作防线」层：
+> 真正拦只读的是 L3。
+
+> 权威来源：`gateway/gates.py` 文件头设计说明 + `review()` 里各层的
+> `layers.append({...})` 字面（`"layer"` / `"name"` 键）
 
 ---
 

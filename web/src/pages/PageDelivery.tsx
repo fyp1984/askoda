@@ -99,7 +99,7 @@ export default function PageDelivery({
       `-- pack_version   : ${exec?.pack_version || ctx?.pack_version || '-'}`,
       `-- 导出时间       : ${new Date().toISOString()}`,
       '--',
-      '-- 门禁记录（五层）：',
+      '-- 门禁结论（各层逐项如下，标注「跳过」者为本期未启用）：',
       ...(gateLines.length > 0 ? gateLines : ['--   （无门禁记录）']),
       `-- 门禁总状态       : ${exec?.review?.status || sql?.review?.status || '-'}`,
       '--',
@@ -151,7 +151,7 @@ export default function PageDelivery({
 
         <p className="muted">
           网关不调用模型：未命中已建模的意图会被硬门禁拒绝（这是设计使然）。
-          此时可在下方填入候选 SQL，由本页提交给网关过五层门禁后执行。
+          此时可在下方填入候选 SQL，由本页提交给网关过门禁后执行。
         </p>
         <textarea
           className="sqlinput"
@@ -244,7 +244,7 @@ export default function PageDelivery({
         }
       >
         <p className="muted">
-          导出脚本自带口径依据、五层门禁记录与溯源版本号，便于在生产库复核后执行。
+          导出脚本自带口径依据、门禁记录与溯源版本号，便于在生产库复核后执行。
         </p>
         <details className="fold">
           <summary>预览导出内容</summary>

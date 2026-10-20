@@ -146,10 +146,10 @@
 
 | 工具                     | 入参                                                  | 返回要点                                                                       | 用途      |
 | ---------------------- | --------------------------------------------------- | -------------------------------------------------------------------------- | ------- |
-| `sql_review`           | ★`sql`, `dataset="B"`                               | 五层门禁审查 `{status, layers[]}`：L1 语法 / L2 静态规则（分级阻断）/ L3 只读 / L4 语义 / L5 结果断言 | 门禁      |
+| `sql_review`           | ★`sql`, `dataset="B"`                               | 门禁审查 `{status, layers[]}`：L-REQ 需求要素齐备性 / L1 语法 / L2 静态规则（分级阻断）/ L3 只读 / L4 语义 / L5 结果断言 | 门禁      |
 | `sql_plan`             | ★`demand_id`, `dataset="B"`                         | 计划草稿（不含 SQL 正文）；选不出唯一解给候选集合并标「需人工审核」                                       | 生成第 1 段 |
 | `sql_generate`         | ★`demand_id`, `dataset="B"`, `candidate_sql=None`   | SQL 初稿；`candidate_sql` 为空则回落确定性规划器；多条且差异过大时 `hold`                         | 生成第 2 段 |
-| `sql_execute_readonly` | ★`demand_id`, `dataset="B"`, `sql=None`, `actor=""` | 先过五层门禁，全过才执行；每次写一条 `sql_runs`（溯源齐全，可回放）                                    | 执行      |
+| `sql_execute_readonly` | ★`demand_id`, `dataset="B"`, `sql=None`, `actor=""` | 先过门禁，全过才执行；每次写一条 `sql_runs`（溯源齐全，可回放）                                    | 执行      |
 | `sql_optimize`         | ★`sql`, `dataset="B"`                               | SQL 静态等价重写（谓词下推 / 冗余 DISTINCT 移除 / CSE 保守跳过）；不能证明等价就不改                     | 优化      |
 | `sql_run_get`          | ★`demand_id`                                        | 该需求全部运行记录（生成 SQL / 门禁结果 / 结果校验 / 溯源版本号）                                    | 联调交付    |
 | `sql_run_list`         | `demand_id=""`, `dataset=""`, `limit=20`            | 跨需求执行留痕列表（时间倒序，可筛选）                                                        | 审计      |
@@ -171,7 +171,7 @@ demand_create
        → schema_candidates      # 主题表 / 关联 / 时间字段候选
        → sql_plan               # 计划草稿（无 SQL）
        → sql_generate           # SQL 初稿（candidate_sql 为空则兜底）
-         → sql_review           # 五层门禁（可能被 L2/L3/L4 拦）
+         → sql_review           # 门禁（可能被 L2/L3/L4 拦）
            → sql_execute_readonly   # 全过才执行 + 留痕
              → sql_run_get / sql_run_replay
 ```

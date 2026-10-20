@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""M5-1 五层 SQL 门禁自证（离线，不需要容器与 Wren）。
+"""M5-1 SQL 门禁自证（离线，不需要容器与 Wren）。
 
 L4 语义门禁用注入的假 dry_run 函数桩：默认全部通过。
 如需测试 L4 阻断，自行传 _dry_run_fn=lambda sql: {"ok": False, "message": "故意失败"}。
@@ -402,6 +402,9 @@ def main():
     print("    样例（取不到）=%s"
           % ((_layer_by(_detail_cases[2][1], "L-REQ") or {}).get("detail") or "")[:120])
 
+    # ⚠️ 已知待处理：此处硬编码 8 层，与 tools/e2e_verify.py 的 EXPECTED_LAYER_COUNT = 8
+    #    是两个独立来源，门禁层数演进时会再次脱节。待抽共享常量统一（已立项）。
+    #    本行是「层数契约断言」而非对外文案，故不在 D-LAYER 的去数字化范围内。
     # 7b-7. 层数契约：无论走哪条级联分支，layers 恒为 8 层
     title = "7b-7. 层数契约：L-REQ 在最前，且各分支恒 8 层"
     _expect_order = ["L-REQ", "L1", "L2", "L3", "L4", "L5", "L-SQLFluff", "L-GX"]

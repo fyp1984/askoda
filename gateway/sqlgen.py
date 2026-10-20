@@ -8,7 +8,7 @@
 "很像对的 SQL"带着跑。
 
 二段 generate()：拿到候选 SQL（来自客户端 Agent 或确定性 planner 兜底）产出真正
-的 SQL 初稿，立即交 gates.review() 做五层门禁审查。
+的 SQL 初稿，立即交 gates.review() 做门禁审查。
 
 为什么 generate() 里允许传 candidate_sql
 -----------------------------------------
@@ -87,7 +87,7 @@ def plan(demand_id, dataset="B"):
     """出计划草稿（§4.7 · 一段式）：选表/选关联路径/选时间字段。
 
     draft_gate 是**闭集自检**：选定表 ∈ table_candidates、关联路径 ∈ join_candidates。
-    五层门禁（L1-L5）此时还没有 SQL 文本，所以**不调用 gates.review**。
+    门禁（L1-L5）此时还没有 SQL 文本，所以**不调用 gates.review**。
     """
     pack, pack_err = _pack_safe(demand_id, dataset)
 

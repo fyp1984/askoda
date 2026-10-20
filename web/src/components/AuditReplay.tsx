@@ -93,7 +93,7 @@ export default function AuditReplay({ demandId }: { demandId: string }) {
       {busy && !data ? <Loading tip="正在复原执行快照…" /> : null}
 
       <p className="muted">
-        按版本精确复原当次运行的完整判断链：当时的结构化需求 → SQL → 五层门禁 → 结果 → 知识引用。
+        按版本精确复原当次运行的完整判断链：当时的结构化需求 → SQL → 门禁 → 结果 → 知识引用。
         快照来自历史留痕，<strong>不受此后元数据或知识库变动影响</strong>。
       </p>
 

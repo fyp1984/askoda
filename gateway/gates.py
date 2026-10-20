@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""M5-1 · 五层 SQL 门禁（生成与审查分离）
+"""M5-1 · SQL 门禁（生成与审查分离）
 
 设计说明
 --------
@@ -14,8 +14,14 @@
   绝不判红**，以免给现有不带 demand_id 的调用点造出全新失败模式。
   阶段一只做接线与齐备性校验；要素提取与覆盖判定在阶段二。
 - M6-1 改造：L2 10 类静态规则**整体搬迁**到 gateway/rules.py 的 REGISTRY；
-  gates.py 只保留 is_write / L2~L5 接线层。新增一条规则 = 只改 rules.py，
+  gates.py 只保留 L1~L5 接线层（+ is_write 辅助函数）。新增一条规则 = 只改 rules.py，
   不需要再进 gates.py 改 _static_checks。
+- ⚠️ 层职责别按名字猜，按 layers[] 里的 ("layer","name") 字面为准：
+  **L1=语法校验、L2=静态风险、L3=只读校验、L4=语义校验、L5=结果断言**。
+  只读防线在 **L3**（判 _READONLY_ROOT 白名单）；**is_write 不是门禁的一层**，
+  它与 L3 同判 _READONLY_ROOT 但只吐 bool，`review()` 主链路不调用它
+  （详见其 docstring）。本模块的写节点黑名单常量已删除，只读判据唯一来源是
+  _READONLY_ROOT。
 
 插槽
 ----
@@ -69,7 +75,7 @@ _REQ_REQUIRED_SLOTS = ("subject", "granularity", "time_semantics", "data_scope")
 #
 # 为什么必须出现在 detail（用户可见）而不是只写在 docstring（代码注释）
 # ---------------------------------------------------------------------
-# REQ-COVERAGE 要修的病就是**静默失效**：requirement 恒 None、五层全绿、
+# REQ-COVERAGE 要修的病就是**静默失效**：requirement 恒 None、各层全绿、
 # deliverable=true、业务方拿错数据、全程零报错。若 L-REQ 静默通过却不自述
 # 「我只查了齐备性、没查覆盖」，等于把同一个洞挖在新位置——业务方看到 L-REQ 绿了
 # 会以为「需求要素已校验通过」。
@@ -83,25 +89,63 @@ _REQ_SCOPE_PREFIX = (
     "  "
 )
 
+# 只读白名单：L3 只读校验与 is_write() **判同一个东西**，都以「根节点是不是
+# Select/With」为唯一依据。
+#
+# ⚠️ 这里曾有一个并列的「写节点黑名单」常量（Insert/Delete/Update/Drop/Alter/
+#   Create/TruncateTable/Command），已删除——它**不是「清理未使用变量」，
+#   而是移除一个已被同一套判据取代的旧策略残留**：
+#   黑名单是「枚举已知写节点」，白名单是「除只读外皆拒」。后者覆盖前者——
+#   写节点清单永远补不全（Command 可承载任意 DDL/DML），白名单不需要维护。
+#   两处判定现在完全等价（本文件的 L3 与 is_write 同判下方这个元组），
+#   故黑名单那份副本不再有任何信息量。
+#   ⚠️ 别把它当冗余再加回来：加了只会让「读只认 Select/With」这条契约
+#   出现第二处需要同步的定义，改一处忘一处就是静默漏拦。
 _READONLY_ROOT = (exp.Select, exp.With)
-
-_WRITE_ROOT = (
-    exp.Insert,
-    exp.Delete,
-    exp.Update,
-    exp.Drop,
-    exp.Alter,
-    exp.Create,
-    exp.TruncateTable,
-    exp.Command,
-)
 
 
 def is_write(sql: str) -> bool:
-    """判断 SQL 是否含写操作（供 M5-2 的前置拦截复用）。
+    """判断 SQL 是否含写操作。
 
-    解析失败时保守返回 True（宁可拦错不可漏拦）。
-    多语句也算写。
+    ⚠️ **它不是门禁的一层**。门禁里的只读防线是 **L3「只读校验」**
+       （见 review()，判据同为 _READONLY_ROOT，产出 layer 结构 + rule_violations）。
+       本函数 `review()` 主链路**零调用**——全仓调用点只有本定义、
+       文件头提及与 tools/gates_selftest.py 的自测。它是给调用方做
+       **前置判断**用的：只要一个 bool，不参与门禁分层、不产出 detail。
+
+    与 L3 的关系：**同源判据，但粒度更粗**，不是冗余（故不要合并/删除）
+    ------------------------------------------------------------------
+    · 同源：两者都只判 `isinstance(stmt, _READONLY_ROOT)`（本元组），
+      判据完全一致——**不存在「两套标准」**，不会出现「is_write 放行但 L3 拦」。
+    · 粒度更粗：L3 逐条语句遍历、**分别产出**违规类型并给出可读 detail
+      （多语句 → `MULTI_STATEMENT`；非只读根 → `WRITE_OPERATION_<TYPE>`）；
+      本函数只吐一个 bool，调用方拿不到「为什么被拒」也拿不到是哪一条语句。
+    · ⚠️ **不要说成「等价」**：等价会诱导后人当冗余删掉。它不是冗余——
+      L3 面向门禁层（要 layer 结构给 review_notes 拼串），本函数面向调用前置
+      判断（只要 bool，不需要为它造一份 layers 条目）。
+
+    三条边界（均已实测，行为已固化进 tools/gates_selftest.py 附加-8/8b）
+    ------------------------------------------------------------------
+    1. **多语句 → 直接返回 True，不区分读写两种违规**。
+       ⚠️ L3 对同一输入会**分别产出两条** rule_violation：
+       一条 `MULTI_STATEMENT`、一条 `WRITE_OPERATION_*`（`SELECT 1; SELECT 2`
+       在 L3 眼里第二条也是违规）。本函数把两者压成同一个 True，
+       调用方若要区分成因，**必须查 L3，不能靠本函数的返回值**。
+    2. **空串 / 纯空白 / 纯注释 → 返回 True**。
+    3. **解析异常 → 返回 True**。
+
+    ⚠️ 边界 2 的成因**不是「保守设计」**，实测（门禁子进程 / askoda 容器
+       两个环境 sqlglot 版本不同、但行为一致）：
+           ''     -> len=1  stmts=[None]
+           '   '  -> len=1  stmts=[None]
+           '-- c' -> len=1  stmts=[None]
+       即 `parse()` 返回的是**长度 1 的 `[None]`**（不是空列表），
+       于是走到 `not isinstance(None, _READONLY_ROOT)` 分支——
+       **成因是「None 不是只读节点」**，与「保守」无关。
+    ⚠️ 由此推论：**若将来 _READONLY_ROOT 扩充**，边界 2 的行为会跟着变
+       （例如把 None 纳入白名单，退化输入就会转为 False）。
+       契约钉的是**当前行为**，不是某个设计意图——行为变了要先查清
+       sqlglot 版本差异，再改这里的期望值，不要直接改契约迁就实现。
     """
     try:
         stmts = sqlglot.parse(sql, read="postgres")
@@ -130,7 +174,7 @@ def _requirement_check(requirement):
     为什么单独成层、且排在 L1 之前
     ------------------------------
     L1-L5 审的是「SQL 本身对不对」，答不了「需求要的东西在不在」——
-    这正是 REQ-COVERAGE 缺陷能五层全绿的原因：SELECT 语法没错、只读、语义层认得、
+    这正是 REQ-COVERAGE 缺陷能各层全绿的原因：SELECT 语法没错、只读、语义层认得、
     可 GROUP BY 与输出列一致，唯独「月度」「订单数」「已退款金额」三项
     从未进入过任何一层的视野。L-REQ 补的是这个洞，故排在最前。
 
@@ -305,7 +349,7 @@ def review(
     *,
     _dry_run_fn=None,
 ) -> dict:
-    """五层门禁审查 SQL。
+    """门禁审查 SQL。
 
     参数
     ----
@@ -666,7 +710,7 @@ def review(
     if final_status == "警告" and not notes:
         rules_set = sorted({i["rule"] for i in semantic_issues})
         notes.append("L2 警告 %d 项（不阻断）：%s" % (len(semantic_issues), "、".join(rules_set)))
-    review_notes = "；".join(notes) if notes else ("五层门禁审查完成：状态「%s」" % final_status)
+    review_notes = "；".join(notes) if notes else ("门禁审查完成：状态「%s」" % final_status)
 
     return {
         "status": final_status,

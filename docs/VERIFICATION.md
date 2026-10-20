@@ -19,7 +19,7 @@ python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep
 # MCP 工具面验收（48 个工具 + 真实调用比对，对照《实施推进与验收方案》）
 python3 tools/mcp_acceptance_check.py
 
-# 五层门禁自证（纯离线，不依赖数据库）
+# 门禁自证（纯离线，不依赖数据库）
 python3 tools/gates_selftest.py
 python3 tools/rules_selftest.py
 

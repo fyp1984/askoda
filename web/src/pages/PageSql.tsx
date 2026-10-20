@@ -6,7 +6,7 @@ import GapFiller from '../components/GapFiller'
 
 /**
  * 页4 · 看 SQL 与结果
- * SQL + 五层门禁逐层结果 + 结果集前 N 行+ 溯源三件套 + 知识引用明细。
+ * SQL + 门禁逐层结果 + 结果集前 N 行+ 溯源三件套 + 知识引用明细。
  */
 export default function PageSql({
   demandId,
@@ -157,7 +157,7 @@ export default function PageSql({
                 value={candidate}
                 onChange={(e) => setCandidate(e.target.value)}
               />
-              <p className="muted">粘贴后点右上角「生成 SQL」，门禁会照常做语法/静态/只读/语义四层校验。</p>
+              <p className="muted">粘贴后点右上角「生成 SQL」，门禁会照常做语法/静态/只读/语义校验。</p>
             </details>
           </>
         ) : null}
