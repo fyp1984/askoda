@@ -7,7 +7,7 @@
 `gate_all.py` 的 G3 层自称「真实链路（探活 + `*_verify.py`）」，但仓库里长期
 **一份 `*_verify.py` 都没有**（`ls tools/*_verify.py` → no matches found）。
 于是 G3 实际只跑了 1 次 `MCP::gateway_health` 探活，MVP 主链路完全在门禁之外：
-提交→分析→确认→SQL→只读执行 这四动作、BFF 的 23 个接口、七层门禁，
+提交→分析→确认→SQL→只读执行 这四动作、BFF 的 23 个接口、门禁，
 下次谁改坏一条，G3 照样全绿。本文件把这条链路钉成断言。
 
 跑的是什么
@@ -17,7 +17,7 @@
   ① POST /api/v1/demand                 提交需求        → demand_id
   ② POST /api/v1/demand/{id}/analyze    语义分析        → round_no / 槽位候选 / 待确认问题
   ③ POST /api/v1/demand/{id}/confirm    口径确认        → ★ 答复后自动重跑分析（round_no +1）
-  ④ POST /api/v1/demand/{id}/sql        生成 SQL        → review.layers（7 层）
+  ④ POST /api/v1/demand/{id}/sql        生成 SQL        → review.layers（各层）
   ⑤ POST /api/v1/demand/{id}/sql/execute 只读执行       → deliverable / row_count
 
 ③ 的「答复后自动重跑分析」是这套设计的关键——答复本身不回填槽位，
@@ -36,7 +36,7 @@ Q-GRAIN-1 + Q-SCOPE-1 两个问题，答复第一个（Q-GRAIN-1）后回填可�
 本脚本的价值在于「红了能报警」。因此：
   · `row_count` 只断言 `> 0`（真实数据行数为正），**不断言具体行数**
     ——行数会随数据变化，写死就是给自己埋假红；
-  · 但 `deliverable` / `五层门禁 L1-L4 全 ok` / `round_no 递增` /
+  · 但 `deliverable` / `门禁 L1-L4 全 ok` / `round_no 递增` /
     `P2 证据入链` 这些**行为契约**一律断言死，不容退化；
   · 实跑发现真问题就**如实报红**，不在脚本里绕。
 
@@ -298,7 +298,7 @@ def stage_confirm(rep, demand_id, analysis):
 
 
 def stage_sql(rep, demand_id):
-    """④ 生成 SQL：断言七层门禁结构与 L1-L4 实跑通过。"""
+    """④ 生成 SQL：断言门禁结构与 L1-L4 实跑通过。"""
     if not demand_id:
         rep.add("sql", "前置 demand_id", False, "① 未产出 demand_id，跳过本阶段")
         return None

@@ -362,7 +362,7 @@ def understand(bundle):
     # 两候选在这些信号上打平时**不再静默择一**（见下方 `ambiguous` 标注）：
     # 按 R4「未确认关键口径不得进入高置信输出」，应交业务确认。
     # 另注：主体候选只影响给业务看的建议与冲突提示，不决定实际 SQL——
-    # 生成走 `candidate_sql`（业务/Agent 传入）+ 五层门禁。
+    # 生成走 `candidate_sql`（业务/Agent 传入）+ 门禁。
     term_freq = _term_table_freq(hits)
     subj_tables, subj_strength = _tables_of(_dedup_hits(hits), with_strength=True)
     subj = []

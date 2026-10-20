@@ -26,7 +26,7 @@
 ----------
 - M4：结构化技术需求 + SQL 上下文包。工具已在本文件注册，实现见 gateway/schema_scan.py
   / requirement.py / sqlpack.py（由编码侧交付；模块未就绪时工具返回 not_ready，不影响启停）。
-- M5：SQL 生成 + 五层门禁 + 只读执行。工具已在本文件注册，实现见 gateway/gates.py
+- M5：SQL 生成 + 门禁 + 只读执行。工具已在本文件注册，实现见 gateway/gates.py
   / sqlgen.py / sqlrun.py。
 - M6 起：图表与可视化交付（未开工）。
 
@@ -938,7 +938,7 @@ def sql_context_pack(demand_id: str, dataset: str = "B") -> dict:
 
 @mcp.tool
 def sql_review(sql: str, dataset: str = "B", demand_id: str = "") -> dict:
-    """M5-1 · 五层门禁审查 SQL（生成与审查分离）。
+    """M5-1 · 门禁审查 SQL（生成与审查分离）。
 
     L-REQ 需求要素（结构化需求齐备性；**无 demand_id 时 skipped，不判红**）／
     L1 语法（SQLGlot parse，失败即阻断）／L2 静态风险（无 ON 的 JOIN、SELECT *、
@@ -946,7 +946,7 @@ def sql_review(sql: str, dataset: str = "B", demand_id: str = "") -> dict:
     多语句**阻断**）／L4 语义（Wren dry_run）／L5 结果断言（无结果集时 skipped）。
 
     `demand_id` 为**可选**且**追加在末尾**：给了就去取该需求的结构化技术需求对象
-    喂给 L-REQ；不给则 L-REQ 跳过、其余五层行为与此前完全一致（向后兼容）。
+    喂给 L-REQ；不给则 L-REQ 跳过、其余各层行为与此前完全一致（向后兼容）。
     """
     req = None
     if demand_id:
@@ -990,7 +990,7 @@ def sql_generate(demand_id: str, dataset: str = "B",
     """M5-2 · 生成 SQL 初稿（两段式第二段）。
 
     `candidate_sql` 为调用方（客户端 Agent）产出的 SQL：非空则采用，为空则**回落确定性
-    规划器**。**网关侧不调用任何模型**——自由生成由客户端承担。生成后立即过五层门禁，
+    规划器**。**网关侧不调用任何模型**——自由生成由客户端承担。生成后立即过门禁，
     结果放在 `review` 字段。
 
     M6-2：`candidate_sql` 可传**多条候选**（list[str]）。多条且差异过大时会 `hold`——
@@ -1008,7 +1008,7 @@ def sql_execute_readonly(
 ) -> dict:
     """M5-2 · 只读执行 SQL 并留痕。
 
-    先过五层门禁，全过才执行（沿用 `wren_query` 的只读 + 语义双门禁写法），结果交 L5 断言；
+    先过门禁，全过才执行（沿用 `wren_query` 的只读 + 语义双门禁写法），结果交 L5 断言；
     每次运行写一条 `sql_runs`（溯源字段齐全，可回放）。`sql` 为空时取该需求最近一次生成的 SQL。
     """
     return _wired(

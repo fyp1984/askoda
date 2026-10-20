@@ -1,4 +1,4 @@
-# 服务端网关（MCP 工具面 48 个 · 双库语义层 · 五层门禁 · 只读执行 · 留痕回放）
+# 服务端网关（MCP 工具面 48 个 · 双库语义层 · 门禁 · 只读执行 · 留痕回放）
 
 数据需求智能分析助手的服务端入口：对 Agent 暴露 MCP 工具，对内接入 Wren 语义层双库、
 自有元数据库与附件对象存储，对下接入 RAGFlow 知识底座。
@@ -122,10 +122,10 @@ docker compose up -d --build
 
 | 工具 | 入参 | 说明 |
 |---|---|---|
-| `sql_review` | `sql`, `dataset="B"` | 五层门禁审查（L1 语法 / L2 静态规则·分级阻断 / L3 只读 / L4 语义 dry-plan / L5 结果断言） |
+| `sql_review` | `sql`, `dataset="B"` | 门禁审查（L-REQ 需求要素齐备性 / L1 语法 / L2 静态规则·分级阻断 / L3 只读 / L4 语义 dry-plan / L5 结果断言） |
 | `sql_plan` | `demand_id`, `dataset="B"` | 计划草稿（不含 SQL 正文）；选不出唯一解给候选集合并标「需人工审核」 |
 | `sql_generate` | `demand_id`, `dataset="B"`, `candidate_sql=None` | SQL 初稿；`candidate_sql` 为空则回退确定性规划器 |
-| `sql_execute_readonly` | `demand_id`, `dataset="B"`, `sql=None`, `actor=""` | 全过五层门禁才执行，每次写一条 `sql_runs`（溯源齐全，可回放） |
+| `sql_execute_readonly` | `demand_id`, `dataset="B"`, `sql=None`, `actor=""` | 全过门禁才执行，每次写一条 `sql_runs`（溯源齐全，可回放） |
 
 ### M6 · 留痕 · 回放（3）
 
@@ -167,7 +167,7 @@ docker compose up -d --build
 ### 原「设计边界（尚未做）」的现状
 
 - SQL 生成链路（语义层门禁之后）→ **M4 已落地**（plan → generate 两段式）
-- 五层门禁 → **M5 已落地**（L1 语法 / L2 静态规则·分级阻断 / L3 只读 / L4 语义 dry-plan / L5 结果断言）；SQLFluff / Great Expectations 留插槽、默认关闭
+- 门禁 → **M5 已落地**（L-REQ 需求要素齐备性 / L1 语法 / L2 静态规则·分级阻断 / L3 只读 / L4 语义 dry-plan / L5 结果断言）；SQLFluff / Great Expectations 留插槽、默认关闭
 - 需求单的**对话式补全**（多轮追问缺失字段）→ 由**客户端 Agent** 承担（网关不内置 LLM）；网关侧为一次性校验 + 澄清问答闭环（`confirmation_*`）
 
 ## 四、代码结构
@@ -200,7 +200,7 @@ python3 tools/mcp_acceptance_check.py                                 # MCP 工�
 python3 tools/gate_all.py --layers G0,G1                              # 静态 + 单元门禁（快跑，不写库）
 
 # 离线自证（改动脱敏 / 检索 / 闸门后随手复跑）
-python3 tools/gates_selftest.py                                       # 五层门禁自证
+python3 tools/gates_selftest.py                                       # 门禁自证
 python3 tools/rules_selftest.py                                       # 规则库自证
 python3 tools/masking_selftest.py                                     # 脱敏自证
 python3 tools/knowledge_selftest.py                                   # 问句压缩自证

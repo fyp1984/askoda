@@ -160,7 +160,7 @@ def execute_readonly(sql, dataset="B", demand_id=None, requirement_version=None,
             "ok": False,
             "blocked": True,
             "blocked_by": "pre_review",
-            "error": "SQL 五层门禁预审查未通过：%s" % _blocked_summary(review_before),
+            "error": "SQL 门禁预审查未通过：%s" % _blocked_summary(review_before),
             "review": review_before,
             "fallback": fallback_block,
         }

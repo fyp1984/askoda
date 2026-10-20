@@ -205,7 +205,7 @@ export default function GapFiller({
             <div className="colhead">验收标准</div>
             <ul>
               <li>点「生成 SQL」能成功产出 SQL</li>
-              <li>七层门禁全部通过</li>
+              <li>门禁全部通过</li>
               <li>执行后拿到的数据与业务方确认的口径一致</li>
             </ul>
             <p className="tip">在此之前不必反复试，也不必修改业务代码。</p>
