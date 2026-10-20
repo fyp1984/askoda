@@ -937,14 +937,25 @@ def sql_context_pack(demand_id: str, dataset: str = "B") -> dict:
 
 
 @mcp.tool
-def sql_review(sql: str, dataset: str = "B") -> dict:
+def sql_review(sql: str, dataset: str = "B", demand_id: str = "") -> dict:
     """M5-1 · 五层门禁审查 SQL（生成与审查分离）。
 
+    L-REQ 需求要素（结构化需求齐备性；**无 demand_id 时 skipped，不判红**）／
     L1 语法（SQLGlot parse，失败即阻断）／L2 静态风险（无 ON 的 JOIN、SELECT *、
     GROUP BY 与输出列不一致——记为**警告不阻断**）／L3 只读（仅放行 Select/With，写操作与
     多语句**阻断**）／L4 语义（Wren dry_run）／L5 结果断言（无结果集时 skipped）。
+
+    `demand_id` 为**可选**且**追加在末尾**：给了就去取该需求的结构化技术需求对象
+    喂给 L-REQ；不给则 L-REQ 跳过、其余五层行为与此前完全一致（向后兼容）。
     """
-    return _wired("gates", "review", sql, dataset=dataset)
+    req = None
+    if demand_id:
+        # 取不到就传 None —— L-REQ 内部把「取不到」与「不合格」都判 skipped，
+        # 不在这里 raise，也不让一个查库失败变成门禁红灯。
+        got = _wired("requirement", "get", demand_id)
+        if isinstance(got, dict) and got.get("ok") is not False:
+            req = got
+    return _wired("gates", "review", sql, dataset=dataset, requirement=req)
 
 
 @mcp.tool
