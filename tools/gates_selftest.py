@@ -176,6 +176,256 @@ def main():
     ))
 
     # ------------------------------------------------------------------
+    # 7b. L-REQ 需求要素层（阶段一）
+    #
+    # 这一组是本阶段的核心契约，必须机器钉住，否则 L-REQ 会退化成
+    # 「层在列表里、detail 写得漂亮、但永远不改变 status」的旁观者——
+    # 那正是 REQ-COVERAGE 缺陷本身的形状。
+    # ------------------------------------------------------------------
+    # 7b-1. 无 requirement → skipped，且**其余层照常通过**（向后兼容红线）
+    title = "7b-1. 无 requirement → L-REQ skipped，status 不受影响"
+    sql_clean = "SELECT store_name, COUNT(*) AS cnt FROM dim_store GROUP BY store_name"
+    r = gt.review(sql_clean, dataset="B", _dry_run_fn=_fake_dry_run_ok)
+    lreq = _layer_by(r, "L-REQ")
+    ok = (
+        lreq and lreq["skipped"] is True and lreq["ok"] is True
+        and r["status"] == "通过"
+        and r.get("requirement_gaps") == []
+    )
+    if not ok:
+        fails.append("%s FAILED: status=%s L-REQ=%s" % (title, r["status"], lreq))
+    print("[%s] %s" % ("OK" if ok else "!!", title))
+    print("    status=%s  L-REQ(ok=%s skipped=%s)  gaps=%s" % (
+        r["status"],
+        lreq["ok"] if lreq else None,
+        lreq["skipped"] if lreq else None,
+        r.get("requirement_gaps"),
+    ))
+
+    # 7b-2. 槽位齐备 + output_fields 非空 → L-REQ ok 且不改变 status
+    title = "7b-2. 槽位齐备的 requirement → L-REQ ok，不误判红"
+    _req_ok = {
+        s: {"value": "结论-" + s, "evidence": [{"level": "P8"}], "confidence": 0.9}
+        for s in ("subject", "granularity", "time_semantics", "data_scope")
+    }
+    _req_ok["output_fields"] = [
+        {"value": "销售额", "evidence": [{"level": "P8"}], "confidence": 0.9},
+    ]
+    r = gt.review(sql_clean, dataset="B", requirement=_req_ok, _dry_run_fn=_fake_dry_run_ok)
+    lreq = _layer_by(r, "L-REQ")
+    ok = (
+        lreq and lreq["ok"] is True and lreq["skipped"] is False
+        and r["status"] == "通过"
+        and r.get("requirement_gaps") == []
+    )
+    if not ok:
+        fails.append("%s FAILED: status=%s L-REQ=%s gaps=%s" % (
+            title, r["status"], lreq, r.get("requirement_gaps")))
+    print("[%s] %s" % ("OK" if ok else "!!", title))
+    print("    status=%s  L-REQ(ok=%s skipped=%s)  gaps=%s" % (
+        r["status"],
+        lreq["ok"] if lreq else None,
+        lreq["skipped"] if lreq else None,
+        r.get("requirement_gaps"),
+    ))
+
+    # ------------------------------------------------------------------
+    # 7b-3. ★★ 误拦回归钉死：「原文没提时间」的需求必须【通过】
+    #
+    # 这条是本组里最重要的一条。requirement.py:237-241 对无候选槽位写的是
+    # {"value": "无候选结论（…）", "confidence": 0.0}——value 非空但 confidence=0，
+    # 于是「有没有提时间」与「槽位缺失」在结构化对象里是同一个信号。
+    # 阶段一早期版本据此判红，实测会把「各门店总销售额」这种
+    # **根本没提时间的正常提问**拦下来（PM 用例 2 要求通过）。
+    #
+    # ⇒ 阶段一 L-REQ 恒 ok=True：有缺口只提示，不阻断。
+    # ------------------------------------------------------------------
+    title = "7b-3. ★★ 原文未提时间 → 只提示不阻断，status=通过（防误拦回归）"
+    _req_notime = {
+        s: {"value": "结论-" + s, "evidence": [{"level": "P8"}], "confidence": 0.9}
+        for s in ("subject", "granularity", "data_scope")
+    }
+    # 复刻 requirement.build 的缺失占位形态：value 明写「无候选结论」且 confidence=0
+    _req_notime["time_semantics"] = {
+        "value": "无候选结论（该槽位在本轮分析中为空）",
+        "evidence": [{"level": "P8", "source": "analysis_rounds.slots"}],
+        "confidence": 0.0,
+    }
+    _req_notime["output_fields"] = [
+        {"value": "总销售额", "evidence": [{"level": "P8"}], "confidence": 0.9},
+    ]
+    r = gt.review(sql_clean, dataset="B", requirement=_req_notime, _dry_run_fn=_fake_dry_run_ok)
+    lreq = _layer_by(r, "L-REQ")
+    gaps = r.get("requirement_gaps") or []
+    ok = (
+        lreq and lreq["ok"] is True and lreq["skipped"] is False
+        and r["status"] == "通过"          # ★ 关键断言：没提时间不得被拦
+        and len(gaps) == 1# 缺口仍要留痕
+        and "L-REQ 提示" in (r.get("review_notes") or "")
+        and r.get("revised_sql") is None   # 红线 D1：只报告不改写
+    )
+    if not ok:
+        fails.append("%s FAILED: status=%s L-REQ=%s gaps=%s notes=%s" % (
+            title, r["status"], lreq, gaps, r.get("review_notes")))
+    print("[%s] %s" % ("OK" if ok else "!!", title))
+    print("    status=%s  L-REQ(ok=%s skipped=%s)" % (
+        r["status"],
+        lreq["ok"] if lreq else None,
+        lreq["skipped"] if lreq else None,
+    ))
+    print("    gaps=%s" % gaps)
+    print("    review_notes=%s" % (r.get("review_notes") or ""))
+
+    # 7b-4. output_fields 空数组 → 出 gaps，但阶段一不阻断
+    title = "7b-4. output_fields 空数组 → 出 gaps，仍不阻断"
+    _req_nofields = dict(_req_ok)
+    _req_nofields["output_fields"] = []
+    r = gt.review(sql_clean, dataset="B", requirement=_req_nofields, _dry_run_fn=_fake_dry_run_ok)
+    lreq = _layer_by(r, "L-REQ")
+    gaps = r.get("requirement_gaps") or []
+    ok = (
+        lreq and lreq["ok"] is True
+        and r["status"] == "通过"
+        and len(gaps) == 1 and "output_fields" in gaps[0]
+    )
+    if not ok:
+        fails.append("%s FAILED: status=%s gaps=%s" % (title, r["status"], gaps))
+    print("[%s] %s" % ("OK" if ok else "!!", title))
+    print("    status=%s  gaps=%s" % (r["status"], gaps))
+
+    # 7b-5. requirement 取不到（ok=False）→ skipped 而非判红
+    title = "7b-5. requirement 取不到 → skipped，不判红"
+    r = gt.review(sql_clean, dataset="B",
+                  requirement={"ok": False, "error": "尚无结构化对象"},
+                  _dry_run_fn=_fake_dry_run_ok)
+    lreq = _layer_by(r, "L-REQ")
+    ok = (
+        lreq and lreq["skipped"] is True
+        and r["status"] == "通过"
+    )
+    if not ok:
+        fails.append("%s FAILED: status=%s L-REQ=%s" % (title, r["status"], lreq))
+    print("[%s] %s" % ("OK" if ok else "!!", title))
+    print("    status=%s  L-REQ(ok=%s skipped=%s)  detail=%s" % (
+        r["status"],
+        lreq["ok"] if lreq else None,
+        lreq["skipped"] if lreq else None,
+        (lreq or {}).get("detail"),
+    ))
+
+    # 7b-6. ★ detail 范围自述：**枚举 + 结构性扫描双重保险**
+    #
+    # 这条防的是「在场但只做了一半」——业务方看到 L-REQ 绿了若不知道本阶段
+    # 没查覆盖，就会以为「需求要素已校验通过」，那等于把 REQ-COVERAGE
+    # 要修的静默失效挖在新位置。「缺席必须显式报未执行」同理适用于此。
+    #
+    # ⚠️ 为什么**两条断言都要有**（它们互不替代，缺一就有真实缺口）
+    #
+    #   ① 枚举式（本段）：保证「每条返回路径**都被走到**」。
+    #      局限：只覆盖写下来的这几条。
+    #   ② 结构性（本段末）：保证「源码里**每一个**产出 detail 的 return 都带前缀」。
+    #      能力：新增第 4 种早退若忘带前缀，这里立刻红。
+    #
+    # ⇒ 反过来：结构性**无法**发现「新增路径没被任何用例调用」（它不进 layers，
+    #   枚举不跑就永远不触发）——**所以不能拿结构性替代枚举**。
+    #
+    # ⚠️ 判据源必须是**源码**，不得改回「遍历 layers 里的 L-REQ 实例」：
+    #   那种写法的输入仍来自枚举结果，**与枚举共享同一盲区**——
+    #   实测过：新增一条「不被任何用例触达」的无前缀return 时，
+    #   「遍历 layers」写法漏检 0，「扫描源码」写法漏检 1（拦住）。
+    #   即「防静默失效的判据自己却依赖着会静默的东西」，是最隐蔽的一类缺陷。
+    #
+    # ✅ 本断言已做负向验证（注入无前缀 return，确认会红，不是摆设）：
+    #   ① 注入到枚举列表**有**对应 case 的分支   ⇒ 红
+    #   ② 注入到枚举列表**无**对应 case 的新分支 ⇒ 仍红（这是关键的一验）
+    #   两次均已恢复原状。⚠️ 改动本断言后请重做这两次负向验证。
+    title = "7b-6. ★ detail 范围自述：枚举 + 结构性双重保险"
+    _pfx = "本阶段仅校验槽位齐备性"
+    _detail_cases = [
+        ("无 requirement", gt.review(sql_clean, dataset="B", _dry_run_fn=_fake_dry_run_ok)),
+        ("非 dict", gt.review(sql_clean, dataset="B", requirement="不是对象",
+                          _dry_run_fn=_fake_dry_run_ok)),
+        ("取不到", gt.review(sql_clean, dataset="B",
+                         requirement={"ok": False, "error": "x"},
+                         _dry_run_fn=_fake_dry_run_ok)),
+        ("齐备", gt.review(sql_clean, dataset="B", requirement=_req_ok,
+                       _dry_run_fn=_fake_dry_run_ok)),
+        ("有缺口", gt.review(sql_clean, dataset="B", requirement=_req_notime,
+                         _dry_run_fn=_fake_dry_run_ok)),
+    ]
+    ok = True
+    for tag, rr in _detail_cases:
+        #遍历 layers 里**每一个** L-REQ 实例（当前结构下只有一个，防御性写法）
+        for lreq_inst in [l for l in rr.get("layers", []) if l.get("layer") == "L-REQ"]:
+            d = lreq_inst.get("detail") or ""
+            if _pfx not in d:
+                ok = False
+                print("        ✗ %s 缺前缀：%s" % (tag, d[:60]))
+    print("[%s] %s（枚举 %d 条路径）" % ("OK" if ok else "!!", title, len(_detail_cases)))
+
+    # ② 结构性扫描：源码里每个产出 detail 的 return 都必须引用 _REQ_SCOPE_PREFIX
+    #
+    # 用 inspect 拿源码而非 grep 文件：selftest 跑的是「已加载的模块」，
+    # 与源码文本同源，但 inspect 不依赖文件路径，跨平台更稳。
+    #
+    # ⚠️ 计数必须**先剥掉 docstring**——docstring 里为了说明用途也提到了
+    # _REQ_SCOPE_PREFIX，若不剥离会多计 1 处，把 5 个 return/5 处引用
+    # 误判成「5 vs 6 有return 漏带前缀」。这是实现该断言时实测踩到的。
+    import inspect as _inspect
+    _src = _inspect.getsource(gt._requirement_check)
+    _doc = _inspect.getdoc(gt._requirement_check) or ""
+    if _doc:
+        # getdoc 会做 dedent/规范化，未必与源码逐字一致，故按行剔除首个三引号块
+        _lines = _src.splitlines()
+        _body = "\n".join(ln for ln in _lines if not ln.strip().startswith("#"))
+    else:
+        _body = _src
+    # 只统计出现在 return 语句块内的引用：逐个 return{ 到下一个 } 之间的片段
+    _returns = 0
+    _covered = 0
+    _chunks = _src.split("return {")[1:]
+    for _c in _chunks:
+        _seg = _c.split("\n        }")[0]
+        _returns += 1
+        if "_REQ_SCOPE_PREFIX" in _seg:
+            _covered += 1
+    # 期望：每个 return 都带前缀（_returns == _covered）。
+    # ⚠️ 若将来加了 return 却忘带前缀，这里 _covered < _returns 立刻红。
+    _struct_ok = (_returns > 0) and (_returns == _covered)
+    if not _struct_ok:
+        ok = False
+        print("        ✗ 结构性：return{%d 处，仅 %d 处带前缀 ⇒ 有 return 未自述范围"
+              % (_returns, _covered))
+        fails.append("%s FAILED: 结构性扫描发现未带前缀的 return" % title)
+    print("[%s] 结构性扫描：return{%d 处，其中带前缀 %d 处"
+          % ("OK" if _struct_ok else "!!", _returns, _covered))
+    print("    样例（取不到）=%s"
+          % ((_layer_by(_detail_cases[2][1], "L-REQ") or {}).get("detail") or "")[:120])
+
+    # 7b-7. 层数契约：无论走哪条级联分支，layers 恒为 8 层
+    title = "7b-7. 层数契约：L-REQ 在最前，且各分支恒 8 层"
+    _expect_order = ["L-REQ", "L1", "L2", "L3", "L4", "L5", "L-SQLFluff", "L-GX"]
+    _cases = [
+        ("正常通过", gt.review(sql_clean, dataset="B", _dry_run_fn=_fake_dry_run_ok)),
+        ("L1 语法失败", gt.review("SELECT ((", dataset="B", _dry_run_fn=_fake_dry_run_ok)),
+        ("L3 写操作", gt.review("INSERT INTO t VALUES (1)", dataset="B", _dry_run_fn=_fake_dry_run_ok)),
+        ("L4 语义失败", gt.review("SELECT 1 FROM x", dataset="B",
+                              _dry_run_fn=lambda s: {"ok": False, "message": "故意失败"})),
+    ]
+    ok = True
+    detail = []
+    for tag, rr in _cases:
+        got_order = [l["layer"] for l in rr["layers"]]
+        if got_order != _expect_order:
+            ok = False
+        detail.append("%s=%d层" % (tag, len(got_order)))
+    if not ok:
+        fails.append("%s FAILED: %s" % (title, detail))
+    print("[%s] %s" % ("OK" if ok else "!!", title))
+    print("    期望层序=%s" % _expect_order)
+    print("    实测=%s" % detail)
+
+    # ------------------------------------------------------------------
     # 附加：is_write() 辅助函数
     # ------------------------------------------------------------------
     title = "附加-8. is_write() 正反向用例"
@@ -201,6 +451,45 @@ def main():
         fails.append("%s FAILED: 写操作漏拦=%s 读操作误拦=%s" % (title, bad_w, bad_r))
     print("[%s] %s" % ("OK" if ok else "!!", title))
     print("    写操作漏拦=%d 读操作误拦=%d" % (len(bad_w), len(bad_r)))
+
+    # ------------------------------------------------------------------
+    # 附加-8b：退化输入（空串 / 纯空白 / 纯注释）—— **独立组，不得混入 read_cases**
+    #
+    # 为什么必须另起一组（这是个真实踩过的坑）
+    # --------------------------------------------
+    # read_cases 的断言语义是「**读操作不该被拦**」：bad_r = 被误判为写操作的读操作。
+    # 而退化输入**根本不是读操作**——它是「无法判定」。两者期望相反：
+    #   read_cases 期望 is_write == False ；退化输入期望 is_write == True（保守不放行）。
+    # 把 "" 塞进 read_cases 会在「期望 False」的断言里塞一个真值为 True 的输入 ⇒ 用例判红。
+    #
+    # 契约内容（保守方向）
+    # --------------------
+    # 退化输入一律 is_write == True。这是**保守方向：不可判定 ⇒ 不放行**，
+    # ⚠️ **不是**「已确含写操作」——调用方若要区分成因，请查 L1（语法）/ L3（只读）。
+    #
+    # ⚠️ 刻意**不钉** `sqlglot.parse("") == [None]` 这类第三方内部行为：
+    #   那是实现细节，钉死它等于给未来 sqlglot 升级埋雷。**保守行为本身才是契约。**
+    #   （成因已核对：两个环境——门禁子进程与 askoda 容器——的 sqlglot 版本不同，
+    #     但 parse('') 均为 [None]（长度 1），故走 isinstance(None, _READONLY_ROOT)
+    #     分支返回 True。⚠️ 这里**不写具体版本号**，因为版本号会随升级而过期；
+    #     若将来行为变化，先核对 sqlglot 版本再改契约，不要直接改这里的期望值。）
+    # ------------------------------------------------------------------
+    title = "附加-8b. 退化输入 is_write==True（保守方向，不混 read_cases）"
+    degenerate_cases = [
+        "",# 空串
+        "   ",            # 纯空白
+        "-- c",           # 纯注释
+    ]
+    bad_d = [c for c in degenerate_cases if not gt.is_write(c)]
+    ok = not bad_d
+    if not ok:
+        fails.append("%s FAILED: 退化输入未被保守拒绝=%s" % (title, bad_d))
+    print("[%s] %s" % ("OK" if ok else "!!", title))
+    print("    退化输入 %d 项，未被拒绝=%d（期望 0；True=不可判定故不放行）"
+          % (len(degenerate_cases), len(bad_d)))
+    # 交叉确认：这些输入确实**不在** read_cases 里（防止将来有人合并两组）
+    overlap = [c for c in degenerate_cases if c in read_cases]
+    print("    与 read_cases 重叠=%s（期望空）" % (overlap or "无"))
 
     # ------------------------------------------------------------------
     # 附加：L5 结果断言（无 exec_result 时 skipped）

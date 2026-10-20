@@ -8,6 +8,11 @@
 - 一期只新增 sqlglot 一个第三方依赖（SQLFluff / Great Expectations 留成可插拔插槽，默认关闭）
 - 「生成」与「审查」严格分离：本模块只做审查，不生成 SQL
 - 阻断 vs 警告分层：L1/L2(blocking 规则)/L3/L4 不通过则阻断，L2 其余规则只记警告不阻断，L5 无 exec_result 时 skipped
+- REQ-COVERAGE 阶段一（2026-10-19）：新增 L-REQ「需求要素」层，排在 L1 之前。
+  它审的是「结构化需求齐不齐备」，L1~L5 审的是「SQL 对不对」——两者答的不是
+  同一个问题。**无需求输入（requirement 为 None / 取不到）时 L-REQ 判 skipped，
+  绝不判红**，以免给现有不带 demand_id 的调用点造出全新失败模式。
+  阶段一只做接线与齐备性校验；要素提取与覆盖判定在阶段二。
 - M6-1 改造：L2 10 类静态规则**整体搬迁**到 gateway/rules.py 的 REGISTRY；
   gates.py 只保留 is_write / L2~L5 接线层。新增一条规则 = 只改 rules.py，
   不需要再进 gates.py 改 _static_checks。
@@ -34,7 +39,52 @@ _SQLFLUFF_ON = os.getenv("SQLFLUFF_ENABLED", "").strip() in ("1", "true", "TRUE"
 _GX_ON = os.getenv("GX_ENABLED", "").strip() in ("1", "true", "TRUE", "on", "ON")
 
 
+# L-REQ · 阶段一（REQ-COVERAGE）判据：结构化需求里必须「有结论」的槽位。
+#
+# 🔴 本段是**临时口径，阶段二会整体替换**，且**阶段一上线期间会真实跑在生产链路上**
+#   —— 它不是死代码，是会判结果的活代码（只是不阻断，见 _requirement_check）。
+#
+# 为什么是这四个单值槽位 + output_fields 非空（都是齐备性，非覆盖判定）
+# -------------------------------------------------------------------
+# 结构化需求对象共 6 个槽位字段（requirement.REQUIRED_TOP）：
+#   subject / granularity / time_semantics / data_scope / output_fields / residual_risks
+# · residual_risks 是「残余风险集合」——**空是正常的**（无风险），拿它判缺口会
+#   把「一切都好」误报成问题。
+# · output_fields 只判**空数组**：空 = 下游无列可选、SQL 根本写不出来，是齐备性问题
+#   （requirement.py:259-262 已有先例与现成文案）。
+#   ⚠️ **只判空数组，不判「字段是否在 SQL 里出现」**——后者是覆盖判定，归阶段二。
+# · 四枚单值槽位判「有无结论」：注意 build() 对无候选槽位写的占位项 value 非空
+#   （是一句中文说明）而 confidence=0.0，**两者都要看**。
+#
+# 第二阶段替换什么
+# --------------
+# 整段替换为「需求要素 vs SQL 实际输出」的**覆盖判定**，届时引入 8 字段契约
+# （element / slot / provenance / confidence / needs_confirmation / mandatory /
+#   polarity / matcher）。⚠️ 其中 `polarity` 是关键：结构化对象里「原文没提」与
+# 「原文显式豁免」都是 confidence=0，**结构上无法区分**，只有 may_cover/must_cover
+#   这个字段能分开——不引入它就会把「业务方主动豁免」误拦成「需求未覆盖」。
+_REQ_REQUIRED_SLOTS = ("subject", "granularity", "time_semantics", "data_scope")
+
+# L-REQ 每条 detail 的固定前缀：自述本层**只查了什么、没查什么**。
+#
+# 为什么必须出现在 detail（用户可见）而不是只写在 docstring（代码注释）
+# ---------------------------------------------------------------------
+# REQ-COVERAGE 要修的病就是**静默失效**：requirement 恒 None、五层全绿、
+# deliverable=true、业务方拿错数据、全程零报错。若 L-REQ 静默通过却不自述
+# 「我只查了齐备性、没查覆盖」，等于把同一个洞挖在新位置——业务方看到 L-REQ 绿了
+# 会以为「需求要素已校验通过」。
+#
+# 「缺席必须显式报未执行」这条原则，同样适用于**「在场但只做了一半」**。
+#
+# 前半句防「以为查了覆盖判定」，后半句防「以为 output_fields 有值就是指标已齐」。
+_REQ_SCOPE_PREFIX = (
+    "本阶段仅校验槽位齐备性（槽位有无结论、output_fields 是否为空）；"
+    "未做需求要素覆盖判定（未核对 SQL 是否体现需求要求的指标与维度）；覆盖校验见阶段二。\n"
+    "  "
+)
+
 _READONLY_ROOT = (exp.Select, exp.With)
+
 _WRITE_ROOT = (
     exp.Insert,
     exp.Delete,
@@ -70,6 +120,121 @@ def _lint_sqlfluff(sql: str) -> dict:
 def _gx_assert(exec_result) -> dict:
     """Great Expectations 断言插槽（一期未实现，留壳）。"""
     return {"skipped": True, "reason": "一期未启用"}
+
+
+def _requirement_check(requirement):
+    """L-REQ · 需求要素层（REQ-COVERAGE 阶段一：只接线 + 齐备性，**不判红**）。
+
+    返回 {"ok", "skipped", "detail", "gaps"}，形状与 L1-L5 对齐。
+
+    为什么单独成层、且排在 L1 之前
+    ------------------------------
+    L1-L5 审的是「SQL 本身对不对」，答不了「需求要的东西在不在」——
+    这正是 REQ-COVERAGE 缺陷能五层全绿的原因：SELECT 语法没错、只读、语义层认得、
+    可 GROUP BY 与输出列一致，唯独「月度」「订单数」「已退款金额」三项
+    从未进入过任何一层的视野。L-REQ 补的是这个洞，故排在最前。
+
+    🔴 阶段一为什么**绝不判 ok=False**（临时口径，误拦风险已知）
+    -------------------------------------------------------
+    阶段一只判**齐备性**（槽位有没有结论），不判**覆盖判定**（有结论但 SQL 没体现）。
+    齐备性缺口离「判定需求是否被满足」还差一整个阶段，**不构成阻断理由**。
+
+    误拦是**已实测复现**的，不是理论风险：`requirement.py:237-241` 对无候选槽位写的是
+    `{"value": "无候选结论（该槽位在本轮分析中为空）", "confidence": 0.0}`，
+    而「各门店总销售额」这类**原文根本没提时间**的需求，其 `time_semantics`
+    正是这个形态⇒ 若据此判红，业务方任何没提时间的正常提问都会被拦。
+
+    根因值得记住：**「槽位缺失」与「业务方没要求」在结构化需求对象里是同一个信号
+    （都是 `confidence=0`），结构上无法区分。** 这正是阶段二契约必须引入 `polarity`
+    的原因——`may_omit`（显式豁免）与「原文未提」（沉默缺失）只有加上这个字段才分得开。
+
+    阶段一的四条硬约束
+    ------------------
+    1. **无需求输入一律 skipped，绝不判红**。调用方不传 requirement 时
+       （现有 sqlgen / sqlrun 三处调用都不传），若判红就是给全链路造出
+       一个全新失败模式——这比原缺陷更难查。
+    2. **只报告，不改写**。本层只产出 gaps，绝不触碰改写字段
+       （红线 D1：门禁失败时自动改写 SQL 是被机械判据 check_r3_d1 盯着的）。
+    3. **detail 必须自述范围**。本函数每一条返回路径的 detail 都带
+       _REQ_SCOPE_PREFIX——业务方在界面上看不到代码注释，若静默通过却不自述
+       「只查了齐备性、没查覆盖」，等于把 REQ-COVERAGE 要修的那个洞挖在新位置。
+    4. **⚠️ 本函数在阶段二会被整体替换**（含 gaps 判定与本段判据）。
+
+    槽位口径（勿绕开）
+    ------------------
+    传入对象是 requirement.build/get 产出的**结构化技术需求对象**，其字段名
+    是设计文档口径：subject / granularity / time_semantics / data_scope /
+    output_fields / residual_risks（见 requirement.SLOT_MAP）。
+    **不是** M3 slots 的 time / scope / fields / risks——直取后者会 KeyError。
+    """
+    # 需求不可用（未传 / 取不到 / 模块未就绪）→ skipped，不判红。
+    # 三种情形都归到这里，因为它们回答的都是「没有可比对的需求」，
+    # 而不是「需求不合格」。
+    if requirement is None:
+        return {
+            "ok": True, "skipped": True, "gaps": [],
+            "detail": _REQ_SCOPE_PREFIX
+                      + "跳过原因：未提供结构化需求（调用方未传 demand_id），本层不参与总状态。",
+        }
+    if not isinstance(requirement, dict):
+        return {
+            "ok": True, "skipped": True, "gaps": [],
+            "detail": _REQ_SCOPE_PREFIX
+                      + "跳过原因：结构化需求类型异常（%s），本层不参与总状态。"
+                      % type(requirement).__name__,
+        }
+    if requirement.get("ok") is False:
+        # requirement.get 查不到时返回的就是 {"ok": False, "error": ...}。
+        # 这是「取不到」，不是「不合格」——skipped 并把原因写进 detail。
+        return {
+            "ok": True, "skipped": True, "gaps": [],
+            "detail": _REQ_SCOPE_PREFIX
+                      + "跳过原因：结构化需求不可用（%s），本层不参与总状态。"
+                      % str(requirement.get("error") or requirement.get("reason") or "")[:160],
+        }
+
+    gaps = []
+    for slot in _REQ_REQUIRED_SLOTS:
+        claim = requirement.get(slot)
+        if not isinstance(claim, dict):
+            gaps.append("槽位「%s」缺失或类型异常（实际 %s）"
+                        % (slot, type(claim).__name__))
+            continue
+        value = claim.get("value")
+        confidence = claim.get("confidence")
+        # build() 对取不到候选的槽位写的是占位项：value 明写「无候选结论」且
+        # confidence=0.0（见 requirement.build 的 absent 分支）。所以
+        # 「值空」与「confidence 为 0」两个信号等价于「这一槽位没有结论」。
+        if value is None or str(value).strip() == "":
+            gaps.append("槽位「%s」无结论（value 为空）" % slot)
+        elif isinstance(confidence, (int, float)) and not isinstance(confidence, bool) and confidence <= 0:
+            gaps.append("槽位「%s」无结论（confidence=0，本轮未产出可信候选）" % slot)
+
+    # output_fields 空数组 = 齐备性问题（下游无列可选，SQL 根本写不出来），
+    # 不是覆盖判定。requirement.py:259-262 已有先例与现成文案。
+    # ⚠️ 只判「空数组」，**不判「字段是否在 SQL 里出现」**——后者是覆盖判定，归阶段二。
+    of = requirement.get("output_fields")
+    if not isinstance(of, list):
+        gaps.append("output_fields 缺失或类型异常（实际 %s），下游无可选输出列"
+                    % type(of).__name__)
+    elif not of:
+        gaps.append("output_fields 为空数组，下游无可选输出列（SQL 无列可 SELECT）")
+
+    if gaps:
+        # 注意 ok=True：**阶段一有缺口也不阻断**，只报warning。
+        # 阻断能力完整留给阶段二（那时才引入 polarity 区分 must_cover / may_omit）。
+        return {
+            "ok": True, "skipped": False, "gaps": gaps,
+            "detail": _REQ_SCOPE_PREFIX
+                      + "检出 %d 项齐备性缺口（仅提示，不阻断）：\n" % len(gaps)
+                      + "\n".join("  - " + g for g in gaps),
+        }
+    return {
+        "ok": True, "skipped": False, "gaps": [],
+        "detail": _REQ_SCOPE_PREFIX
+                  + "齐备性通过：%d 项必备槽位均有结论、output_fields 非空。"
+                  % len(_REQ_REQUIRED_SLOTS),
+    }
 
 
 def _static_checks(ast_stmt, ctx=None) -> list:
@@ -148,13 +313,16 @@ def review(
     dataset : 数据集键，默认 B。用于 L4 语义门禁定位 Wren 客户端，也用于 L2 的 R1/R5/R6 三类
               需要 MDL 的规则——调用 rules.build_mdl_index(dataset) 现场建一次（如果
               ctx 没给 mdl_index）。
-    requirement : 结构化技术需求对象（一期未深度使用；原样透传给 L2 ctx）
+    requirement : 结构化技术需求对象（requirement.get 的返回值）。两个用途：
+              ① L-REQ 需求要素层的唯一输入；② 原样透传给 L2 ctx。
+              **传 None / 取不到时 L-REQ 判 skipped，绝不判红**。
     exec_result : 真实执行后的结果集，供 L5 断言。传 None 时 L5 标记 skipped
     _dry_run_fn : 仅自测注入用：替换 Wren dry_run 的假桩函数
 
     返回
     ----
-    dict: {status, layers, syntax_issues, semantic_issues, rule_violations, revised_sql, review_notes}
+    dict: {status, layers, syntax_issues, semantic_issues, rule_violations, revised_sql,
+           review_notes, requirement_gaps}
     """
     layers = []
     syntax_issues = []
@@ -162,6 +330,23 @@ def review(
     rule_violations = []
     revised_sql = None
     notes = []
+
+    # L-REQ 需求要素层：排在最前。
+    #
+    # 为什么不受 L1/L3/L4 级联跳过的约束：L-REQ 判的是「结构化需求本身齐不齐备」，
+    # 既不依赖 SQL 文本，也不依赖 SQL 能否解析——L1 挂了不影响它照样判。
+    # 反过来 L1~L5 也一样看不到需求，所以它排在级联链之前而非之后。
+    #
+    # 只报告不改写（红线 D1）：本层只往 requirement_gaps 里写，绝不碰 revised_sql。
+    _req = _requirement_check(requirement)
+    layers.append({
+        "layer": "L-REQ",
+        "name": "需求要素",
+        "ok": _req["ok"],
+        "skipped": _req["skipped"],
+        "detail": _req["detail"],
+    })
+    requirement_gaps = list(_req["gaps"])
 
     l1_ok = True
     l1_skipped = False
@@ -220,6 +405,7 @@ def review(
             "rule_violations": rule_violations,
             "revised_sql": revised_sql,
             "review_notes": "L1 语法校验未通过，已阻断：" + "；".join(syntax_issues),
+            "requirement_gaps": requirement_gaps,
         }
 
     # L2 静态规则：一次性建 ctx，R1/R5/R6 若需要 mdl_index 可现场 build
@@ -336,6 +522,7 @@ def review(
             "rule_violations": rule_violations,
             "revised_sql": revised_sql,
             "review_notes": "L3 只读校验未通过，已阻断：" + "；".join(l3_msgs),
+            "requirement_gaps": requirement_gaps,
         }
 
     l4_ok = True
@@ -398,6 +585,7 @@ def review(
             "rule_violations": rule_violations,
             "revised_sql": revised_sql,
             "review_notes": "L4 语义校验未通过，已阻断：%s" % l4_msg,
+            "requirement_gaps": requirement_gaps,
         }
 
     l5_ok = True
@@ -442,7 +630,23 @@ def review(
 
     # 分级阻断（2026-10-02）：L2 纳入阻断层 —— 其 ok 已按规则的 blocking 标记算好
     # （只有 blocking 命中才为 False），故与 L1/L3/L4/L5 同列。
-    blocking_layers = [l for l in layers if l["layer"] in ("L1", "L2", "L3", "L4", "L5")]
+    #
+    # REQ-COVERAGE 阶段一（2026-10-19）：L-REQ 纳入阻断层。
+    #
+    # 🔴 这里加不加 "L-REQ"，决定 L-REQ 是「真门禁」还是「只打分的旁观者」——
+    # 漏加不会报错、不会告警，层照样出现在 layers 里、detail 照样写得漂亮，
+    # 只是 ok=False 永远不改变 status。**改这一行等于决定门禁是否生效**。
+    #
+    # ⚠️ 阶段一 `_requirement_check` 从不置 ok=False（有缺口也只提示），所以本元组里
+    # 的 "L-REQ" 在阶段一**不会真的触发阻断**——这是刻意的：阶段一只判齐备性。
+    # **「不阻断」靠的是不置 ok=False，不是靠移出本元组**，两者不冲突，别改错。
+    # 阶段二引入 polarity 覆盖判定后，本元组即刻生效，无需再改这里。
+    # has_blocking_fail 同时要求 ok=False 且 skipped=False，所以「无需求输入
+    # → skipped」这一路不会因为进了本元组就变成阻断（见 _requirement_check）。
+    blocking_layers = [
+        l for l in layers
+        if l["layer"] in ("L-REQ", "L1", "L2", "L3", "L4", "L5")
+    ]
     has_blocking_fail = any(
         (not l["ok"]) and (not l["skipped"]) for l in blocking_layers
     )
@@ -452,6 +656,12 @@ def review(
         final_status = "警告"
     else:
         final_status = "通过"
+
+    # L-REQ 齐备性缺口：阶段一**只提示不阻断**（_requirement_check 已保证 ok=True），
+    # 但缺口必须留痕到 notes——否则「层显示通过、gaps 非空」又是一处静默失效。
+    if _req["gaps"]:
+        notes.append("L-REQ 提示 %d 项齐备性缺口（阶段一不阻断，覆盖校验见阶段二）：%s"
+                     % (len(_req["gaps"]), "；".join(_req["gaps"][:3])))
 
     if final_status == "警告" and not notes:
         rules_set = sorted({i["rule"] for i in semantic_issues})
@@ -466,4 +676,5 @@ def review(
         "rule_violations": rule_violations,
         "revised_sql": revised_sql,
         "review_notes": review_notes,
+        "requirement_gaps": requirement_gaps,
     }

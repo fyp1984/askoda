@@ -84,8 +84,13 @@ SAMPLE_DEMAND = {
 
 # 必须实际跑通（非 skipped）的门禁层；L5 结果断言依赖 exec_result，
 # 在 ④ 生成阶段天然 skipped，故只在 ⑤ 断言。
+#
+# 🔴 L-REQ **故意不在此列表里**：它的 skipped 条件是「无 demand_id / 结构化需求取不到」，
+# 而本脚本的 ④ 走的是 sql_generate 链路（该链路当前不传 requirement），
+# L-REQ 必然 skipped。把它塞进来等于给本脚本造一个必红的假红。
+# 等阶段二让 sql_generate/sql_execute_readonly 也串上需求后，再考虑纳入。
 REQUIRED_LAYERS_SQL = ("L1", "L2", "L3", "L4")
-EXPECTED_LAYER_COUNT = 7          # L1-L5 + L-SQLFluff + L-GX
+EXPECTED_LAYER_COUNT = 8          # L-REQ + L1-L5 + L-SQLFluff + L-GX
 HTTP_TIMEOUT = 300
 
 
