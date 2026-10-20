@@ -128,7 +128,7 @@
         {"id": "G4-B3-02", "layer": "G4", "judgement": "真实跑通四动作闭环，有真实 HTTP 响应证据", "blocking": true, "实测": "✅ 执行 Agent 实测（evidence.json 落盘）"},
         {"id": "G4-B3-03", "layer": "G4", "judgement": "e2e-status 聚合接口返回完整键结构", "blocking": true, "实测": "✅ 六键齐聚 + partial_errors"},
         {"id": "G4-B3-04", "layer": "G4", "judgement": "partial_errors 生效：故意让子调用失败不 500", "blocking": true, "实测": "✅ demand_get 失败仍返回 200"},
-        {"id": "G4-B3-05", "layer": "G0", "cmd": "tools/r2_check.py", "judgement": "R2：前端产物与 BFF 响应均不含开源地址/端口", "blocking": true, "实测": "✅ 源码 grep 为空；运行时响应由 sanitize 白名单兜住（**建议补动态门禁：打真实网关断言脱敏后不含 wren-mcp/wren-postgres/:9000/:5432//workspace-**）"},
+        {"id": "G4-B3-05", "layer": "G0", "cmd": "tools/r2_check.py", "judgement": "R2：前端产物与 BFF 响应均不含开源地址/端口", "note": "该脚本已更名为 tools/arch_r2_leak_check.py（区分「架构红线 R2」与 redline_guard.py 的「提交红线 R2」；保留 _check.py 后缀以留在 G2 发现口径内）", "blocking": true, "实测": "✅ 源码 grep 为空；运行时响应由 sanitize 白名单兜住（**建议补动态门禁：打真实网关断言脱敏后不含 wren-mcp/wren-postgres/:9000/:5432//workspace-**）"},
         {"id": "G4-B3-06", "judgement": "前端类型从 OpenAPI 契约生成，未手写接口类型", "blocking": false, "note": "已交付 web/scripts/gen-api-types.mjs 生成器；因缺依赖未实际执行，标 blocked"},
         {"id": "G4-B3-07", "layer": "G4", "judgement": "确认答复后自动重跑 analyze", "blocking": true, "实测": "✅ Page3 已实现自动重跑"},
         {"id": "G4-B3-08", "layer": "G2", "script": "tools/redline_guard.py", "judgement": "红线 CLEAR", "blocking": true, "实测": "✅ 全程未触"}
@@ -259,7 +259,7 @@
       "prerequisite_note": "对外封装的前提是检索稳定可用。当前 bge-m3 的 embedding 仍在本机（远端服务因 Tailscale 网段不可达，见 B4c），且 TEI 是**单点**（停容器检索即断）。对外之前应先解决：① embedding 迁到稳定可用的固定地址；② TEI 单点风险。",
       "suggested_order": [
         "① 先按用户本轮指示「跑通流程优先」：embedding 迁远端（B4c，需先解决容器到 Tailscale 网段的路由）",
-        "② 补常设门禁 tools/r2_check.py（打真实网关断言脱敏）",
+        "② 补常设门禁 tools/arch_r2_leak_check.py（打真实网关断言脱敏）",
         "③再做 FileBay 品牌的 UI 封装（B4d），届时需要一个稳定的 embedding 地址 + 界面层设计"
       ],
       "no_conflict_verified": "已扫全库：现行文档中**无「剔除 FileBay」类表述残留**（08-归档 2 份为历史快照，保留原值）。新方向与既有口径不冲突。"

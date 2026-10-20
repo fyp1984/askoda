@@ -67,8 +67,10 @@ _GX_ON = os.getenv("GX_ENABLED", "").strip() in ("1", "true", "TRUE", "on", "ON"
 # 整段替换为「需求要素 vs SQL 实际输出」的**覆盖判定**，届时引入 8 字段契约
 # （element / slot / provenance / confidence / needs_confirmation / mandatory /
 #   polarity / matcher）。⚠️ 其中 `polarity` 是关键：结构化对象里「原文没提」与
-# 「原文显式豁免」都是 confidence=0，**结构上无法区分**，只有 may_cover/must_cover
+# 「原文显式豁免」都是 confidence=0，**结构上无法区分**，只有 must_cover/may_omit
 #   这个字段能分开——不引入它就会把「业务方主动豁免」误拦成「需求未覆盖」。
+#   ⚠️ 取值域以 8 字段契约为准：must_cover | may_omit。
+#   may_omit 有两个成因（沉默缺失 / 业务方显式豁免），detail 文案必须能区分二者。
 _REQ_REQUIRED_SLOTS = ("subject", "granularity", "time_semantics", "data_scope")
 
 # L-REQ 每条 detail 的固定前缀：自述本层**只查了什么、没查什么**。

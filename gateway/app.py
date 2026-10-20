@@ -1,3 +1,21 @@
+from fastmcp import FastMCP
+from starlette.responses import JSONResponse
+from wren import WrenClient, WrenError
+import analysis as analysis_mod
+import attachments
+import collect as collect_mod
+import db
+import demand as demand_mod
+import json
+import knowledge
+import mdl_check
+import metadata as metadata_mod
+import os
+import planner as planner_mod
+import registry
+import time
+import urllib.error
+import urllib.request
 # -*- coding: utf-8 -*-
 """数据需求智能分析助手 · 服务端网关（M1 骨架 + M2 受理与知识底座 + M3 语义分析与确认闭环）
 
@@ -40,27 +58,9 @@
     KNOWLEDGE_API_URL / KNOWLEDGE_API_KEY / KNOWLEDGE_DATASET_ID —— RAGFlow 独立栈知识底座
     GATEWAY_HOST / GATEWAY_PORT
 """
-import json
-import os
-import time
-import urllib.error
-import urllib.request
 
-from starlette.responses import JSONResponse
 
-from fastmcp import FastMCP
 
-import analysis as analysis_mod
-import attachments
-import collect as collect_mod
-import db
-import demand as demand_mod
-import knowledge
-import mdl_check
-import metadata as metadata_mod
-import planner as planner_mod
-import registry
-from wren import WrenClient, WrenError
 
 GATEWAY_NAME = "数据需求智能分析助手 · 网关"
 GATEWAY_VERSION = "0.3.0"

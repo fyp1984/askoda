@@ -21,6 +21,14 @@ os.environ.setdefault("MDL_A_PATH", os.path.join(ROOT, "wren-docker", "workspace
 os.environ.setdefault("MDL_B_PATH", os.path.join(ROOT, "wren-docker-b", "workspace", "mdl.json"))
 sys.path.insert(0, os.path.join(HERE, "..", "gateway"))
 import gates as gt  # noqa: E402
+# 门禁层数的**唯一权威来源**：与 G3 的 tools/e2e_verify.py 共用同一常量。
+#
+# ⚠️ 为什么从 gateway/gate_contract.py 取，而不是从 e2e_verify.py 取：
+# 本脚本是 **G1 离线自证**（docstring 明写"离线，不需要容器与 Wren"），
+# e2e_verify.py 是 **G3 真实链路**（依赖容器与真实服务）。反向 import 会把
+# G3 的依赖拖进 G1，破坏本脚本的离线可跑契约。gate_contract 是零依赖中性模块，
+# 两侧都可安全 import。详见该模块 docstring。
+from gate_contract import EXPECTED_LAYER_COUNT  # noqa: E402
 
 
 def _fake_dry_run_ok(sql):
@@ -402,11 +410,12 @@ def main():
     print("    样例（取不到）=%s"
           % ((_layer_by(_detail_cases[2][1], "L-REQ") or {}).get("detail") or "")[:120])
 
-    # ⚠️ 已知待处理：此处硬编码 8 层，与 tools/e2e_verify.py 的 EXPECTED_LAYER_COUNT = 8
-    #    是两个独立来源，门禁层数演进时会再次脱节。待抽共享常量统一（已立项）。
-    #    本行是「层数契约断言」而非对外文案，故不在 D-LAYER 的去数字化范围内。
-    # 7b-7. 层数契约：无论走哪条级联分支，layers 恒为 8 层
-    title = "7b-7. 层数契约：L-REQ 在最前，且各分支恒 8 层"
+    # ------------------------------------------------------------------
+    # 7b-7. 层数契约
+    # ------------------------------------------------------------------
+    # 层数取权威常量（gateway/gate_contract.py），不写死字面量——否则它会与
+    # tools/e2e_verify.py 的同一事实脱节，且脱节表现为「两边各自全绿」不报错。
+    title = "7b-7. 层数契约：L-REQ 在最前，且各分支恒 %d 层" % EXPECTED_LAYER_COUNT
     _expect_order = ["L-REQ", "L1", "L2", "L3", "L4", "L5", "L-SQLFluff", "L-GX"]
     _cases = [
         ("正常通过", gt.review(sql_clean, dataset="B", _dry_run_fn=_fake_dry_run_ok)),
@@ -421,12 +430,105 @@ def main():
         got_order = [l["layer"] for l in rr["layers"]]
         if got_order != _expect_order:
             ok = False
+        # 层数单独再钉一次，且用权威常量：层序断言虽已隐含层数，但那条是
+        # 「与 _expect_order 一致」的间接判据。显式钉层数才能让常量真正生效——
+        # 否则改常量不改 gates.py 时本脚本照样全绿，等于没收敛。
+        if len(got_order) != EXPECTED_LAYER_COUNT:
+            ok = False
         detail.append("%s=%d层" % (tag, len(got_order)))
     if not ok:
         fails.append("%s FAILED: %s" % (title, detail))
     print("[%s] %s" % ("OK" if ok else "!!", title))
     print("    期望层序=%s" % _expect_order)
     print("    实测=%s" % detail)
+
+    # ------------------------------------------------------------------
+    # 7b-8. ★★ 阻断能力**可测性**用例：L-REQ 判红 ⇒ status 必须变「不通过」
+    #
+    # ⚠️ 为什么这条必须存在（不是「锦上添花」，是本阶段的唯一保证）
+    # -----------------------------------------------------------
+    # REQ-COVERAGE 阶段二的所有阻断能力都挂在**同一个开关**上：
+    # gateway/gates.py 的 `blocking_layers` 元组里含不含 "L-REQ"。
+    # 含 ⇒ L-REQ 的 ok=False 真的能把 status 打成「不通过」；
+    # 不含 ⇒ L-REQ 永远只是「层在列表里、detail 写得漂亮、但 ok=False 不改变 status」的旁观者。
+    #
+    # 🔴 风险性质要记住：**不是「代码失效」，是「失效了也没人知道」**。
+    # 架构师实测 monkeypatch 造 ok=False 时 status 确实变「不通过」，
+    # 但**零测试覆盖**——7b-1..7b-7 每一条都断言 ok is True，
+    # **没有任何一条能触发 ok=False 分支**。
+    # 于是「blocking_layers 少了 L-REQ」这个改动会**全绿通过**：
+    # 没有一处红灯能指认它。这就是「静默失效」的教科书形状。
+    #
+    # ⇒ 本用例是**唯一**能让该改动变红的哨兵。
+    #
+    # ⚠️ 负向验证已做（参照 7b-6 的做法，见文件里本用例的负向验证记录）：
+    #   把 gateway/gates.py 的 blocking_layers 元组里删掉 "L-REQ" ⇒ 本用例**变红**；
+    #   恢复后全绿。两次均已复原原状。
+    #   ⚠️ 改动本用例后请重做该负向验证。
+    # ------------------------------------------------------------------
+    title = "7b-8. ★★ L-REQ 判红 ⇒ status=不通过（blocking_layers 含 L-REQ）"
+    # 阴性对照：同一条 SQL 在**未注入**时必须是通过的——
+    # 否则「status 变不通过」可能由别的层造成，本用例就证明不了 L-REQ 的传导性。
+    #
+    # ⚠️ 必须传 requirement=_req_ok（槽位齐备的那份）：不传时 L-REQ 判 **skipped=True**
+    #（未提供结构化需求 → 本层不参与总状态），skipped 的层压根不参与阻断，
+    # 阴性对照就变成「拿一个旁路状态当基线」，证明力为零。
+    # 传了之后 L-REQ 是 ok=True/skipped=False，注入把它翻成 ok=False/skipped=False，
+    # 前后唯一变量就是 ok/skipped 这一个信号 ⇒ status 的变化只能归因于 L-REQ。
+    _r_before = gt.review(sql_clean, dataset="B", requirement=_req_ok,
+                          _dry_run_fn=_fake_dry_run_ok)
+    _lreq_before = _layer_by(_r_before, "L-REQ")
+    _baseline_clean = (
+        _r_before["status"] == "通过"
+        and _lreq_before and _lreq_before["ok"] is True
+        and _lreq_before["skipped"] is False
+    )
+    if not _baseline_clean:
+        fails.append("%s FAILED: 阴性对照不成立（注入前 status=%s L-REQ=%s）"
+                     % (title, _r_before["status"], _lreq_before))
+
+    # 注入：monkeypatch 掉 _requirement_check，强制返回 ok=False / skipped=False。
+    # ⚠️ skipped 必须同时为 False——has_blocking_fail 判的是
+    #   `(not ok) and (not skipped)`，skipped=True 会让这一层被跳过（不阻断）。
+    #   只造 ok=False 而不造 skipped=False，测的就不是阻断路径了。
+    # ⚠️ gaps 故意留空：本用例只钉「ok=False ⇒ status 变不通过」这条传导链，
+    #   不耦合 gaps 的语义（gaps 的内容在阶段二会被整体重定义）。
+    _orig_req_check = gt._requirement_check
+
+    def _forced_covering_gap(requirement):
+        return {
+            "ok": False, "skipped": False, "gaps": [],
+            "detail": "（注入桩）L-REQ 强制判红：覆盖缺口",
+        }
+
+    try:
+        gt._requirement_check = _forced_covering_gap
+        r = gt.review(sql_clean, dataset="B", requirement=_req_ok,
+                      _dry_run_fn=_fake_dry_run_ok)
+    finally:
+        # 必须复原：漏复原会让后续用例全部在「假 L-REQ 恒判红」的状态下跑，
+        # 它们的绿灯将不再可信（且这本身又是一处静默失效）。
+        gt._requirement_check = _orig_req_check
+    lreq = _layer_by(r, "L-REQ")
+    ok = (
+        _baseline_clean
+        and r["status"] == "不通过"
+        and lreq and lreq["ok"] is False and lreq["skipped"] is False
+    )
+    if not ok:
+        fails.append("%s FAILED: status=%s L-REQ=%s" % (title, r["status"], lreq))
+    print("[%s] %s" % ("OK" if ok else "!!", title))
+    print("    阴性对照（注入前）status=%s  L-REQ(ok=%s skipped=%s)" % (
+        _r_before["status"],
+        _lreq_before["ok"] if _lreq_before else None,
+        _lreq_before["skipped"] if _lreq_before else None,
+    ))
+    print("    注入后 status=%s  L-REQ(ok=%s skipped=%s)" % (
+        r["status"],
+        lreq["ok"] if lreq else None,
+        lreq["skipped"] if lreq else None,
+    ))
+    print("    复原后 L-REQ 仍是原实现：%s" % (gt._requirement_check is _orig_req_check))
 
     # ------------------------------------------------------------------
     # 附加：is_write() 辅助函数

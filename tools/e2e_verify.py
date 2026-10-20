@@ -66,6 +66,12 @@ import urllib.request
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "gateway"))
 
+# 门禁层数的**唯一权威来源**在 gateway/gate_contract.py（G1/G3 共用的中性模块）。
+# 此处只引用、不另立一份——两份独立来源会在层数演进时再次脱节，且脱节表现为
+# 「两边各自全绿」，不会报错。选用中性模块而非本脚本，是为了不把 G3 的
+# 容器/真实链路依赖拖进 G1 的 gates_selftest.py（详见该模块 docstring）。
+from gate_contract import EXPECTED_LAYER_COUNT  # noqa: E402
+
 BFF_BASE = os.getenv("E2E_BFF_BASE", "http://127.0.0.1:18081").rstrip("/")
 API = BFF_BASE + "/api/v1"
 DATASET = "B"
@@ -90,7 +96,7 @@ SAMPLE_DEMAND = {
 # L-REQ 必然 skipped。把它塞进来等于给本脚本造一个必红的假红。
 # 等阶段二让 sql_generate/sql_execute_readonly 也串上需求后，再考虑纳入。
 REQUIRED_LAYERS_SQL = ("L1", "L2", "L3", "L4")
-EXPECTED_LAYER_COUNT = 8          # L-REQ + L1-L5 + L-SQLFluff + L-GX
+# EXPECTED_LAYER_COUNT 由 gateway/gate_contract.py 导入（见文件上方），此处不再定义副本。
 HTTP_TIMEOUT = 300
 
 
