@@ -161,6 +161,11 @@ services:
       GATEWAY_HOST: "0.0.0.0"
       GATEWAY_PORT: "8080"
       GATEWAY_MCP_PATH: "/mcp"
+      # 🔴 交付门禁：覆盖判定默认 blocking（需求要素被 SQL 丢失时门禁判红、不交付）。
+      #   这是 2026-10-21 MVP 审查确认的最高优先级缺陷修复——
+      #   此前默认 report-only，覆盖缺失只留痕不阻断，业务方会拿到错数据且全程零报错。
+      #   切回 report-only 调试：REQ_COVERAGE_MODE=report-only。
+      REQ_COVERAGE_MODE: "blocking"
       # 容器内走服务名，不经宿主机回环
       WREN_A_URL: "http://wren-mcp-a:9000"
       WREN_B_URL: "http://wren-mcp-b:9000"
@@ -168,10 +173,13 @@ services:
       MDL_B_PATH: "/app/mdl/b.json"
       # --- M2 新增 ---
       # 网关自有元数据库（需求单 / 元数据字典 / 流转留痕）
-      ASSISTANT_DB_DSN: "postgresql://assistant:assistant@assistant-postgres:5432/assistant"
+      # compose 内部用服务名连元数据库；${COMPOSE_ASSISTANT_DB_DSN:-默认} 允许生产覆盖。
+      # ⚠️ 故意用 COMPOSE_ 前缀：.env.example 里的 ASSISTANT_DB_DSN 是「宿主机直连」口径
+      #   （host=127.0.0.1），compose 自动加载 .env 会污染此处，故二者变量名隔离。
+      ASSISTANT_DB_DSN: "${COMPOSE_ASSISTANT_DB_DSN:-postgresql://assistant:assistant@assistant-postgres:5432/assistant}"
       # 元数据采集用的数据源直连串（仅采集结构，查询一律走语义层）
-      WREN_PG_A_DSN: "postgresql://test:test@host.docker.internal:15432/test"
-      WREN_PG_B_DSN: "postgresql://test:test@host.docker.internal:15432/retail"
+      WREN_PG_A_DSN: "${COMPOSE_WREN_PG_A_DSN:-postgresql://test:test@host.docker.internal:15432/test}"
+      WREN_PG_B_DSN: "${COMPOSE_WREN_PG_B_DSN:-postgresql://test:test@host.docker.internal:15432/retail}"
       # 附件对象存储：2026-10-15 起改用 **EKOS 统一对象存储**（ekos-minio，EKOS 冻结端口 19000/19001）。
       # 走 host.docker.internal 而非服务名：ekos-minio 属 EKOS 的 compose 项目（网络不同，
       # 本工程不接入它的网络，避免编排耦合）；与 WREN_PG_* / KNOWLEDGE_API_URL 同一口径。
@@ -347,8 +355,8 @@ services:
     container_name: askoda-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: assistant
-      POSTGRES_PASSWORD: assistant
+      POSTGRES_USER: "${ASSISTANT_PG_USER:-assistant}"
+      POSTGRES_PASSWORD: "${ASSISTANT_PG_PASSWORD:-assistant}"
       POSTGRES_DB: assistant
     ports:
       - "${ASSISTANT_PG_PORT:-15434}:5432"
@@ -369,8 +377,8 @@ services:
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: assistant
-      MINIO_ROOT_PASSWORD: assistant123
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-assistant}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-assistant123}"
     # [2026-10-15] 本服务已停用：附件对象存储改用 EKOS 统一对象存储（ekos-minio，
     # 宿主 19000/19001 = 本工程原先占用的同一组端口，两边只能留一个）。
     # 服务段与 askoda-minio-data 卷**保留不删**（数据 40.9 kB，且便于回滚）；

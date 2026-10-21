@@ -1,0 +1,62 @@
+/* =====================================================================
+   askoda · Design Tokens — PRIMITIVE LAYER (raw values, no semantics)
+   ---------------------------------------------------------------------
+   职责边界（与 semantic.css 分工）：
+   · 本文件只存「原始调色板 ramp」：--<hue>-<step>，无任何语义。
+   · 语义别名（--color-* / --bg-* / --border-* / --state-* / --space-* /
+     --radius-* / --text-* / --shadow-*）由 semantic.css 定义，组件
+     唯一入口。组件禁止直接引用本文件的 primitive。
+   · 主题切换：html[data-theme="dark"] 只覆盖 semantic.css 的语义变量；
+     本文件 primitive 值本身不动。暗色专用的中性灰以 gray-8xx / gray-d
+     命名，供 semantic.css 的 dark 块引用。
+   · 间距/圆角/字号/阴影等离散 scale 不放本层（属语义层，见 semantic.css）。
+   ===================================================================== */
+
+:root {
+  /* ---- 中性灰阶 ramp（亮色基底，由浅到深）---- */
+  --gray-0:   #ffffff; /* 纯白 / 亮色面板 bg-panel */
+  --gray-50:  #f7f8fa; /* 页面底 bg-app */
+  --gray-100: #f3f5f8; /* 次级面 bg-panel-2 / 表头 / 嵌套区 */
+  --gray-200: #e6e8ec; /* 描边 border */
+  --gray-300: #d4d8de; /* 主描边 border-strong */
+  --gray-400: #c2c8d0; /* 禁用 text-disabled */
+  --gray-500: #6b7280; /* 辅助 muted（亮色） */
+  --gray-600: #4b5563; /* 次文 text-secondary（亮色） */
+  --gray-700: #1f2430; /* 主文 text（亮色） */
+
+  /* ---- 中性灰阶 ramp（暗色基底，仅供 semantic.css dark 块引用）---- */
+  --gray-900:  #0f1115; /* 暗色页面底 bg-app */
+  --gray-850:  #171a21; /* 暗色面板 bg-panel */
+  --gray-800:  #1e222b; /* 暗色次级面 bg-panel-2 */
+  --gray-750:  #2a2f3a; /* 暗色描边 border */
+  --gray-700d: #3a414f; /* 暗色主描边 border-strong */
+  --gray-600d: #545b69; /* 暗色禁用 text-disabled */
+  --gray-500d: #8b94a3; /* 暗色辅助 muted */
+  --gray-450d: #aeb6c2; /* 暗色次文 text-secondary */
+  --gray-400d: #e6e9ef; /* 暗色主文 text */
+
+  /* ---- 品牌蓝 ramp（收敛现有 4 套蓝 #1f5fd0/#2f6fb0/#2b5fd9/#1a5fb4 为 1 套）---- */
+  --blue-50:   #eff4ff; /* primary-subtle 浅底（选中行/当前态底） */
+  --blue-400:  #3b82f6; /* 暗色装饰 emphasis（仅大块装饰，非按钮文字） */
+  --blue-500:  #2563eb; /* primary 主色（关键操作 + 当前态） */
+  --blue-600:  #1d4ed8; /* primary-hover */
+  --blue-700:  #1e40af; /* primary-active */
+
+  /* ---- 成功绿 ramp ---- */
+  --green-50:   #ecfdf3; /* success-bg 浅底 */
+  --green-400:  #22c55e; /* 暗色 success */
+  --green-500:  #16a34a; /* success */
+  --green-700:  #067647; /* success-text 深字 */
+
+  /* ---- 警告琥珀 ramp ---- */
+  --amber-50:   #fffaeb; /* warning-bg 浅底 */
+  --amber-400:  #f59e0b; /* 暗色 warning */
+  --amber-500:  #d97706; /* warning */
+  --amber-700:  #b45309; /* warning-text 深字 */
+
+  /* ---- 危险红 ramp ---- */
+  --red-50:   #fef3f2; /* danger-bg 浅底 */
+  --red-400:  #ef4444; /* 暗色 danger */
+  --red-500:  #dc2626; /* danger */
+  --red-700:  #b42318; /* danger-text 深字 */
+}
