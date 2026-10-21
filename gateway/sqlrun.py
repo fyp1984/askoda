@@ -129,9 +129,21 @@ def execute_readonly(sql, dataset="B", demand_id=None, requirement_version=None,
 
     sql_text = str(sql_effective).strip()
 
+    # ⚠️ REQ-COVERAGE 接线（2026-10-20）：把结构化需求喂给 L-REQ。
+    # 不喂 requirement 时 L-REQ 恒判 skipped ⇒ 需求要素在**执行链路**上
+    # 从未进入任何一层的视野 ⇒ 阶段二的覆盖判定在主链路上是**死的**。
+    #
+    # ⚠️ 取法：复用 sqlgen._requirement_safe（取不到就降级为 None，绝不抛异常）。
+    #   ⚠️ **绝不能**直接调 requirement.get()——它连不上库时会抛 DBError，
+    #      而预审查失败会**阻断整条执行链**（一个查库故障不该让 SQL 跑不了）。
+    #      降级为 None ⇒ L-REQ skipped、不参与总状态，与接线前行为完全一致。
+    #      复用 sqlgen 的现成实现（sqlrun 已 import sqlgen），不另起一套。
+    _requirement = sqlgen_mod._requirement_safe(demand_id) if demand_id else None
+
     # b. 预审查（没有 exec_result）：不通过 → 阻断，不执行，不写 sql_runs
     try:
-        review_before = gates_mod.review(sql_text, dataset=dataset)
+        review_before = gates_mod.review(sql_text, dataset=dataset,
+                                          requirement=_requirement)
     except Exception as e:  # noqa: BLE001
         return {
             "ok": False,
@@ -210,8 +222,13 @@ def execute_readonly(sql, dataset="B", demand_id=None, requirement_version=None,
     sample_rows = copy.deepcopy(data[:5])
 
     # d. 后置审查：传 exec_result 让 L5 真跑
+    # ⚠️ 同样传 requirement=_requirement（与预审查**同一个**对象）——
+    #    前后两次审查判的必须是同一份需求，否则会出现「预审查放过、后审查拦下」
+    #    这种自相矛盾的结果（且无法复现）。
     try:
-        review_after = gates_mod.review(sql_text, dataset=dataset, exec_result=exec_result)
+        review_after = gates_mod.review(sql_text, dataset=dataset,
+                                         exec_result=exec_result,
+                                         requirement=_requirement)
     except Exception as e:  # noqa: BLE001
         review_after = {
             "status": "警告",

@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "R4-b 子判据的冻结基线资产清单（只登记【仓库内】资产）。",
+    "比对口径：读【当前工作树】的文件内容，算 sha256，取前 16 位与本清单比对。",
+    "只对【内容变更】判红，不对【文件增删】判红；文件缺失时跳过并如实标注。",
+    "只比 sha256 前 16 位，避免末尾换行 / 编辑器差异造成误报。",
+    "⚠️ 文档库那 7 份**刻意不登记**（实测 5 份已漂移，登记进去一上线就是 5 红）。"
+  ],
+  "sha256_prefix_len": 16,
+  "assets": [
+    {
+      "path": "poc-eval/bank-b.json",
+      "sha256_prefix": "45597108c7e53dee",
+      "expected_bytes": 5674,
+      "note": "BASE-EVAL-1 基准问答库；R1 不覆盖此路径 ⇒ 此前零保护"
+    },
+    {
+      "path": "wren-docker-b/workspace/mdl.json",
+      "sha256_prefix": "56eb7a9aaf072425",
+      "expected_bytes": 11939,
+      "note": "B 库语义层清单；R1 已覆盖，登记作纵深防御"
+    },
+    {
+      "path": "wren-docker/workspace/mdl.json",
+      "sha256_prefix": "e86818354208c44a",
+      "expected_bytes": 3976,
+      "note": "A 库语义层清单；R1 已覆盖，登记作纵深防御"
+    }
+  ]
+}

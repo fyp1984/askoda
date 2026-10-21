@@ -673,8 +673,19 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
             field_mapping = list(sql_plan.get("field_mapping") or [])
 
     # 立即 gates.review（L5 没有 exec_result → skipped，属预期）
+    #
+    # ⚠️ REQ-COVERAGE 接线（2026-10-20）：必须把结构化需求喂给 L-REQ。
+    # 阶段一的 `_requirement_check` 判的是「结构化需求齐不齐备」，
+    # 而**不喂 requirement 时它恒判 skipped** ⇒ 需求要素在生成链路上
+    # 从未进入任何一层的视野 ⇒ 阶段二的覆盖判定在主链路上是**死的**。
+    # （接线前 skipped=True / 接线后 skipped=False，是「接线真的生效了」的直接证据。）
+    #
+    # ⚠️ 用 `_requirement_safe(demand_id)` 而不是直接 `requirement_mod.get()`：
+    #   取不到就降级为 None（→ L-REQ skipped、不参与总状态），
+    #   **绝不让一次查库失败把整条生成链路搞崩**。
     try:
-        review = gates_mod.review(sql_draft or "", dataset=dataset)
+        review = gates_mod.review(sql_draft or "", dataset=dataset,
+                                  requirement=_requirement_safe(demand_id))
     except Exception as e:  # noqa: BLE001
         review = {
             "status": "不通过",

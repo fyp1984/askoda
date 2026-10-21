@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""R2 架构红线门禁 · 动态断言（打真实网关）
+"""架构红线 A-R2 · 内部地址泄露动态断言（打真实网关）
+
+⚠️ **本文的 R2（原编号）指「架构五红线」体系，现已改号为 A2**（R2 = 前端只调自研 BFF、BFF 出口不得
+   泄露开源组件内部地址），与 `tools/redline_guard.py` 判的**提交红线 R2**
+   （= 改已有 MCP 工具的入参名/顺序，工具面→实现层按位契约）**是两回事**。
+   仓库历史上两者同名，已造成过编号误判，故本脚本改名为 `arch_r2_leak_check.py`
+   以示区分。
 
 为什么需要这个
 --------------
@@ -23,7 +29,7 @@ B3 开发时实测发现：网关 `datasets` 工具的原生响应里带容器�
   /workspace-a /workspace-b                                   容器内挂载路径
   ragflow（除 19380 允许的对外入口外）                          底座内部标识
 
-退出码：0=全过；1=有命中（判定违反 R2）；2=环境不可达（无法判定，非阻塞）
+退出码：0=全过；1=有命中（判定违反架构红线 A-R2）；2=环境不可达（无法判定，非阻塞）
 """
 import json
 import re
@@ -82,7 +88,7 @@ def mcp_call(tool, args, timeout=60):
             "params": {
                 "protocolVersion": "2025-03-26",
                 "capabilities": {},
-                "clientInfo": {"name": "r2_check", "version": "1"},
+                "clientInfo": {"name": "arch_r2_leak_check", "version": "1"},
             },
         },
     )
@@ -134,7 +140,8 @@ def http_get_json(path, timeout=30):
 
 def main():
     print("=" * 74)
-    print("R2 架构红线门禁 · 动态断言（打真实网关）")
+    print("架构红线 A-R2 · 内部地址泄露动态断言（打真实网关）")
+    print("  （本文的 R2 = 架构五红线 A2 A2；与 redline_guard.py 的提交红线 R2 是两回事）")
     print("=" * 74)
 
     # ---------- 1. 静态侧：产物与源码 ----------

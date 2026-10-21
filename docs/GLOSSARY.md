@@ -24,6 +24,8 @@ AI Agent 调用外部工具的协议。在本项目中它是**网关与前端/BF
 
 架构红线 R2 要求**前端只调自研 BFF**，不得直连任何后端。BFF 另有 R2 脱敏职责：把网关响应里的容器内部地址抹掉再交给前端。
 
+> ⚠️ 这里的 A2（原 R2）属**架构五红线**体系，与 `tools/redline_guard.py` 判的**提交红线 R2**（改已有 MCP 工具入参名/顺序）是两回事。
+
 > 权威来源：`bff/app.py`、`bff/sanitize.py`
 
 ### MDL（**M**anifest **D**ata **L**ayer / 语义模型文件）
@@ -199,23 +201,27 @@ SQLFluff 与 Great Expectations 留了插槽但**默认关闭**，一期未实�
 
 > 权威来源：`agents/state/batches.json`
 
-### 架构五红线 R1–R5
-不可逾越的架构约束，由 `tools/redline_guard.py` 机器判定：
+### 架构五红线 A1–A5
+不可逾越的架构约束，由 `tools/arch_r2_leak_check.py`（BFF 出口动态断言）+ 人工代码审查共同判定；
+`tools/redline_guard.py` 判的是**另一套**提交红线（见下文「六条提交红线」），与本节无关：
 
 | 红线 | 含义 |
 |---|---|
-| **R1** | 不使用开源组件的原生 UI |
-| **R2** | 前端只调自研 BFF，不直连任何后端 |
-| **R3** | 不 fork、不改开源上游源码 |
-| **R4** | 不做 UI 补丁、不做 DOM 注入 |
-| **R5** | API 契约版本化（统一 `/api/v1`） |
+| **A1** | 不使用开源组件的原生 UI |
+| **A2** | 前端只调自研 BFF，不直连任何后端 |
+| **A3** | 不 fork、不改开源上游源码 |
+| **A4** | 不做 UI 补丁、不做 DOM 注入 |
+| **A5** | API 契约版本化（统一 `/api/v1`） |
 
-> 注意：**R1–R5（架构红线）与 P1–P9（证据层级）、R1–R7（语义规则）、G0–G3（门禁）是四套不同编号体系**，容易混淆。本项目历史上就因此出过错判。
+> 注意：**A1–A5（架构红线）、R1–R6（提交红线）、P1–P9（证据层级）、R1–R7（语义规则）、G0–G3（门禁）是五套不同编号体系**，容易混淆。本项目历史上就因此出过错判。
+> ⚠️ 架构红线**已改号为 A1–A5**（Architecture 前缀），以彻底断开与提交红线 R1–R6 的撞号；
+> 历史文档中出现的「架构红线 R1–R5」均指本节的 A1–A5。
+> 尤其注意「提交红线 R2」（改已有 MCP 工具入参名/顺序）与「架构红线 A2」（前端只调自研 BFF）**同名不同义**。
 
-> 权威来源：`tools/redline_guard.py`
+> 权威来源：`03-架构与设计/前端架构方案-...v1.0.md` §4
 
 ### 六条提交红线
-另一个层面上的硬约束（改开源上游 / 改工具入参名 / 改 D1 / 删数据 / 新增运行时依赖 / 需人工点信任），命中即停，由 `tools/redline_guard.py` 独立判定。
+另一个层面上的硬约束（改开源上游 / 改工具入参名 / 改 D1 / 删数据 / 改仓库内登记的冻结基线资产 / 新增运行时依赖 / 需人工点信任），命中即停，由 `tools/redline_guard.py` 独立判定。
 
 一期允许的运行时依赖**只有**：`fastmcp==4.0.10`、`starlette`、`psycopg[binary]`、`minio`、`sqlglot`。
 
@@ -259,7 +265,7 @@ cd /Users/FYP/Documents/WorkSpace/askoda
 $PY tools/gate_all.py --layers G0,G1          # 日常门禁（快，不写库）
 $PY tools/gate_all.py --strict                # 全量含真实链路（会写库）
 $PY tools/m2_verify.py                       # M2 验收 22 项
-$PY tools/r2_check.py                        # R2 脱敏门禁（打真实网关）
+$PY tools/arch_r2_leak_check.py              # 架构红线 A-R2 脱敏门禁（打真实网关）
 $PY tools/redline_guard.py                   # 六条红线判定
 $PY tools/coord.py --status                  # 批次状态一览
 $PY tools/embedding_failover.sh status       # embedding 主备状态
@@ -269,8 +275,9 @@ $PY tools/embedding_failover.sh status       # embedding 主备状态
 
 ## 七、容易混淆的三组概念
 
-**1. 四套编号体系**
-`R1–R5` 架构红线 · `R1–R7` 语义规则 · `P1–P9` 证据层级 · `G0–G3` 门禁层。**同名不同义**，引用时务必写全称。
+**1. 五套编号体系**
+`R1–R5` 架构红线 · `R1–R6` 提交红线 · `R1–R7` 语义规则 · `P1–P9` 证据层级 · `G0–G3` 门禁层。**同名不同义**，引用时务必写全称。
+其中「提交红线 R2」（改已有 MCP 工具入参名/顺序）与「架构红线 R2」（前端只调自研 BFF）最容易混。
 
 **2. 三个"拒绝"语义不同**
 - **阻断（blocking）**：规则表里 `blocking: true`，命中即中止执行

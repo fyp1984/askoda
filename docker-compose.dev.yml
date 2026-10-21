@@ -14,6 +14,12 @@
 # 开发期与交付期行为不一致。逐文件挂载改动面最小，且新增模块仍需 rebuild
 # （见 README 说明），符合开发测试期的实际需要。
 #
+# ⚠️ **新增 .py 模块必须同时加进下面的逐文件挂载清单**，否则：
+#   · 开发期：容器里没有这个文件 ⇒ import 失败 ⇒ 容器起不来；
+#   · 交付期：`gateway/Dockerfile` 的 `COPY gateway/ ./` 会自动带上 ⇒ 镜像里是有的。
+#   ⇒ 也就是说「开发期起不来、交付期正常」，是最难查的那种不一致。
+#   （REQ-COVERAGE 阶段的 reqcov.py / reqelem.py / gate_contract.py 就是这么补上的。）
+#
 # 用法：
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --force-recreate gateway
 # 改完 .py 后：
@@ -22,7 +28,8 @@
 # 代价（必须知道）：
 #   · FastMCP 4.x 的 mcp.run() **没有 reload 参数**（实测 fastmcp 4.0.10），
 #     改代码后必须 restart 容器，没有热重载。
-#   · 新增 .py 文件不生效（没挂载），仍需去掉本文件重建一次镜像。
+#   · 新增 .py 文件不生效（没挂载进下面的清单），仍需去掉本文件重建一次镜像。
+#     ⇒ 清单里补了挂载就不用 rebuild；没补就必须 rebuild。
 #
 # bff 为什么可以真热重载，而 gateway 不行
 # --------------------------------------
@@ -67,12 +74,18 @@ services:
       - ./gateway/demand.py:/app/demand.py:ro
       - ./gateway/evidence.py:/app/evidence.py:ro
       - ./gateway/fallback.py:/app/fallback.py:ro
+      # gate_contract：门禁层数的唯一权威来源（G1/G3 共用），新增文件必须挂载
+      - ./gateway/gate_contract.py:/app/gate_contract.py:ro
       - ./gateway/gates.py:/app/gates.py:ro
       - ./gateway/healthcheck.py:/app/healthcheck.py:ro
       - ./gateway/knowledge.py:/app/knowledge.py:ro
       - ./gateway/masking.py:/app/masking.py:ro
       - ./gateway/metadata.py:/app/metadata.py:ro
       - ./gateway/planner.py:/app/planner.py:ro
+      # reqcov：REQ-COVERAGE 阶段二的判据层（judge/extract_facts/要素契约）
+      - ./gateway/reqcov.py:/app/reqcov.py:ro
+      # reqelem：REQ-COVERAGE 阶段二的实例层（要素抽取 + 实例侧 matcher 注册）
+      - ./gateway/reqelem.py:/app/reqelem.py:ro
       - ./gateway/registry.py:/app/registry.py:ro
       - ./gateway/requirement.py:/app/requirement.py:ro
       - ./gateway/rules.py:/app/rules.py:ro

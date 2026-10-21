@@ -85,6 +85,57 @@ PERIOD_RE = re.compile(
     r"|本年度|去年|今年|同比|环比|年初至今|YTD|[1-9]{1,2}\s*月)"
 )
 
+# ---------------------------------------------------------------------------
+# 粒度词表（需求原文侧）
+# ---------------------------------------------------------------------------
+# 与 PERIOD_RE 判的不是同一件事，两者**不可互换**：
+#   · PERIOD_RE 判「统计期间」——"近6个月""本月""同比"（看哪段时间）
+#   · 本表判「粒度」——"按月""月度""按天"（一行代表什么）
+# 字面上两者都会撞上"月/日/年"，所以判粒度时必须先把期间片段排掉：
+# 否则"统计近6个月的销售额"会被读成"粒度=月"——那是错的口径，且全程不报错。
+GRANULARITY_TEXT_PATTERNS = {
+    "month":   ("月度", "月", "按月", "每月", "月度环比"),
+    "day":     ("日", "天", "按日", "每天", "日度"),
+    "quarter": ("季度", "按季", "每季", "季"),
+    "year":    ("年度", "按年", "每年", "年"),
+}
+
+#: 粒度类词 → "一行代表什么"的一句话（候选 value 用；与元数据候选
+#: "一行 = 一条 xxx 记录（主键 …）"同一口径，只是来源是需求原文）
+GRANULARITY_CLASS_PHRASES = {
+    "month": "一行 = 一个月的汇总",
+    "day": "一行 = 一天的汇总",
+    "quarter": "一行 = 一个季度的汇总",
+    "year": "一行 = 一年的汇总",
+}
+
+#: 粒度类 → 人可读标签（要素名用；"月度"比"month"可读）
+GRANULARITY_CLASS_LABELS = {
+    "month": "月度",
+    "day": "日度",
+    "quarter": "季度",
+    "year": "年度",
+}
+
+#: 算作「输出字段」的词表命中类型。
+#: ⚠️ 单一事实源：实例层（reqelem）判"哪些命中算输出字段"时读这里，
+#: 不另写一套——两处各写一份必然漂移，漂移表现为要素清单忽多忽少。
+FIELD_HIT_KINDS = ("column", "glossary", "glossary_phrase", "caliber_expression")
+
+#: 单字粒度词（"月""日""天""季""年"）左侧出现这些字时，它说的是**时点**
+#: 而不是粒度：当日/昨日/今日/明日/本月/上月/去年/今年/近月…
+#: 误判一次的代价是 SQL 按错的粒度分组且全程无报错，比漏报更危险。
+GRAIN_PREV_REJECT = set("当昨今明本次该上下近前后")
+#: 单字粒度词右侧出现这些字时，它说的是**日期/期间**而不是粒度：
+#: 订单日期/日均/月初/月末/三年内/月底…
+_GRAIN_NEXT_REJECT = set("期均初末内间前后点至")
+
+#: 期间类片段（比 PERIOD_RE 更宽）：期间里也含"月/日/年/天"，
+#: 判粒度时必须先排掉，否则"近6个月"会被读成"粒度=月"。
+_PERIOD_SPAN_RE = re.compile(
+    r"\d+\s*个?\s*[天日周月年季]|[一二三四五六七八九十]\s*个?\s*[天日周月年季]"
+)
+
 SCOPE_KEYWORDS = {
     "排除": ["排除", "不含", "剔除", "除去", "不包含", "去掉"],
     "限定": ["仅", "只", "限定", "仅看", "只要", "只看"],
@@ -414,7 +465,7 @@ def understand(bundle):
 
     # ---- 输出字段候选：来自字段类命中 + 口径表达式命中 ----
     field_hits = _hits_by_kind(
-        hits, ["column", "glossary", "glossary_phrase", "caliber_expression"]
+        hits, list(FIELD_HIT_KINDS)
     )
     fields = []
     seen = set()
@@ -543,11 +594,131 @@ def _dedup_cited(cited):
 # ---------------------------------------------------------------------------
 # 4.3 颗粒度识别
 # ---------------------------------------------------------------------------
+def mask_period_spans(text):
+    """把「统计期间」片段从原文里挖掉（换成等长空格，位置不变）。
+
+    为什么必须挖：粒度问的是"一行代表什么"，统计期间问的是"看哪段时间"，
+    两者字面都带"月/日/年"——"统计近6个月的销售额"里的"月"是**期间**不是**粒度**，
+    读成"粒度=月"会让 SQL 凭空多一层月度聚合，业务拿到的是错的口径且全程无报错。
+
+    期间判据只认两处既有的单一事实源：PERIOD_RE（仓内唯一的通用时间正则）
+    与 _PERIOD_SPAN_RE（补 PERIOD_RE 认不出的"N个月/N天"式数量期间）。
+    不另立第三套时间词表。
+
+    ⚠️ 本函数是**公开**的：实例层 ``reqelem`` 的兜底提取也用它遮蔽期间片段。
+    同一个「上月」不能在粒度判定里被排除、在兜底提取里却被当成一个叫「上月」的
+    指标要素——两处口径打架时，漏项和误项都会来。
+    """
+    if not text:
+        return ""
+    masked = text
+    for rx in (PERIOD_RE, _PERIOD_SPAN_RE):
+        masked = rx.sub(lambda m: " " * len(m.group(0)), masked)
+    return masked
+
+
+def _grain_single_ok(text, start, end):
+    """单字粒度词（"月""日""天""季""年"）要不要算数——看左右文。
+
+    单字粒度词的最大风险是**误报**："日期""当天""本月""年均"里的那个字
+    说的是时间点/期间/口径，不是"一行代表什么"。误报一次，SQL 就会按
+    错误的粒度分组，结果错得没有任何提示——比漏报更危险。
+
+    左侧出现时点/期间字（当天/次日/本月/去年…）不算；右侧出现日期/期间字
+    （日期/月初/月末/日均…）也不算。其余情况（月份/月份维度/月销售额、
+    日销售额、按天…）才算数。
+    """
+    prev = text[start - 1] if start > 0 else ""
+    nxt = text[end] if end < len(text) else ""
+    if prev in GRAIN_PREV_REJECT:
+        return False
+    if nxt in _GRAIN_NEXT_REJECT:
+        return False
+    return True
+
+
+def _granularity_text_hits(text):
+    """从需求原文里认粒度词。返回 [(粒度类, [命中的词...])]。
+
+    判据（与 mask_period_spans 的分工）：
+      1. 先把统计期间挖掉（期间不是粒度）；
+      2. 再按词表认：多字词（月度/按月/每天/季度…）直接认；
+      3. 单字词（月/日/天/季/年）额外过左右文闸门（见 _grain_single_ok）。
+
+    同一个类里若多字词与单字词重叠（"月度"含"月"），只保留多字词那条——
+    报"命中月度"比报"命中月"更可复核。
+    """
+    masked = mask_period_spans(text)
+    if not masked.strip():
+        return []
+    per_class = {}
+    for cls, words in GRANULARITY_TEXT_PATTERNS.items():
+        spans = []
+        for w in words:
+            for m in re.finditer(re.escape(w), masked):
+                s0, e0 = m.span()
+                if len(w) == 1 and not _grain_single_ok(masked, s0, e0):
+                    continue
+                spans.append((s0, e0, w))
+        if not spans:
+            continue
+        # 多字词覆盖的单字词不再单列（"月度"已含"月"）
+        longest = [sp for sp in spans if len(sp[2]) > 1]
+        keep = []
+        for s0, e0, w in spans:
+            if len(w) == 1 and any(ls <= s0 and e0 <= le for ls, le, _ in longest):
+                continue
+            if w not in keep:
+                keep.append(w)
+        per_class[cls] = keep
+    return [(cls, per_class[cls]) for cls in GRANULARITY_TEXT_PATTERNS if cls in per_class]
+
+
 def granularity(bundle, subjects):
     """识别"最终一行代表什么"。判不稳就输出需确认，不强行高置信（Skill 4.3）。"""
     by_level = bundle["by_level"]
     tmeta = bundle.get("tables") or {}
     cands, uniq, risks = [], [], []
+
+    # 原文里有没有明说粒度（"按月""月度""按天"…）
+    #
+    # 为什么必须读原文：表级元数据登记的是**表**的行定义（"一行 = 一条 dwd_order_di
+    # 记录"），而需求方要的"一行代表什么"是**结果集**的行定义（"门店-月份维度"）。
+    # 两者不是一回事，且后者只存在于需求原文里——不读原文，粒度就只能靠元数据猜，
+    # 猜错时 SQL 会按错的粒度分组，结果错得没有任何提示（REQ-COVERAGE 的根因）。
+    #
+    # 为什么用 bundle.get("text") 而不是 bundle["text"]：granularity() 此前
+    # 从不读 text，调用方（tests / 未来的实例层）可能传不带 text 的 bundle；
+    # 直接下标会凭空多出一条崩溃路径。字段来源与同文件 time_semantics()/rules()
+    # 完全一致（同一份 bundle["text"]），只是不把缺字段变成异常。
+    text = bundle.get("text") or ""
+
+    # 原文粒度候选：需求方明说的"一行代表什么"（P1 · 需求原文）
+    #
+    # 放在表级元数据候选**之前**：原文优先于元数据（与 understand() 里
+    # 「诉求字段优先于 business_context」同一原则）。
+    #
+    # ⚠️ 本段**只加候选**——multi / needs / conf / note 四项仍只看表级元数据，
+    # 口径不动。否则 R1/R4 判定与确认问题生成会被连带改变（questions() 与
+    # rules() 都依赖本函数）。
+    text_cands = []
+    # ⚠️ 无源不出结论：需求原文候选必须带得上 P1 需求原文的出处。
+    # 证据为空数组的候选会被 M4 契约校验判成"无源断言"（硬判据 H3）——
+    # 与其产出一个过不了契约的候选，不如不产。
+    p1_cite = _p1_cite(by_level)
+    if p1_cite:
+        for cls, terms in _granularity_text_hits(text):
+            text_cands.append(
+                _cand(
+                    "granularity",
+                    "%s（需求原文：%s）" % (GRANULARITY_CLASS_PHRASES[cls], "、".join(terms[:3])),
+                    p1_cite,
+                    conf=0.6,
+                    matched_terms=terms[:5],
+                    hit_by="demand_text",
+                    granularity_class=cls,
+                )
+            )
 
     # 候选来自表级元数据里的颗粒度描述（P6 · table_docs）
     for s in subjects:
@@ -604,7 +775,7 @@ def granularity(bundle, subjects):
         note = "未从元数据中取到唯一标识，需业务确认一行代表什么"
 
     return {
-        "granularity_candidates": cands,
+        "granularity_candidates": text_cands + cands,
         "unique_identifier_candidates": uniq,
         "one_to_many_risks": risks,
         "row_definition_notes": note,

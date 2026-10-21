@@ -144,6 +144,11 @@ def _timeout_for(abs_script_path):
 
 GATEWAY_DIR = os.path.join(REPO_ROOT, "gateway")
 DEFAULT_MCP_BASE = "http://127.0.0.1:18080"
+# 仓库自带的 sitecustomize 垫片目录（见 tools/_pyshim/sitecustomize.py 的说明）：
+# 本机沙箱禁删 ⇒ Python 的 tempfile 可用性探测（建+删）必失败 ⇒ 用 tempfile 的
+# 自测起手就红。垫片必须排在 PYTHONPATH **最前**，因为 Python 只加载第一个
+# 找到的 sitecustomize。
+SHIM_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_pyshim")
 
 # --- 子进程解释器选择 -------------------------------------------------------
 # 为什么需要这一层（B0 首轮实测教训）：
@@ -253,6 +258,17 @@ def _child_env(extra=None):
     parts = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p]
     if GATEWAY_DIR not in parts:
         parts.insert(0, GATEWAY_DIR)
+    # 4. 仓库自带的 sitecustomize 垫片（tools/_pyshim）必须排在 PYTHONPATH **最前**。
+    #    原因（实测，非推断）：本机沙箱禁止任何"让文件消失"的操作，而 Python 的
+    #    tempfile 用「建一个探测文件再删掉」验证目录可用 ⇒ 探测必失败 ⇒
+    #    `No usable temporary directory found` ⇒ 任何用 tempfile 的自测起手就红。
+    #    而本机 PYTHONPATH 指向 WorkBuddy 自带的 shim，它内部会调
+    #    tempfile.gettempdir() ⇒ 它自己就把 sitecustomize 加载搞炸。
+    #    ⚠️ Python 只加载 sys.path 里**第一个**找到的 sitecustomize
+    #    ⇒ 必须让我们的垫片排在它前面，WorkBuddy 那个才不会被加载。
+    #    详见 tools/_pyshim/sitecustomize.py 的说明。
+    if SHIM_DIR and SHIM_DIR not in parts:
+        parts.insert(0, SHIM_DIR)
     env["PYTHONPATH"] = os.pathsep.join(parts)
 
     base = env.get("GATE_ALL_MCP_BASE", DEFAULT_MCP_BASE).rstrip("/")
@@ -327,9 +343,80 @@ def _script_verdict(exit_code, timed_out):
 # G0 · 静态自检
 # ---------------------------------------------------------------------------
 
-def _g0_py_compile(target_glob, report_list):
-    """对某 glob 下全部 .py 跑 py_compile，逐一写报告。"""
+def _is_tracked(rel_path):
+    """该仓库相对路径是否**已被 git 跟踪**（含已 staged）。
+
+    ⚠️ 已跟踪的文件**永远计入门禁项数**，哪怕它被 .gitignore 规则误伤 ——
+      误伤 ignore 规则不该让项目文件逃过语法检查。
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", REPO_ROOT, "ls-files", "--error-unmatch", "--",
+             rel_path],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:  # noqa: BLE001
+        return True  # git 不可用 ⇒ 保守：当作已跟踪（宁可多算不可漏算）
+    return out.returncode == 0
+
+
+def _git_ignored_paths():
+    """读 git 的 ignore 判定：返回「被 .gitignore 排除」的仓库相对路径集合。
+
+    ⚠️ **为什么要这个**：G0 的 py_compile 统计的是**工作区里**的 .py 文件。
+      而工作区 ≠ 仓库内容 —— 调试探针、临时脚本这类**不属于本仓库**的文件
+      落在 `tools/` 下时，会被 G0 的 glob 一并计入 ⇒ 门禁项数虚高 ⇒
+      文档数字被迫反复回填（实测一次并行开发里被回填 3 次：66→67→68→…）。
+
+    ⇒ 口径修正：**门禁项数应回答「将要提交的内容对不对」**，
+      而不是「我机器上乱放的文件对不对」。
+      ⇒ 排除「**未跟踪 且 被 gitignore 排除**」的文件：
+         · 未跟踪  ⇒ 它还不是仓库内容；
+         · 被 ignore ⇒ 它**明确声明**不是仓库内容。
+      ⚠️ 这**不是放宽判据**（判据的松紧完全没变，是统计范围修正）；
+      ⚠️ 已跟踪的文件**永远计入**（哪怕它被 .gitignore 规则误伤）。
+
+    返回 None 表示「git 不可用」⇒ 退化为不排除（保守：宁可多算不可漏算）。
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", REPO_ROOT, "ls-files", "--others", "--ignored",
+             "--exclude-standard", "--directory", "-z"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    if out.returncode != 0:
+        return None
+    return {p for p in out.stdout.split("\0") if p}
+
+
+def _g0_py_files(target_glob):
+    """取某 glob 下**应当计入门禁项数**的 .py 文件列表（单一事实源）。
+
+    ⚠️ 口径：**排除「未跟踪 且 被 .gitignore 排除」的文件**（本地调试探针、
+      临时脚本）—— 它们不属于仓库内容，不该被计入门禁项数。
+      详见 :func:`_git_ignored_paths` 的说明。
+    ⚠️ **已跟踪的文件永远计入**（哪怕被 .gitignore 规则误伤）。
+
+    ⚠️ `tools/gate_count_check.py` 的项数核对**也调这个函数** ——
+      门禁实跑与项数核对必须用**同一套口径**，否则两边算出来的数不一样
+      （历史上就是因为两边各写一套 glob，导致"门禁说 69、核对说 74"）。
+    """
     files = sorted(glob.glob(os.path.join(REPO_ROOT, target_glob)))
+    ignored = _git_ignored_paths()
+    if not ignored:
+        return files
+    return [f for f in files
+            if _repo_rel(f) not in ignored or _is_tracked(_repo_rel(f))]
+
+
+def _g0_py_compile(target_glob, report_list):
+    """对某 glob 下全部 .py 跑 py_compile，逐一写报告。
+
+    ⚠️ **统计口径**见 :func:`_g0_py_files`。
+    """
+    files = _g0_py_files(target_glob)
     for f in files:
         rel = _repo_rel(f)
         script = rel
@@ -762,12 +849,133 @@ def _gateway_health_probe(report_list):
     return ec == 0
 
 
+# G3「容器代码陈旧」告警用的容器坐标。
+# ⚠️ 为什么在这里定义而不在别处复用：G3 主链路走 HTTP（MCP 探活），
+#   **从不调docker** ⇒ 本脚本此前没有任何容器常量。
+#   ⇒ 不能引用别处的定义（会引入耦合），也不能写死（换名字就失效）。
+#   ⇒ 两者都做成环境变量可覆盖，且**取不到就跳过告警**（不判红）。
+GATEWAY_CONTAINER = os.environ.get("ASKODA_GATEWAY_CONTAINER", "askoda")
+CONTAINER_CLI = os.environ.get("ASKODA_CONTAINER_CLI", "docker")
+#: 容器内 gateway 的落地目录（实测**扁平铺在 /app 下**，不是 /app/gateway）
+CONTAINER_APP_DIR = os.environ.get("ASKODA_CONTAINER_APP_DIR", "/app")
+
+
+def _container_code_fingerprint():
+    """容器内 gateway 的 ``{文件名: sha256}``；取不到返回 ``None``。
+
+    ⚠️ 容器里 gateway是**扁平铺在 app 目录下**（实测 /app，不是 /app/gateway），
+       所以键就是文件名本身。
+    ⚠️ 拿不到容器时返回 None（**不是 {}**）——「取不到」与「取到但是空」
+       是两回事；返回 {} 会让调用方把「查不到」当成「一致」⇒ 又一处假绿。
+    """
+    gw = os.path.join(REPO_ROOT, "gateway")
+    if not os.path.isdir(gw):
+        return None
+    names = sorted(
+        f for f in os.listdir(gw)
+        if f.endswith(".py") and os.path.isfile(os.path.join(gw, f))
+    )
+    if not names:
+        return None
+    app = CONTAINER_APP_DIR
+    script = (
+        "import hashlib,json\n"
+        "out={}\n"
+        "for n in json.loads(%r):\n"
+        "    try:\n"
+        "        out[n]=hashlib.sha256(open(%r+'/'+n,'rb').read()).hexdigest()\n"
+        "    except Exception:\n"
+        "        out[n]=None\n"
+        "print(json.dumps(out))\n"
+    ) % (json.dumps(names), app)
+    try:
+        ec, so, se, _s, _t = _run_subprocess(
+            [CONTAINER_CLI, "exec", GATEWAY_CONTAINER, "python3", "-c", script],
+            cwd=REPO_ROOT, timeout_s=60,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    if ec != 0:
+        return None
+    #⚠️ _run_subprocess 返回的是 **bytes**（没开 text=True）⇒ 必须先解码。
+    #   直接拿 bytes 去找 startswith("{")（str）会永远不匹配 ⇒ 函数静默返回 None
+    #   ⇒ 告警永不触发。这正是本函数第一版的 bug（负向验证实测抓到）。
+    if isinstance(so, bytes):
+        so = so.decode("utf-8", errors="replace")
+    for line in (so or "").splitlines():
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                return json.loads(line)
+            except Exception:  # noqa: BLE001
+                return None
+    return None
+
+
+def _warn_g3_stale_container():
+    """G3 跑真链路 ⇒ 必须先确认**容器内代码 = 宿主代码**，否则是假绿。
+
+    🔴 为什么这条必须是**警告而不是阻断**：
+      · 容器不可达时 G3 本来就会被探活判SKIP，不该在这里叠一条红；
+      · 但**代码不同步时 G3 会「测旧代码并报绿」** —— 这比红更危险
+        （它让人以为改动已被验证过）。所以必须显式喊出来。
+
+    ⚠️ 宿主改了 gateway/*.py 而没 `docker cp` 进去就会命中。
+      这是 REQ-COVERAGE 这类改动**最常见的假绿来源**：门禁全绿，
+      但被测的是旧代码。
+
+    🔴 **「没告警」≠「已核对一致」**（本条检查的一个固有盲区，必须说清）
+    ------------------------------------------------------------------
+    本函数**拿不到容器指纹**时（容器不可达 / 容器名写错 / docker 不可用）
+    ⇒ **静默 return，不告警**。
+    ⇒ 而这两种情况与"代码真的一致"**在报告里长得一模一样**（都是"没告警"）。
+    ⇒ 正确读法是：**「没告警」= 未发现不一致**（**或未能核对**），
+      **不是**「已核对一致」。
+    ⚠️ 之所以**不**把"查不到"也做成告警：容器不可达时 G3 本就被探活判 SKIP，
+      再叠一条红意义不大（且会让"服务没起"看起来像"代码不一致"）。
+      但**文案必须诚实** —— 否则下一个人会以为这条检查已经覆盖了所有情况。
+    ⚠️ 本批**只改文案、不改判据逻辑**（"查不到也告警"是行为变更，
+      需要单独的负向验证）。
+    """
+    cont = _container_code_fingerprint()
+    if not cont:
+        print("  ⚠️ G3 代码同步**未能核对**：取不到容器内代码指纹（容器不可达 / 容器名写错 / docker 不可用）")
+        print("       ⇒ **「没有同步告警」不等于「已核对一致」**，只表示未发现不一致。")
+        return
+    gw = os.path.join(REPO_ROOT, "gateway")
+    diffs, missing = [], []
+    for f in sorted(os.listdir(gw)):
+        if not f.endswith(".py") or not os.path.isfile(os.path.join(gw, f)):
+            continue
+        host = hashlib.sha256(open(os.path.join(gw, f), "rb").read()).hexdigest()
+        c = cont.get(f)
+        if c is None:
+            missing.append(f)
+        elif c != host:
+            diffs.append(f)
+    if not diffs and not missing:
+        return
+    print("  ⚠️ G3 代码同步告警：G3 测的是容器内代码，容器与宿主不一致：")
+    if diffs:
+        print("       内容不同：%s" % "、".join(diffs))
+    if missing:
+        print("       容器内缺失：%s" % "、".join(missing))
+    print("       ⇒ **G3 可能测的是旧代码**（假绿，比红更危险）。")
+    print("       ⇒ 修复：docker cp gateway/<file> %s:/app/<file> && docker restart %s"
+          % (GATEWAY_CONTAINER, GATEWAY_CONTAINER))
+    print("       ⇒ 长期解法：rebuild 镜像（当前镜像建于早期，不含 reqcov.py 等新文件）。")
+
+
 def run_g3(report_list):
     """G3：MCP 探活 → 成功则跑 tools/*_verify.py。
 
     探活失败时，verify 脚本全部记为 SKIP（exit_code=-1，verdict=SKIP_PROBE_FAIL），
     避免 9 个脚本接连抛「连不上 DB/Wren」的长错误淹没报告。
+
+    ⚠️ 跑之前先核对**容器内代码是否与宿主一致**（见 _warn_g3_stale_container）：
+      G3 测的是容器内代码，不同步就会「测旧代码报绿」。
     """
+    _warn_g3_stale_container()
     probe_ok = _gateway_health_probe(report_list)
     scripts = _find_scripts("*_verify.py")
     for s in scripts:

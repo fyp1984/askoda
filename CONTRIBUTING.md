@@ -89,12 +89,41 @@ python3 tools/gate_all.py --layers G0,G1# 日常：静态 + 单元，不写库
 python3 tools/gate_all.py                # 全量：含 G2/G3，会真实连库
 ```
 
+> ⚠️ **在「禁止删除文件」的沙箱环境里**（本机 WorkBuddy 沙箱即是），上面两条命令
+> 会因为 `tempfile` 不可用而让多个自测**假红**（`No usable temporary directory found`）。
+> ⇒ **前置条件**：把仓库自带的 `sitecustomize` 垫片挂到 `PYTHONPATH` **最前面**：
+>
+> ```bash
+> export PYTHONPATH="$PWD/tools/_pyshim:$PYTHONPATH"     # 仓库自带垫片（推荐，版本可控）
+> # 或
+> export PYTHONPATH="$HOME/.workbuddy/pyshim:$PYTHONPATH" # 本机 WorkBuddy 垫片
+> ```
+>
+> ⚠️ **必须排在最前**：Python 只加载 `sys.path` 里**第一个**找到的 `sitecustomize`；
+> 本机 `PYTHONPATH` 默认指向 WorkBuddy 自带 shim，它内部会调 `tempfile.gettempdir()`
+> ⇒ 自己就把 `sitecustomize` 的加载搞炸。
+>
+> 或者直接用仓库提供的入口（它会自动挂好垫片）：
+>
+> ```bash
+> bash tools/run_selftest.sh                # 日常 G0+G1
+> bash tools/run_selftest.sh tools/xxx.py   # 跑单个脚本
+> ```
+>
+> 根因与完整说明见 `docs/DEV_ENV_SANDBOX.md`。
+
 | 层 | 内容 | 项数 | 是否写库 |
 |---|---|---|---|
-| G0 | 静态自检（语法 + 依赖基线） | 52 | 否 |
-| G1 | 单元自证（`*_selftest.py`） | 8 | 否 |
-| G2 | 独立复核（`*_check.py`） | 2 | 否 |
+| G0 | 静态自检（语法 + 依赖基线） | 67 | 否 |
+| G1 | 单元自证（`*_selftest.py`） | 16 | 否 |
+| G2 | 独立复核（`*_check.py`） | 5 | 否 |
 | G3 | 真实链路端到端 | 2 | **是** |
+
+> ⚠️ **项数以 `gate_all.py` 实跑为准**（`gate-report.md` 里每层都自动输出实际项数）。
+> 本表数字会随新增 `*_selftest.py` / `*_check.py` 脚本而变——
+> **新增脚本时请一并更新本表**，否则下一个人会按过期数字判断门禁覆盖面。
+> ⚠️ 历史上本表已与实际脱节过（曾长期停在 52/8/2/2，实际已是 58/11/3/2），
+> 根因是**门禁项数没有单一事实源**——`gate_all.py` 里也没有任何期望项数常量。
 
 **退出码即结论**：`0` 全绿；非 `0` 有红项，看 `gate-report.md`。
 
@@ -115,7 +144,7 @@ python3 tools/gate_all.py                # 全量：含 G2/G3，会真实连库
 | 1 | 修改开源上游代码（Wren / RAGFlow 等） |
 | 2 | 改动已有工具的**入参名或顺序**（按位契约） |
 | 3 | 改动 D1 决策（SQL 审查不通过时**不自动改写**，`review.revised_sql` 恒为 `None`）<br>（"D1"指分级阻断决策 D1，非缺陷编号） |
-| 4 | 删除数据，或修改 sha256 冻结基线 |
+| 4 | 删除数据，或修改**仓库内登记的冻结基线资产**（清单：`tools/baseline_manifest.json`）<br>（文档库基线的漂移巡检由 `tools/docsync.py` 承担，不在本红线职责内） |
 | 5 | 新增运行时依赖（见 HC-03） |
 | 6 | 需要人工点「信任」或改`mcp.json` 才能生效的改动 |
 

@@ -84,3 +84,49 @@ _archive/
 # 开发期代码热挂载覆盖（每人本地不同，且与交付口径不一致，不入库）
 # 用途见文件内注释；不入库是为了不把「开发态跑法」固化成交付契约。
 docker-compose.dev.yml
+
+# 宿主直跑的 demo server 把 4 字节临时产物写在了 cwd（仓库根）。
+# 特征：小写字母数字（**可含下划线**）文件名、内容恰为 "blat"。这些不是项目资产。
+#
+# ⚠️ 规则必须覆盖**下划线**：真实产物里含下划线的形态很常见
+#   （1dbq_ibj / 02ics36_ / _2nv4ixa / mlo8yzt_ / b22sv_ty …），
+#   只写 [0-9a-z] 会漏掉它们 ⇒ `git add -A` 会把它们带进提交。
+#
+# ⚠️ gitignore **没有「至少 N 位」语义**（`*` 能吃掉任意长度 ⇒ 长度无法下限约束），
+#   也**不支持** `{a,b}` 花括号展开 ⇒ 只能一条条写死长度。
+#   实测（`git check-ignore -q` 逐个真实样本验）：
+#     · 8 位形态（392 个真实样本）⇒ 下面这条覆盖
+#     · 14 位形态（probe_2_ebhomw）⇒ 下面第二条覆盖
+#   两条都是**精确长度**（无 `*` 尾巴）⇒ 不会误伤根目录的正常文件
+#   （实测 README.md / CONTRIBUTING.md / docker-compose.yml / .env.example 等均 not ignored）。
+/[a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_]
+/[a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_]
+
+# 探测脚本残留（本地排查时创建，非项目资产）
+.probe_*
+.tmptest/
+._probe_del_test
+_probe_del_test
+.tmp_gate/
+*.bak
+
+# ---- 调试与 tempfile 探测残骸（沙箱禁止删除 ⇒ 删不掉，只能忽略）----
+# Python tempfile 的探测文件（内容 "blat"）在沙箱下删不掉 ⇒ 残留在仓库根。
+.tmp*/
+_probe_del_test
+
+# 本地调试/探针脚本残留（tools/ 下的临时工具，不是项目资产）
+# ⚠️ 它们落在 tools/ 会被 G0 的 py_compile(tools/*.py) 计入门禁项数 ⇒ 造成项数漂移；
+#   且本机禁止删除 ⇒ 删不掉。两条路都不入仓库。
+# ⚠️ 通用形态：tools/ 下「下划线开头」的一律是本地调试产物，不入库。
+#   （逐个列举堵不住：实测一轮并行里就冒出 _dbg_/_rid_/_mvtest_/_lockwait 等十余种）
+#   ⚠️ 代价：万一将来有个正式文件以下划线开头，会被误伤 ⇒ 届时用 ! 取反放行。
+tools/_*
+# ⚠️ 例外：_pyshim/ 是**要提交的正式资产**（仓库自带的 sitecustomize 垫片）⇒ 显式放行
+!tools/_pyshim/
+!tools/_pyshim/**
+
+# 仓库根的本地探针/临时文件（实测出现过 _mvtest3.txt 等）
+/_mvtest*
+/_lockwait*
+/_probe*
