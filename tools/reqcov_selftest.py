@@ -231,6 +231,32 @@ def test_judge_grading():
         "③ confidence=0.5 < 0.6 ⇒ 未覆盖 / warning",
         "verdict=%s severity=%s stats=%s" % (e["verdict"], e["severity"], res["stats"]))
 
+    # ③b ★★ **阈值边界**：confidence **恰好 = 0.6** ⇒ 必须 blocking
+    #
+    # 🔴 为什么这条必须存在（实测踩到过，不是假想）
+    # --------------------------------------------
+    # 冻结口径写的是「confidence **≥** 0.6 ⇒ 阻断」，即 0.6 **本身**够格。
+    # 实现里若把比较符写成 ``<=``（0.6 <= 0.6 为真），0.6 就会被降级成警告——
+    # 而那句文案还写着「confidence=0.6 < 0.6，按警告处理」，
+    # **代码与文案自相矛盾**（0.6 < 0.6 是假的）。
+    # 后果很实际：实例层给「月度」的置信度**恰好是 0.60**，
+    # 于是「月度」永远进不了阻断级 ⇒ 需求要素缺失在主链路上静默放过。
+    # ⇒ 边界（= 阈值）必须单独钉一条，**不能**只测「小于阈值」那侧。
+    res = R.judge([_element(confidence=0.6)], facts_none)
+    e = res["elements"][0]
+    all_ok &= _ok(
+        e["verdict"] == R.VERDICT_UNCOVERED and e["severity"] == R.SEVERITY_BLOCKING
+        and res["stats"]["blocking"] == 1 and res["stats"]["warning"] == 0,
+        "③b confidence=0.6（恰好等于阈值）⇒ 未覆盖 / blocking（≥ 0.6 口径）",
+        "verdict=%s severity=%s stats=%s" % (e["verdict"], e["severity"], res["stats"]))
+    # 边界另一侧：0.599999999 仍应是警告（确认比较是「严格小于」而非「小于等于」）
+    res = R.judge([_element(confidence=0.599999999)], facts_none)
+    e = res["elements"][0]
+    all_ok &= _ok(
+        e["severity"] == R.SEVERITY_WARNING and res["stats"]["warning"] == 1,
+        "③b 边界另一侧 confidence=0.599999999 ⇒ warning（严格小于 0.6）",
+        "severity=%s" % e["severity"])
+
     # ④ needs_confirmation=True ⇒ 未覆盖 / warning（不阻断）
     res = R.judge([_element(needs_confirmation=True)], facts_none)
     e = res["elements"][0]
@@ -239,6 +265,15 @@ def test_judge_grading():
         and res["stats"]["blocking"] == 0,
         "④ needs_confirmation=True ⇒ 未覆盖 / warning",
         "verdict=%s severity=%s" % (e["verdict"], e["severity"]))
+
+    # ④b 边界：confidence=0.6（够格）但 needs_confirmation=True ⇒ 仍 warning
+    #（三条件是**与**关系：任一不满足即降级为警告）
+    res = R.judge([_element(confidence=0.6, needs_confirmation=True)], facts_none)
+    e = res["elements"][0]
+    all_ok &= _ok(
+        e["severity"] == R.SEVERITY_WARNING and res["stats"]["blocking"] == 0,
+        "④b confidence=0.6 但待确认=True ⇒ warning（三条件是与关系）",
+        "severity=%s" % e["severity"])
 
     # ⑤ polarity=may_omit ⇒ 不判（不是缺口）
     res = R.judge([_element(polarity="may_omit")], facts_none)

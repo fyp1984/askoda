@@ -101,6 +101,15 @@ CONSUMERS = {"_run_python_script"}
 # 与项数无关的字符串工具（对 report_list 零贡献），显式忽略。
 IGNORED = {"_repo_rel"}
 
+# ⚠️ **G3 代码同步告警**（`_warn_g3_stale_container`）：它只**打印**一段告警
+# （"G3 可能测的是旧代码"），**不向 report_list 追加任何项** ⇒ 对项数零贡献。
+# ⇒ 登记进 IGNORED（而不是 FIXED_COLLECTORS）：它是**告警**不是**采集器**。
+# ⚠️ 为什么要显式登记而不是放宽判据：判据的价值在于
+# 「未登记的调用 ⇒ 报错」（宁可报错，也不静默漏算项数）。
+# 若这里放宽，就等于给"以后再加新采集器忘了登记"开了口子 ⇒ 判据又变成哑的。
+# ⇒ 每加一个"只打印不记账"的函数，都要在这里显式登记 —— 这份登记本身就是账本。
+IGNORED.add("_warn_g3_stale_container")
+
 # 一项定长采集器（各写 1 条 report），项数由 `_count_appends` 数出来，不写死。
 FIXED_COLLECTORS = {
     "_g0_env_selfcheck",      # G0：子解释器依赖自检
@@ -205,8 +214,11 @@ def compute_actual(tree=None, script_lister=None):
                     n = len(lister(pattern))
                     files = [os.path.basename(f) for f in lister(pattern)]
                 else:  # _g0_py_compile：模式相对 REPO_ROOT
-                    import glob as _glob
-                    hits = sorted(_glob.glob(os.path.join(ga.REPO_ROOT, pattern)))
+                    # ⚠️ **必须调 gate_all 的同一口径**（ga._g0_py_files），
+                    #   不可在这里另写一套 glob ——
+                    #   两边各写一套时，门禁实跑与项数核对会算出不同的数
+                    #   （历史上真出现过「门禁说 69、核对说 74」）。
+                    hits = ga._g0_py_files(pattern)
                     n = len(hits)
                     files = [os.path.relpath(h, ga.REPO_ROOT) for h in hits]
                 total += n
@@ -428,6 +440,11 @@ def main():
              actual["TOTAL"], actual["DAILY"]))
     print("  ⚠️ 派生关系：G1/G2/G3 随 `tools/*_selftest.py`/`*_check.py`/`*_verify.py`")
     print("     增删而变；G0 随 `gateway|bff|tools` 下 .py 文件数变化（含本文件）。")
+    print("  ⚠️ glob **不递归**：`tools/*.py` **不匹配子目录**（实测不含")
+    print("     tools/_pyshim/sitecustomize.py）⇒ 放在 `tools/<子目录>/` 里的文件**不计入 G0**")
+    print("     ⇒ 临时探针/调试文件放子目录就不影响项数，省得每次加/删都要回填文档。")
+    print("     ⚠️ 反过来：**直接放在 `tools/` 根下的每个 .py 都会让 G0 +1**（如调试残留）")
+    print("        ⇒ 那种情况判红是**正确**的，不是误报。")
     return 1
 
 

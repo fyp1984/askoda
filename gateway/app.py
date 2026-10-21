@@ -940,7 +940,8 @@ def sql_context_pack(demand_id: str, dataset: str = "B") -> dict:
 def sql_review(sql: str, dataset: str = "B", demand_id: str = "") -> dict:
     """M5-1 · 门禁审查 SQL（生成与审查分离）。
 
-    L-REQ 需求要素（结构化需求齐备性；**无 demand_id 时 skipped，不判红**）／
+    L-REQ 需求要素覆盖判定（**无 demand_id 时 skipped，不判红**；默认 report-only，
+    缺口进 requirement_gaps 不改 status）／
     L1 语法（SQLGlot parse，失败即阻断）／L2 静态风险（无 ON 的 JOIN、SELECT *、
     GROUP BY 与输出列不一致——记为**警告不阻断**）／L3 只读（仅放行 Select/With，写操作与
     多语句**阻断**）／L4 语义（Wren dry_run）／L5 结果断言（无结果集时 skipped）。

@@ -12,7 +12,12 @@
   它审的是「结构化需求齐不齐备」，L1~L5 审的是「SQL 对不对」——两者答的不是
   同一个问题。**无需求输入（requirement 为 None / 取不到）时 L-REQ 判 skipped，
   绝不判红**，以免给现有不带 demand_id 的调用点造出全新失败模式。
-  阶段一只做接线与齐备性校验；要素提取与覆盖判定在阶段二。
+- REQ-COVERAGE 阶段二（2026-10-20）：L-REQ 从「槽位齐备性」换成**需求要素覆盖判定**
+  （需求要素清单 vs SQL 实际输出）。判据在 gateway/reqcov.py（judge，纯函数），
+  **策略在本文件**：默认 report-only（有阻断级缺口也只留痕、不改 status），
+  置 REQ_COVERAGE_MODE=blocking 即整体切到阻断。⚠️ 两个开关各管一件事：
+  本文件的 blocking_layers 管「ok=False 是否传导到 status」，
+  环境变量管「什么情况下置 ok=False」——详见 review() 里的注释。
 - M6-1 改造：L2 10 类静态规则**整体搬迁**到 gateway/rules.py 的 REGISTRY；
   gates.py 只保留 L1~L5 接线层（+ is_write 辅助函数）。新增一条规则 = 只改 rules.py，
   不需要再进 gates.py 改 _static_checks。
@@ -45,49 +50,71 @@ _SQLFLUFF_ON = os.getenv("SQLFLUFF_ENABLED", "").strip() in ("1", "true", "TRUE"
 _GX_ON = os.getenv("GX_ENABLED", "").strip() in ("1", "true", "TRUE", "on", "ON")
 
 
-# L-REQ · 阶段一（REQ-COVERAGE）判据：结构化需求里必须「有结论」的槽位。
+# L-REQ · 阶段二（REQ-COVERAGE）**策略层**配置。
 #
-# 🔴 本段是**临时口径，阶段二会整体替换**，且**阶段一上线期间会真实跑在生产链路上**
-#   —— 它不是死代码，是会判结果的活代码（只是不阻断，见 _requirement_check）。
+# 🔴 本段属**策略层**，不是判据层。冻结的判据口径全部在 gateway/reqcov.py 里
+#   （_severity_of / judge），本文件**不重算**严重度、不复制三条件。
+#   分层的理由：reqcov_selftest.py 用断言钉死了「judge() 输出不含
+#   status / blocked / should_block 等策略字段」——判据层一旦混入策略，
+#   第4 步就无处插开关（这正是本文件存在的意义）。
 #
-# 为什么是这四个单值槽位 + output_fields 非空（都是齐备性，非覆盖判定）
+# 判据层（reqcov.judge）出的是逐要素 verdict + gaps + stats；
+# **「要不要判红」由本文件决定**，由下面这个开关切换。
+#
+# 🔴 为什么默认 report-only（不阻断）
 # -------------------------------------------------------------------
-# 结构化需求对象共 6 个槽位字段（requirement.REQUIRED_TOP）：
-#   subject / granularity / time_semantics / data_scope / output_fields / residual_risks
-# · residual_risks 是「残余风险集合」——**空是正常的**（无风险），拿它判缺口会
-#   把「一切都好」误报成问题。
-# · output_fields 只判**空数组**：空 = 下游无列可选、SQL 根本写不出来，是齐备性问题
-#   （requirement.py:259-262 已有先例与现成文案）。
-#   ⚠️ **只判空数组，不判「字段是否在 SQL 里出现」**——后者是覆盖判定，归阶段二。
-# · 四枚单值槽位判「有无结论」：注意 build() 对无候选槽位写的占位项 value 非空
-#   （是一句中文说明）而 confidence=0.0，**两者都要看**。
+# deterministic-planner 是当前**唯一**的 SQL 生成路径。覆盖判定一上来就全量阻断，
+# 等于把现网所有「字段名对不上」的 SQL 全部打回——而实例层 matcher 对
+# 指标/维度类的语义明确是**保守的**（判不了就报 UNDECIDABLE，见
+# reqelem.register_instance_matchers 的 docstring），真正会红的主要是
+# 「月度这类时间粒度没进 GROUP BY」。
+#   ⚠️ 更现实的风险：**门禁天天红，团队就会绕过门禁**——那比不做门禁更糟。
+#   ⇒ 默认只留痕（notes + requirement_gaps），不改变 status；
+#     契约一旦稳定，用 REQ_COVERAGE_MODE=blocking 即可整体切到阻断。
 #
-# 第二阶段替换什么
-# --------------
-# 整段替换为「需求要素 vs SQL 实际输出」的**覆盖判定**，届时引入 8 字段契约
-# （element / slot / provenance / confidence / needs_confirmation / mandatory /
-#   polarity / matcher）。⚠️ 其中 `polarity` 是关键：结构化对象里「原文没提」与
-# 「原文显式豁免」都是 confidence=0，**结构上无法区分**，只有 must_cover/may_omit
-#   这个字段能分开——不引入它就会把「业务方主动豁免」误拦成「需求未覆盖」。
-#   ⚠️ 取值域以 8 字段契约为准：must_cover | may_omit。
-#   may_omit 有两个成因（沉默缺失 / 业务方显式豁免），detail 文案必须能区分二者。
-_REQ_REQUIRED_SLOTS = ("subject", "granularity", "time_semantics", "data_scope")
+# ⚠️ 取值**每次调用都重新读环境变量**（不在 import 时定死）：否则自证脚本
+#   在同一进程里切不动模式，策略层就成了写死的假开关。
+# ⚠️ 只认 blocking 一个真值；其余（含拼错、大小写、空串）一律落 report-only
+#   ——「开关写错」绝不能等于「静默变成全量阻断」。
+_REQ_COVERAGE_MODE_ENV = "REQ_COVERAGE_MODE"
+_REQ_MODE_REPORT = "report-only"
+_REQ_MODE_BLOCKING = "blocking"
 
-# L-REQ 每条 detail 的固定前缀：自述本层**只查了什么、没查什么**。
+
+def _req_coverage_mode():
+    """读当前覆盖判定的策略模式。
+
+    返回 **模式字符串**（``"report-only"`` 或 ``"blocking"``），不是 bool。
+    ⚠️ 必须返回字符串而不是 bool：调用点是 `mode == _REQ_MODE_BLOCKING`
+       这种**与常量比字符串**的写法；早先返回 bool 时该比较恒为 False，
+       `blocking` 模式静默失效——**症状是「切了开关但门禁照旧不拦」**，
+       没有任何报错。这正是本项目在修的那类静默失效，故在此显式记录。
+    """
+    v = (os.getenv(_REQ_COVERAGE_MODE_ENV, "") or "").strip().lower()
+    return _REQ_MODE_BLOCKING if v == _REQ_MODE_BLOCKING else _REQ_MODE_REPORT
+
+# L-REQ 每条 detail 的固定前缀：自述本层**查了什么、没查什么**。
 #
 # 为什么必须出现在 detail（用户可见）而不是只写在 docstring（代码注释）
 # ---------------------------------------------------------------------
 # REQ-COVERAGE 要修的病就是**静默失效**：requirement 恒 None、各层全绿、
-# deliverable=true、业务方拿错数据、全程零报错。若 L-REQ 静默通过却不自述
-# 「我只查了齐备性、没查覆盖」，等于把同一个洞挖在新位置——业务方看到 L-REQ 绿了
-# 会以为「需求要素已校验通过」。
+# deliverable=true、业务方拿错数据、全程零报错。若L-REQ 静默通过却不自述
+# 「我查的是覆盖判定、哪些没查」，等于把同一个洞挖在新位置——业务方看到
+# L-REQ 绿了会以为「需求要素已全部落实」。
 #
-# 「缺席必须显式报未执行」这条原则，同样适用于**「在场但只做了一半」**。
+# 「缺席必须显式报未执行」这条原则，同样适用于**「在场但只做了一半」**：
+# report-only 模式下有阻断级缺口却放行，必须在 detail 里说清「为什么没拦」
+# （见 _req_gap_lines 里的模式说明行）。
 #
-# 前半句防「以为查了覆盖判定」，后半句防「以为 output_fields 有值就是指标已齐」。
+# ⚠️ 措辞随阶段演进：阶段一前缀写的是「仅校验槽位齐备性…覆盖校验见阶段二」，
+#   阶段二本层已换成覆盖判定，故前缀同步改成覆盖判定口径。
+#   ⚠️ **常量名 _REQ_SCOPE_PREFIX 不要改名**：tools/gates_selftest.py 的 7b-6
+#   按「源码里每个产出 detail 的 return 都引用它」做结构性扫描，改名会让那条
+#   判据扫不到任何东西从而**静默失效**（不是变红，是再也不拦了）。
 _REQ_SCOPE_PREFIX = (
-    "本阶段仅校验槽位齐备性（槽位有无结论、output_fields 是否为空）；"
-    "未做需求要素覆盖判定（未核对 SQL 是否体现需求要求的指标与维度）；覆盖校验见阶段二。\n"
+    "本层校验需求要素覆盖判定（需求要素清单 vs SQL 实际输出：时间粒度看 GROUP BY、"
+    "指标/维度看 SQL 中是否出现），阻断口径为「置信度≥0.6 且待确认=False 且 must_cover」；"
+    "未查：SQL 写得对不对（语法/只读/语义分别由 L1/L3/L4 负责）。\n"
     "  "
 )
 
@@ -168,8 +195,159 @@ def _gx_assert(exec_result) -> dict:
     return {"skipped": True, "reason": "一期未启用"}
 
 
-def _requirement_check(requirement):
-    """L-REQ · 需求要素层（REQ-COVERAGE 阶段一：只接线 + 齐备性，**不判红**）。
+# ---------------------------------------------------------------------------
+# L-REQ · 阶段二：需求要素**覆盖判定**（判据层 reqcov + 策略层本文件）
+# ---------------------------------------------------------------------------
+#
+# 🔴 分层纪律（本阶段唯一不许含糊的地方）
+# ---------------------------------------------------------------------------
+#   判据层 = gateway/reqcov.py：回答「这个要素**覆盖了没有**」。
+#     · ElementContract（8 字段契约）、SqFacts（SQL 事实）、extract_facts、
+#       judge()、_severity_of（冻结三条件）全在那儿。
+#     · judge() **不含** status / blocked / should_block 等策略字段——
+#       reqcov_selftest.py 有断言钉死这一点。
+#   策略层 = 本文件：回答「覆盖没覆盖**要不要拦**」。
+#     · 唯一开关 _req_coverage_mode()（默认 report-only）。
+#     · 本文件**不重算严重度、不复制三条件**，只读 judge() 给的 severity。
+#
+#   ⚠️ **禁的是「在策略层重写三条件」，不是「`>= 0.6` 这个写法本身」**：
+#       · `confidence >= 0.6` 本身是**冻结口径、是对的**（阻断级阈值 0.6，取等号即 ≥）。
+#         本文件 L357 的「阻断 = (confidence ≥ 0.6) AND …」是**照抄口径的说明文字**，
+#         不是可执行判定；写成 `>=` 才是对的（改成 `<` 就会把「恰好 0.6」漏出去）。
+#       · 三条件的**唯一权威实现**在 `gateway/reqcov.py` 的 `_severity_of()`；
+#         策略层（gates.py）**只读** judge() 给的 severity，不自己算、不复制条件。
+#       · 真正的禁忌是：在本文件里**再写一遍** `confidence >= 0.6 and ...` 这类**可执行判定**——
+#         那样判据与策略就焊在一起，改判据要改两处，两处可能不一致 ⇒ 静默漏拦。
+#         ⚠️ 曾因把「禁重写」误读成「`>= 0.6` 写法本身是错的」，
+#            导致 reqcov.py 的阈值判据被写成 `<=` ⇒ 置信度**恰好 0.6** 的要素
+#            永远进不了阻断级 ⇒ 需求要素缺失在主链路上静默放过（已修正为 `<`）。
+
+# may_omit 的两种成因文案（供详情行使用）
+# ------------------------------------------------------------------------------
+# ⚠️ 真正的区分依据是实例层 reqelem 产出的 `cause` 字段：judge() 对两种 may_omit
+#   写的是**同一句**「polarity=may_omit（原文未提出或业务方显式豁免）」，
+#   光看 judge() 输出分不开。而 `cause` 只存在于 build_elements_from_requirement
+#   的返回里（to_contract_dicts 投影 8 字段时会被剥掉）
+#   ⇒ **本模块必须用带 cause 的入口**。
+# ⚠️ 兜底文案刻意用「未提及」而非「未提出」，与实例层真实 cause 区分词不同：
+#   万一 cause 缺失，宁可文案不够准，也不能让「未提出」与「显式豁免」
+#   撞成同一句——tools/gates_selftest.py 的 7c-2 / 7c-6 就是靠这两句
+#   不同来钉契约的（assertNotEqual）。
+_CAUSE_NOT_STATED = "原文未提及"
+_CAUSE_FALLBACK = "%s该要素，不作要求（成因未知：实例层未给 cause）"
+def _skipped(detail):
+    """skipped 返回路径的统一收口。
+
+    ⚠️ ok 恒为 True：skipped 的层不参与总状态（见 review() 的
+      has_blocking_fail 同时要求 ok=False 且 skipped=False）。
+      把 ok 写成 False 会让「没查」看起来像「查了且不合格」。
+    """
+    return {
+        "ok": True, "skipped": True, "gaps": [],
+        "detail": _REQ_SCOPE_PREFIX + detail,
+    }
+
+
+def _not_judged_lines(elements, reports, reqelem_mod):
+    """「不判」要素逐条列出，**并按成因分流**（委托实例层reqelem.not_judged_reason）。
+
+    ⚠️ 「不判」有**来源完全不同**的成因，混成一句话就是误导：
+      ① 业务方**有意不要**（原文未提出 / 显式豁免，polarity=may_omit）
+         —— 这是「我说的不要」，用实例层给的`cause` 说明。
+      ② **我们没能力判**（matcher 判不了，UNDECIDABLE）
+         —— 这是「没查成」，**不是**「不需要」。写成「不作要求」等于
+         把「没查」谎报成「不需要」，那正是 REQ-COVERAGE 的原始病。
+      ③ **原因不明**（第三种成因没被识别）⇒ 必须显式标出，**不混进任何一类**。
+
+    🔴 **为什么委托 reqelem.not_judged_reason() 而不在这里自己判**
+    -------------------------------------------------------------------
+    分流依据必须是**结构化信号**（`polarity` + matcher kind），**不能嗅探reason 文本**。
+    底座自己就批评过文本嗅探（「把语义藏在字符串里，一旦有人改了措辞，判定就静默变样」，
+    见 reqcov.py 关于三态的注释）⇒ 我这里若写 `if "无法判定" in reason:`，
+    队友改一次措辞，两类成因就会静默互换 —— 又一条永不触发的死规则。
+    ⇒ 实例层把这条分流做成了**可测的纯函数**（并自证「改reason 文本不影响分类」）。
+
+    ⚠️ 返回三元组 (waived, unable, unknown)，调用方**必须都消费**：
+      只渲染 waived 会让「未判定能力」/「原因不明」整堆信息消失。
+    """
+    by_name = {e.get("element"): e for e in (elements or [])}
+    waived, unable, unknown = [], [], []
+    for rep in (reports or []):
+        if rep.get("verdict") != "不判":
+            continue
+        name = rep.get("element")
+        el = by_name.get(name) or {}
+        category, text, basis = reqelem_mod.not_judged_reason(el, rep)
+        line = "  - %s：%s" % (name, text)
+        if category == "业务方有意不要":
+            waived.append(line)
+        elif category == "未判定能力":
+            unable.append(line)
+        else:
+            #⚠️ 不塞进任何一类：混进去 = 谎报。显式说明「成因未识别」。
+            unknown.append("  - %s：%s（依据：%s）" % (name, text, basis))
+    return waived, unable, unknown
+
+
+def _gap_lines(gaps):
+    """缺口逐条。**不只报数量**——缺口要能被业务方直接拿去改 SQL。"""
+    return [
+        "  - [%s] %s（%s）：%s" % (
+            "阻断" if g.get("severity") == "blocking" else "警告",
+            g.get("element"), g.get("slot"), g.get("reason", ""))
+        for g in (gaps or [])
+    ]
+
+
+def _not_judged_sections(waived, unable, unknown):
+    """把「不判」的三类成因渲染成分节文案。
+
+    ⚠️ 三节各自独立、不互相顶替：
+      · 「业务方未要求」= 有意不要（may_omit）
+      · 「未判定能力」   = 我们没能力判（UNDECIDABLE）—— **不是不需要**
+      · 「成因未识别」   = 兜底：出现它就说明有第三种成因没被识别
+        ⇒ **必须显式报出来**，混进上面任何一节都是谎报。
+    ⚠️ 「未判定能力」为空时**也要说清有没有**：若判据层哪天把某个 kind 从已
+      注册表里删掉，业务方会看到缺口从 N 条变成 0 条却看不到任何解释，
+      那与静默失效同构。
+
+    🔴 为什么「未判定能力」**逐项列出而不折叠成计数**
+    ------------------------------------------------
+    实例层（队友实测，DR-20261020-1P4K）：SQL 里写的是 `s.store_name`，
+    而需求写的是「门店」⇒ 中文业务名与英文列名对不上 ⇒ 判 UNDECIDABLE。
+    ⚠️ 但同一条 SQL 里 `AS 销售额` 的中文别名**能精确命中** ⇒ 判「已覆盖」。
+    ⇒ 「未判定能力」这一节里，**有的其实已覆盖、只是认不出**。
+    业务方看到「销售额明明在 SQL 里，怎么说没判」会困惑。
+
+    ⇒ 解法是**在节标题后加一句限定**，把「判不了」的原因说清，
+      **不是**折叠成计数（折叠会丢信息：业务方不知道该查哪几项；
+      且若将来某个 kind 真返回 UNMATCHED，混在计数里看不见 ⇒ 又是静默失效）。
+    ⇒ 这句限定是**必需**的：没有它，「未判定」会被读成「未覆盖」。
+    """
+    lines = []
+    if waived:
+        lines.append("以下要素业务方未要求（不进覆盖判定）：")
+        lines.extend(waived)
+    if unable:
+        lines.append("以下要素**未判定能力**（底座 matcher 判不了，不算缺口也不等于已覆盖）：")
+        # ⚠️ 这句限定**必须在这里、且必须在逐项清单之前**：
+        #   少了它，业务方会把「判不了」读成「没覆盖」⇒ 去改本来正确的 SQL。
+        lines.append(
+            "⚠️ 说明：这里「判不了」多因**业务名与 SQL 里的列名/别名对不上**"
+            "（例：需求写「门店」，SQL 里是 store_name）⇒ **不代表没覆盖**，"
+            "也**不是缺口**；要确认请人工核对该要素对应的列。")
+        lines.extend(unable)
+    if unknown:
+        # 🔴 显式标「成因未识别」：宁可让业务方困惑，也不能谎报成「不需要」。
+        lines.append("⚠️ 以下要素判「不判」但**成因未识别**（可能是第三种成因，需人工复核）：")
+        lines.extend(unknown)
+    if not (waived or unable or unknown):
+        lines.append("无「不判」要素。")
+    return lines
+
+
+def _requirement_check(requirement, sql=None):
+    """L-REQ · 需求要素层（REQ-COVERAGE 阶段二：**覆盖判定** + 分级阻断）。
 
     返回 {"ok", "skipped", "detail", "gaps"}，形状与 L1-L5 对齐。
 
@@ -180,106 +358,183 @@ def _requirement_check(requirement):
     可 GROUP BY 与输出列一致，唯独「月度」「订单数」「已退款金额」三项
     从未进入过任何一层的视野。L-REQ 补的是这个洞，故排在最前。
 
-    🔴 阶段一为什么**绝不判 ok=False**（临时口径，误拦风险已知）
-    -------------------------------------------------------
-    阶段一只判**齐备性**（槽位有没有结论），不判**覆盖判定**（有结论但 SQL 没体现）。
-    齐备性缺口离「判定需求是否被满足」还差一整个阶段，**不构成阻断理由**。
+    本函数做什么（判据层 → 策略层）
+    ------------------------------
+    1. 从结构化需求对象出发，经**实例层 reqelem** 产出 8 字段要素契约；
+    2. 从 SQL 提取事实（reqcov.extract_facts）；
+    3. 交判据层 reqcov.judge() 出逐要素 verdict + gaps（**纯函数，无策略**）；
+    4. 策略层按 _req_coverage_mode() 决定 ok 是否为 False（默认 report-only）。
 
-    误拦是**已实测复现**的，不是理论风险：`requirement.py:237-241` 对无候选槽位写的是
-    `{"value": "无候选结论（该槽位在本轮分析中为空）", "confidence": 0.0}`，
-    而「各门店总销售额」这类**原文根本没提时间**的需求，其 `time_semantics`
-    正是这个形态⇒ 若据此判红，业务方任何没提时间的正常提问都会被拦。
-
-    根因值得记住：**「槽位缺失」与「业务方没要求」在结构化需求对象里是同一个信号
-    （都是 `confidence=0`），结构上无法区分。** 这正是阶段二契约必须引入 `polarity`
-    的原因——`may_omit`（显式豁免）与「原文未提」（沉默缺失）只有加上这个字段才分得开。
-
-    阶段一的四条硬约束
-    ------------------
-    1. **无需求输入一律 skipped，绝不判红**。调用方不传 requirement 时
-       （现有 sqlgen / sqlrun 三处调用都不传），若判红就是给全链路造出
-       一个全新失败模式——这比原缺陷更难查。
-    2. **只报告，不改写**。本层只产出 gaps，绝不触碰改写字段
+    🔴 三条硬约束（阶段一立下，阶段二继续有效）
+    ----------------------------------------------
+    1. **无可比对需求 ⇒ skipped，绝不判红**。归到 skipped 的情形：未传
+       requirement / 类型异常 / requirement.get 取不到 / 无 SQL /
+       实例层取不到要素或算出**空**清单。
+       ⚠️ 尤其「要素清单为空」必须报出来——把「抽不出要素」显示成「全绿」
+       正是 REQ-COVERAGE 的原始病。
+    2. **只报告，不改写**。本层只产出 gaps，绝不触碰 revised_sql
        （红线 D1：门禁失败时自动改写 SQL 是被机械判据 check_r3_d1 盯着的）。
-    3. **detail 必须自述范围**。本函数每一条返回路径的 detail 都带
-       _REQ_SCOPE_PREFIX——业务方在界面上看不到代码注释，若静默通过却不自述
-       「只查了齐备性、没查覆盖」，等于把 REQ-COVERAGE 要修的那个洞挖在新位置。
-    4. **⚠️ 本函数在阶段二会被整体替换**（含 gaps 判定与本段判据）。
+    3. **detail 必须自述范围**。每一条返回路径的 detail 都带 _REQ_SCOPE_PREFIX。
 
-    槽位口径（勿绕开）
-    ------------------
-    传入对象是 requirement.build/get 产出的**结构化技术需求对象**，其字段名
-    是设计文档口径：subject / granularity / time_semantics / data_scope /
-    output_fields / residual_risks（见 requirement.SLOT_MAP）。
-    **不是** M3 slots 的 time / scope / fields / risks——直取后者会 KeyError。
+    🔴 阻断 vs 警告（三条件冻结，只在 reqcov._severity_of 里实现）
+    --------------------------------------------------------
+        阻断 = (confidence ≥ 0.6) AND (needs_confirmation == False) AND (polarity == must_cover)
+        警告 = 其余全部
+        不判 = 原文未提出 / 业务方显式豁免（polarity=may_omit）
+    ⚠️ 本函数**照抄**这个口径会与判据层脱钩：改判据要改两处 ⇒ 静默漏拦。
+
+    🔴 为什么 report-only 模式下「有阻断级缺口也不拦」
+    --------------------------------------------------
+    deterministic-planner 是当前唯一生成路径，一上来全量阻断会大面积打回现网，
+    而实例层 matcher 对指标/维度明确保守（判不了 ⇒ UNDECIDABLE，不算缺口）。
+    **门禁天天红，团队就会绕过门禁**——那比不做门禁更糟。
+    ⇒ 缺口照样进 requirement_gaps 与 review_notes（不静默），只是不改 status。
+
+    参数
+    ----
+    requirement : requirement.get() 的返回（结构化技术需求对象），或 None
+    sql         : 待审查 SQL（用于提取 SqFacts）。None/空 ⇒ 无法比对 ⇒ skipped。
+
+    ⚠️ 槽位口径（勿绕开）：传入对象字段名是设计文档口径
+       subject / granularity / time_semantics / data_scope / output_fields /
+       residual_risks（见 requirement.SLOT_MAP），**不是** M3 slots 的
+       time / scope / fields / risks——直取后者会 KeyError。
+       本函数**不直接读这些字段**（那会重演「订单数从字段槽消失」的老问题），
+       一律委托实例层 reqelem 走bundle 重建路径。
     """
-    # 需求不可用（未传 / 取不到 / 模块未就绪）→ skipped，不判红。
-    # 三种情形都归到这里，因为它们回答的都是「没有可比对的需求」，
-    # 而不是「需求不合格」。
+    # -- 需求不可用 → skipped（与「需求不合格」严格区分） --
     if requirement is None:
-        return {
-            "ok": True, "skipped": True, "gaps": [],
-            "detail": _REQ_SCOPE_PREFIX
-                      + "跳过原因：未提供结构化需求（调用方未传 demand_id），本层不参与总状态。",
-        }
+        return _skipped(
+            "跳过原因：未提供结构化需求（调用方未传 demand_id），本层不参与总状态。")
     if not isinstance(requirement, dict):
-        return {
-            "ok": True, "skipped": True, "gaps": [],
-            "detail": _REQ_SCOPE_PREFIX
-                      + "跳过原因：结构化需求类型异常（%s），本层不参与总状态。"
-                      % type(requirement).__name__,
-        }
+        return _skipped(
+            "跳过原因：结构化需求类型异常（%s），本层不参与总状态。"
+            % type(requirement).__name__)
     if requirement.get("ok") is False:
         # requirement.get 查不到时返回的就是 {"ok": False, "error": ...}。
         # 这是「取不到」，不是「不合格」——skipped 并把原因写进 detail。
+        return _skipped(
+            "跳过原因：结构化需求不可用（%s），本层不参与总状态。"
+            % str(requirement.get("error") or requirement.get("reason") or "")[:160])
+    if sql is None or str(sql).strip() == "":
+        # 无 SQL 可比对 ⇒ 判不了覆盖。这不是「覆盖通过」。
+        return _skipped(
+            "跳过原因：无待审查 SQL，无法提取 SqFacts 做覆盖比对，本层不参与总状态。")
+
+    # -- 实例层（reqelem）：拿 8 字段契约要素。⚠️ 必须用带 cause 的入口 --
+    #
+    # ⚠️ 按需导入：reqelem 依赖 sqlglot（经reqcov），顶层导入会把
+    #   「门禁子进程能 import gates.py」这条离线契约拖上数据库/词表依赖。
+    try:
+        import reqcov as reqcov_mod      # noqa: PLC0415
+        import reqelem as reqelem_mod    # noqa: PLC0415
+        # 实例侧 matcher **就地幂等注册**：不注册则 field_present 等 5 个 kind
+        # 在 judge() 里全判「不判 + 未注册」，字段类要素永远进不了覆盖判定
+        # ——且**不报错、门禁不红**，是静默失效的形态。
+        # ⚠️ 用ensure_instance_matchers() 而不是 register_instance_matchers()：
+        #   前者幂等，且会在登记前后守卫「底座自带的 time_granularity 没被覆盖」
+        #   （那条按类别判粒度，是「换个写法就判未覆盖」的假阳性防火墙；
+        #   被静默替换后不报错、极难定位）。详见该函数 docstring。
+        # ⚠️ 返回 [] 表示「底座不可用」（裸解释器里 reqcov 依赖 sqlglot）——
+        #   这种情况本层本就该skipped，不当成注册成功。
+        _registered_kinds = reqelem_mod.ensure_instance_matchers()
+        if not _registered_kinds:
+            return _skipped(
+                "跳过原因：覆盖判定底座不可用（reqcov 依赖 sqlglot，当前环境无法加载），"
+                "本层不参与总状态。")
+        got = reqelem_mod.build_elements_from_requirement(requirement)
+    except Exception as e:  # noqa: BLE001
+        # 取要素失败 ⇒ skipped，**绝不判红**：抽不出要素不等于需求没被满足。
+        return _skipped(
+            "跳过原因：要素清单构造失败（%s: %s），本层不参与总状态。"
+            % (type(e).__name__, str(e)[:160]))
+    if not isinstance(got, dict) or got.get("ok") is False:
+        return _skipped(
+            "跳过原因：取不到需求要素清单（%s），本层不参与总状态。"
+            % str((got or {}).get("error") or "未知原因")[:200])
+    elements = got.get("elements") or []
+    if not elements:
+        # ⚠️ 空要素清单是「没抽出来」，不是「需求没什么可要求」。
+        # 报 skipped 是保守方向：不阻断、但把缺席显式写出来。
+        return _skipped(
+            "跳过原因：需求要素清单为空（本轮未能从需求原文抽出任何要素），"
+            "无法做覆盖判定，本层不参与总状态。")
+
+    # -- SQL 事实（解析失败由 L1 报红，本层不重复报、也不自己判红） --
+    try:
+        facts = reqcov_mod.extract_facts(sql)
+    except Exception as e:  # noqa: BLE001
+        return _skipped(
+            "跳过原因：SQL 无法提取事实（%s: %s），覆盖判定未执行"
+            "（语法问题请看 L1），本层不参与总状态。"
+            % (type(e).__name__, str(e)[:160]))
+
+    # -- 判据层：judge() 是纯函数，只出 verdict/gaps/stats，不含任何策略字段 --
+    try:
+        judgement = reqcov_mod.judge(reqelem_mod.to_contract_dicts(elements), facts)
+    except Exception as e:  # noqa: BLE001
+        return _skipped(
+            "跳过原因：覆盖判定失败（%s: %s），本层不参与总状态。"
+            % (type(e).__name__, str(e)[:160]))
+
+    stats = judgement.get("stats") or {}
+    gaps = list(judgement.get("gaps") or [])
+    waived, unable, unknown = _not_judged_lines(
+        elements, judgement.get("elements"), reqelem_mod)
+    mode = _req_coverage_mode()
+
+    if not gaps:
+        # 无缺口 ⇒ 本层通过。仍要说清「判了什么、判了多少」，不能只写「通过」。
+        body = [
+            "覆盖判定通过：%d 项要素中已覆盖 %d、不判 %d、缺口 0。"
+            % (stats.get("total", 0), stats.get("covered", 0), stats.get("not_judged", 0)),
+        ]
+        body.extend(_not_judged_sections(waived, unable, unknown))
         return {
-            "ok": True, "skipped": True, "gaps": [],
-            "detail": _REQ_SCOPE_PREFIX
-                      + "跳过原因：结构化需求不可用（%s），本层不参与总状态。"
-                      % str(requirement.get("error") or requirement.get("reason") or "")[:160],
+            "ok": True, "skipped": False, "gaps": [],
+            "detail": _REQ_SCOPE_PREFIX + "\n".join(body),
         }
 
-    gaps = []
-    for slot in _REQ_REQUIRED_SLOTS:
-        claim = requirement.get(slot)
-        if not isinstance(claim, dict):
-            gaps.append("槽位「%s」缺失或类型异常（实际 %s）"
-                        % (slot, type(claim).__name__))
-            continue
-        value = claim.get("value")
-        confidence = claim.get("confidence")
-        # build() 对取不到候选的槽位写的是占位项：value 明写「无候选结论」且
-        # confidence=0.0（见 requirement.build 的 absent 分支）。所以
-        # 「值空」与「confidence 为 0」两个信号等价于「这一槽位没有结论」。
-        if value is None or str(value).strip() == "":
-            gaps.append("槽位「%s」无结论（value 为空）" % slot)
-        elif isinstance(confidence, (int, float)) and not isinstance(confidence, bool) and confidence <= 0:
-            gaps.append("槽位「%s」无结论（confidence=0，本轮未产出可信候选）" % slot)
+    # -- 有缺口：策略层落地（唯一一处决定 ok 的地方） --
+    body = [
+        "检出覆盖缺口：阻断 %d / 警告 %d（共 %d 项要素，其中已覆盖 %d、不判 %d）。"
+        % (stats.get("blocking", 0), stats.get("warning", 0),
+           stats.get("total", 0), stats.get("covered", 0), stats.get("not_judged", 0)),
+    ]
+    body.extend(_gap_lines(gaps))
+    body.extend(_not_judged_sections(waived, unable, unknown))
+    # 🔴 只有 **severity==blocking** 的缺口才判红；warning 级缺口**永不**判红。
+    #   ⚠️ 这里曾写成「只要 mode==blocking 就 ok=False」（判的是「有没有缺口」），
+    #     那会让「待人工确认的要素未覆盖」这种**明确不作硬要求**的情形也拦下来
+    #     —— 与冻结口径「警告 = 其余全部」直接冲突，且是 7c-4 实测抓到的。
+    #   ⇒ 判据（哪个缺口该拦）在 reqcov._severity_of；本层只做「按它执行」。
+    _blocking_gaps = [g for g in gaps if g.get("severity") == "blocking"]
+    if mode == _REQ_MODE_BLOCKING and _blocking_gaps:
+        body.append("策略：blocking —— 存在 %d 项阻断级缺口，本层判红（status=不通过）。"
+                    % len(_blocking_gaps))
+        ok = False
+    elif mode == _REQ_MODE_BLOCKING:
+        body.append("策略：blocking —— 检出 %d 项缺口，但**全部为警告级**"
+                    "（置信度不足或要素待人工确认，不作硬要求），本层**不判红**。"
+                    % len(gaps))
+        ok = True
+    else:
+        body.append(
+            "策略：report-only —— 存在 %d 项阻断级缺口但**本层未阻断**"
+            "（缺口已进 requirement_gaps 与 review_notes，总状态不变）；"
+            "置 %s=blocking 后此处将判红。" % (len(_blocking_gaps), _REQ_COVERAGE_MODE_ENV))
+        ok = True
 
-    # output_fields 空数组 = 齐备性问题（下游无列可选，SQL 根本写不出来），
-    # 不是覆盖判定。requirement.py:259-262 已有先例与现成文案。
-    # ⚠️ 只判「空数组」，**不判「字段是否在 SQL 里出现」**——后者是覆盖判定，归阶段二。
-    of = requirement.get("output_fields")
-    if not isinstance(of, list):
-        gaps.append("output_fields 缺失或类型异常（实际 %s），下游无可选输出列"
-                    % type(of).__name__)
-    elif not of:
-        gaps.append("output_fields 为空数组，下游无可选输出列（SQL 无列可 SELECT）")
+    # gaps 列表：给 review_notes 与 requirement_gaps 用。
+    # ⚠️ 必须带severity 标记：策略层已判完，但下游 notes 要能区分
+    #   「阻断级」与「警告级」，否则业务方分不清该先修哪个。
+    gap_texts = ["[%s] %s：%s" % (
+        "阻断" if g.get("severity") == "blocking" else "警告",
+        g.get("element"), g.get("reason", "")) for g in gaps]
 
-    if gaps:
-        # 注意 ok=True：**阶段一有缺口也不阻断**，只报warning。
-        # 阻断能力完整留给阶段二（那时才引入 polarity 区分 must_cover / may_omit）。
-        return {
-            "ok": True, "skipped": False, "gaps": gaps,
-            "detail": _REQ_SCOPE_PREFIX
-                      + "检出 %d 项齐备性缺口（仅提示，不阻断）：\n" % len(gaps)
-                      + "\n".join("  - " + g for g in gaps),
-        }
     return {
-        "ok": True, "skipped": False, "gaps": [],
-        "detail": _REQ_SCOPE_PREFIX
-                  + "齐备性通过：%d 项必备槽位均有结论、output_fields 非空。"
-                  % len(_REQ_REQUIRED_SLOTS),
+        "ok": ok, "skipped": False, "gaps": gap_texts,
+        "detail": _REQ_SCOPE_PREFIX + "\n".join(body),
     }
 
 
@@ -379,12 +634,18 @@ def review(
 
     # L-REQ 需求要素层：排在最前。
     #
-    # 为什么不受 L1/L3/L4 级联跳过的约束：L-REQ 判的是「结构化需求本身齐不齐备」，
-    # 既不依赖 SQL 文本，也不依赖 SQL 能否解析——L1 挂了不影响它照样判。
+    # 为什么不受 L1/L3/L4 级联跳过的约束：L-REQ 判的是「需求要素有没有在 SQL 里
+    # 落实」，不依赖 SQL 能否解析——L1 挂了不影响它照样判（解析不了时它自己
+    # 判 skipped，理由写进 detail，不重复报红）。
     # 反过来 L1~L5 也一样看不到需求，所以它排在级联链之前而非之后。
     #
+    # ⚠️ 阶段二起**必须传 sql**：覆盖判定要比对「需求要素 vs SQL 实际输出」，
+    #   没有 SQL 就无从比对 ⇒ _requirement_check 判 skipped。
+    #   漏传的表现是 L-REQ 恒 skipped 且 detail 显示「未提供结构化需求」，
+    #   与「调用方没接线」的症状一模一样 ⇒ 又一处静默失效。
+    #
     # 只报告不改写（红线 D1）：本层只往 requirement_gaps 里写，绝不碰 revised_sql。
-    _req = _requirement_check(requirement)
+    _req = _requirement_check(requirement, sql)
     layers.append({
         "layer": "L-REQ",
         "name": "需求要素",
@@ -683,10 +944,12 @@ def review(
     # 漏加不会报错、不会告警，层照样出现在 layers 里、detail 照样写得漂亮，
     # 只是 ok=False 永远不改变 status。**改这一行等于决定门禁是否生效**。
     #
-    # ⚠️ 阶段一 `_requirement_check` 从不置 ok=False（有缺口也只提示），所以本元组里
-    # 的 "L-REQ" 在阶段一**不会真的触发阻断**——这是刻意的：阶段一只判齐备性。
-    # **「不阻断」靠的是不置 ok=False，不是靠移出本元组**，两者不冲突，别改错。
-    # 阶段二引入 polarity 覆盖判定后，本元组即刻生效，无需再改这里。
+    # ⚠️ 阶段二（2026-10-20）：「不阻断」靠的是**策略层不置 ok=False**
+    #   （默认 report-only，见 _req_coverage_mode），**不是**靠移出本元组。
+    #   两个开关各管一件事，别改错：
+    #     · 本元组管「ok=False 会不会传导到 status」（阶段一起就接好了）；
+    #     · REQ_COVERAGE_MODE 管「什么情况下会置 ok=False」（阶段二新增）。
+    #   ⇒ 切成 REQ_COVERAGE_MODE=blocking 时，本元组即刻生效，无需再改这里。
     # has_blocking_fail 同时要求 ok=False 且 skipped=False，所以「无需求输入
     # → skipped」这一路不会因为进了本元组就变成阻断（见 _requirement_check）。
     blocking_layers = [
@@ -703,11 +966,16 @@ def review(
     else:
         final_status = "通过"
 
-    # L-REQ 齐备性缺口：阶段一**只提示不阻断**（_requirement_check 已保证 ok=True），
-    # 但缺口必须留痕到 notes——否则「层显示通过、gaps 非空」又是一处静默失效。
+    # L-REQ 覆盖缺口必须留痕到 notes——否则「层显示通过、gaps 非空」又是一处静默失效。
+    #
+    # ⚠️ report-only 模式下这句 notes 是**唯一**能让业务方在 review_notes 里
+    #   看到缺口的通道（status 仍是「通过」）。删掉它 ⇒ 覆盖缺口彻底静默。
+    #   ⚠️ 必须写清当前模式，否则「status=通过 + 提示有阻断级缺口」看起来自相矛盾。
     if _req["gaps"]:
-        notes.append("L-REQ 提示 %d 项齐备性缺口（阶段一不阻断，覆盖校验见阶段二）：%s"
-                     % (len(_req["gaps"]), "；".join(_req["gaps"][:3])))
+        _req_mode_desc = ("已阻断" if _req_coverage_mode() == _REQ_MODE_BLOCKING
+                          else "仅提示不阻断（report-only）")
+        notes.append("L-REQ 覆盖判定：%d 项需求要素未被 SQL 覆盖（%s）：%s"
+                     % (len(_req["gaps"]), _req_mode_desc, "；".join(_req["gaps"][:3])))
 
     if final_status == "警告" and not notes:
         rules_set = sorted({i["rule"] for i in semantic_issues})

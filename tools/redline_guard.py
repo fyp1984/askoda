@@ -401,19 +401,282 @@ def check_r2_tool_contract(diff_text, files, base=None, staged=False):
     return findings, ("；".join(findings)) if findings else ""
 
 
-def check_r3_d1(diff_text, files):
-    """改 D1 行为：F4 不通过时自动改写 SQL。
+def _added_lines_by_file(diff_text):
+    """把 unified diff 解析成 {文件路径: {新侧行号: 该行文本}}。
 
-    判据：diff 新增行里出现对 revised_sql 的赋值，且不是恒 None。
+    只关心**新侧**行号——R3 的判据要在新侧源码上做 AST 判定，
+    必须先知道「哪些行属于本次改动」。
+    """
+    out = {}
+    path = None
+    new_ln = None
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            path = None
+            new_ln = None
+            continue
+        if line.startswith("--- "):
+            continue
+        if line.startswith("+++ "):
+            p = line[4:].strip()
+            if p == "/dev/null":
+                path = None
+            else:
+                if p.startswith('"') and p.endswith('"'):
+                    p = p[1:-1]
+                path = p[2:] if p.startswith("b/") else p
+            continue
+        if line.startswith("@@"):
+            m = re.search(r"\+(\d+)", line)
+            new_ln = int(m.group(1)) if m else None
+            continue
+        if new_ln is None or path is None:
+            continue
+        if line.startswith("+"):
+            out.setdefault(path, {})[new_ln] = line[1:]
+            new_ln += 1
+        elif line.startswith("-"):
+            pass
+        elif line.startswith(" "):
+            new_ln += 1
+        # "\ No newline at end of file" 之类不占行号
+    return out
+
+
+def _is_revised_sql_target(node):
+    """判断一个赋值目标是不是「revised_sql」这个槽位。
+
+    覆盖三种写法：
+      · 变量  revised_sql = ...
+      · 属性  self.revised_sql = ...
+      · 下标  result["revised_sql"] = ...
+    """
+    if isinstance(node, ast.Name):
+        return node.id == "revised_sql"
+    if isinstance(node, ast.Attribute):
+        return node.attr == "revised_sql"
+    if isinstance(node, ast.Subscript):
+        sl = node.slice
+        if sl.__class__.__name__ == "Index":  # py3.8 兼容
+            sl = sl.value
+        return isinstance(sl, ast.Constant) and sl.value == "revised_sql"
+    return False
+
+
+def _new_side_source(path, base=None, staged=False, root=None):
+    """取某文件在「本次 diff 的**新侧**」的完整源码；取不到返回 None。
+
+    新侧随模式而变（与 `_diff_body` 的口径严格一致）：
+      默认        diff = HEAD..工作树 ⇒ 新侧 = 工作树
+      --staged    diff = HEAD..索引   ⇒ 新侧 = 索引
+      --base X    diff = X..HEAD      ⇒ 新侧 = HEAD
+    """
+    root = root or REPO_ROOT
+    if staged:
+        rc, out = _run(["git", "show", ":%s" % path], cwd=root)
+        return out if rc == 0 else None
+    if base:
+        rc, out = _run(["git", "show", "HEAD:%s" % path], cwd=root)
+        return out if rc == 0 else None
+    full = os.path.join(root, path)
+    if not os.path.exists(full):
+        return None
+    try:
+        with open(full, "r", encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _r3_dict_findings(node, lines):
+    """字典字面量里 `revised_sql` 键被塞了**字面量非 None 值** ⇒ 判红。
+
+    ⚠️ 口径刻意收窄到「值是字面量非 None 常量」这一类：
+      · `{"revised_sql": "SELECT 1"}` —— 结果里直接带了改写后的 SQL ⇒ 判红；
+      · `{"revised_sql": revised_sql}` —— 值是**变量名**，它在 gates.py 里是
+        一个恒为 None 的局部变量（gates.py 的 review() 合法返回结构），
+        要判它必须解析该变量的绑定 ⇒ 超出本单范围（且旧正则也判不到）。
+      收窄后全仓零假阳性（实测：全仓只有 `None` 与变量名两种形态）。
     """
     findings = []
-    for line in diff_text.splitlines():
-        if not line.startswith("+") or line.startswith("+++"):
+    if not isinstance(node, ast.Dict):
+        return findings  # 不是字典字面量（如 Assign 节点）⇒ 无字典键可查
+    end = node.end_lineno or node.lineno
+    if not any(ln in lines for ln in range(node.lineno, end + 1)):
+        return findings
+    for k, v in zip(node.keys, node.values):
+        if not (isinstance(k, ast.Constant) and k.value == "revised_sql"):
             continue
-        body = line[1:]
-        if "revised_sql" in body and re.search(r"revised_sql\s*=\s*(?!None)", body):
-            findings.append("新增行对 revised_sql 赋非 None 值：%s" % body.strip()[:120])
-    return sorted(set(findings)), ("；".join(sorted(set(findings)))) if findings else ""
+        if not (isinstance(v, ast.Constant) and v.value is not None):
+            continue  # 值不是字面量 ⇒ 需变量解析，本单不判（也不放松）
+        findings.append(
+            "新增/改动的字典字面量给 revised_sql 赋非 None 值：%r（行 %d）"
+            % (v.value, node.lineno)
+        )
+    return findings
+
+
+def _r3_assign_findings(node, lines):
+    """单个赋值语句节点：目标命中 revised_sql 且值非字面量 None ⇒ 判红。
+
+    ⚠️ 「恒 None」的判定口径：**只有字面量 None** 才算恒 None。
+      任何其它值（字符串 / 调用 / 中间变量）运行时都可能是非 None ⇒ 判红。
+
+    🔴🔴 **下标赋值的收窄（2026-10-20，R3 误伤修复）**
+    --------------------------------------------------------
+    上面那条「非字面量 None 就判红」对**下标目标**会误伤**变量透传**：
+        out["revised_sql"] = revised_sql     ← 右边是变量名，不是硬编码的 SQL
+    而这正是 ``gateway/gates.py`` 里 review() 的**合法返回结构**
+    （值来自一个恒为 None 的局部变量）⇒ 粗判会误伤全仓的正常写法。
+
+    ⇒ **收窄口径**：目标若是**下标**（``result["revised_sql"] = ...``），
+      则**只有右边是「字面量非 None 常量」时才判红**；右边是**变量名 / 属性 /
+      调用 / 表达式**时**不判红**。
+
+    ⚠️ **为什么收窄不漏放**（这是关键，别误以为放宽了）：
+      若那个变量真被赋了非 None 的 SQL，**赋值那一行本身**
+      （``revised_sql = "SELECT 1"``）会被本函数抓到 ⇒ **不会漏放**。
+      收窄只影响「透传」形态，不影响「真赋值」形态。
+      ⇒ 口径与字典字面量那条（:func:`_r3_dict_findings`）**保持一致**。
+    """
+    if isinstance(node, ast.Assign):
+        targets, value = node.targets, node.value
+    elif isinstance(node, ast.AnnAssign):
+        targets, value = [node.target], node.value
+    elif isinstance(node, ast.AugAssign):
+        targets, value = [node.target], node.value
+    else:
+        return []
+    if value is None:
+        return []
+    end = node.end_lineno or node.lineno
+    if not any(ln in lines for ln in range(node.lineno, end + 1)):
+        return []  # 本次没改动这条语句 ⇒ 不在 R3 判定范围
+    hit = [t for t in targets if _is_revised_sql_target(t)]
+    if not hit:
+        return []
+    if isinstance(value, ast.Constant) and value.value is None:
+        return []  # 恒 None ⇒ 合规
+    # 🔴 下标目标 + 值不是字面量 ⇒ 变量透传 ⇒ 不判红（理由见 docstring）
+    if any(isinstance(t, ast.Subscript) for t in hit):
+        if not (isinstance(value, ast.Constant) and value.value is not None):
+            return []
+    try:
+        shown = ast.unparse(value)
+    except Exception:  # noqa: BLE001
+        shown = "<表达式>"
+    return ["新增/改动的语句对 revised_sql 赋非 None 值：%s（赋值行 %d）"
+            % (shown[:80], node.lineno)]
+
+
+def _r3_findings_in_source(src, added_map):
+    """在新侧源码里找「本次改动里对 revised_sql 的非 None 赋值」。
+
+    返回 findings 列表；**src 语法解析不了时返回 None**（交调用方决定退路）。
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return None
+    lines = set(added_map)
+    findings = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            findings.extend(_r3_dict_findings(node, lines))
+            continue
+        findings.extend(_r3_assign_findings(node, lines))
+    return findings
+
+
+def _r3_regex_fallback(added_map):
+    """新侧源码**整体**语法解析不了时的退路：逐行做**局部 AST** 判定。
+
+    ⚠️ 历史上这里是「退回旧正则扫文本」，实测 **6 个用例错 4 个**：
+      · `print("...revised_sql=%s..." % r.get(...))` ⇒ 误判红（字符串 ≠ 赋值）
+      · `revised_sql = None`                     ⇒ 误判红（`\\s*` 回溯导致 `(?!None)` 失配）
+      · `result["revised_sql"] = X`              ⇒ 漏判红（下标赋值，正则匹配不到）
+      · `out = {"revised_sql": X}`               ⇒ 漏判红（字典字面量）
+      ⇒ 那条正则既**分不清赋值与字符串**、又**认不出下标与字典两种真赋值形态**。
+
+    ⇒ 现在改为**逐行局部 AST**：把每一行单独包成「函数体里的一条语句」再解析，
+      然后走**与主路径完全相同的判定核心**（`_r3_assign_findings` + `_r3_dict_findings`）。
+      实测 6 个用例 **6/6 全对**，与主路径口径一致。
+
+    ★ 为什么「局部 AST」在 fallback 里是安全的（主路径里不够用）：
+      fallback 的前提就是**整个文件语法坏了**（整体 AST 拿不到），
+      此时能拿到的只有「新增行的文本」这一份信息。
+      逐行解析虽然拿不到跨行的上下文（多行语句会被截断），
+      但**判据要的只是「这一行是不是对 revised_sql 的赋值」**——
+      局部解析足以回答，且**不会**像正则那样把字符串当赋值。
+      ⚠️ 局部解析仍可能失败（多行语句的续行、语法本就有错）：
+      那时**判红**（不可判定 ≠ 没违规），**绝不静默放过**。
+    """
+    findings = []
+    for lineno, text in sorted(added_map.items()):
+        stripped = text.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        try:
+            tree = ast.parse(stripped)
+        except SyntaxError:
+            # 连单行都解析不了 ⇒ 不可判定 ⇒ 判红（不放宽）
+            if "revised_sql" in stripped:
+                findings.append(
+                    "新增行无法解析且含 revised_sql，按「不可判定 ≠ 没违规」判红：%s"
+                    % stripped[:120]
+                )
+            continue
+        # 该行单独解析后，语句都在 **L1** ⇒ 用 {1} 表达「这一行就是被改动的行」。
+        # ⚠️ 必须**遍历全部节点**（不能只看 tree.body）：
+        #   字典字面量 `out = {"revised_sql": X}` 是**嵌套在 Assign 里**的
+        #   Dict 节点，只看顶层语句会漏掉它。
+        local = {1}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Dict):
+                findings.extend(_r3_dict_findings(node, local))
+                continue
+            findings.extend(_r3_assign_findings(node, local))
+    return findings
+
+
+def check_r3_d1(diff_text, files, base=None, staged=False, root=None):
+    """改 D1 行为：F4 不通过时自动改写 SQL。
+
+    判据：本次改动里，**新增/改动的语句**若是对 `revised_sql` 的赋值，
+    且赋的值**不是字面量 None** ⇒ 判红。
+
+    ★ 为什么用 AST 而不是正则：
+      旧实现用 `revised_sql\\s*=\\s*(?!None)` 扫 diff 文本，分不清
+      「赋值」与「字符串里恰好出现」，实测两类都错：
+        · `print("    revised_sql=%s（应为 None）" % r.get("revised_sql"))`
+          —— 只是打印，被判成赋值 ⇒ **门禁 G2 报红**（本单要修的）；
+        · `revised_sql = None`
+          —— 恰恰是 D1 **要求**的写法，也被判红
+          （`(?!None)` 在 `= None` 带空格时会因正则回溯而失配）。
+      AST 直接看语法树：是不是赋值节点、目标是不是 revised_sql、
+      值是不是字面量 None，三件事都不再靠猜。
+    """
+    root = root or REPO_ROOT
+    added = _added_lines_by_file(diff_text)
+    findings = []
+    for path in files:
+        added_map = added.get(path)
+        if not added_map:
+            continue
+        if not path.endswith(".py"):
+            # 非 Python 文件不可能产生 D1 行为变更；旧正则会误报，这里不判
+            continue
+        src = _new_side_source(path, base=base, staged=staged, root=root)
+        if src is None:
+            continue
+        hits = _r3_findings_in_source(src, added_map)
+        if hits is None:
+            # 语法解析不了 ⇒ 退回旧正则（只加严、不放宽）
+            hits = _r3_regex_fallback(added_map)
+        for h in hits:
+            findings.append("%s：%s" % (path, h))
+    findings = sorted(set(findings))
+    return findings, ("；".join(findings)) if findings else ""
 
 
 def _is_parametrized_sql(body):
@@ -616,7 +879,9 @@ def run_all_checks(diff_text, files, base=None, staged=False):
                 diff_text, files, base=base, staged=staged
             )
         elif rid == "R3":
-            hits, msg = check_r3_d1(diff_text, files)
+            hits, msg = check_r3_d1(
+                diff_text, files, base=base, staged=staged
+            )
         elif rid == "R4":
             hits, msg = check_r4_data_and_baseline(diff_text, files)
         elif rid == "R5":

@@ -991,6 +991,13 @@ def _severity_of(element):
     """
     if element.polarity != POLARITY_MUST_COVER:
         return SEVERITY_NONE, "polarity=%s，不进覆盖判定" % element.polarity
+    # ⚠️ 这里的比较符必须是 **`<`**（严格小于），不是 `<=`：
+    #   冻结口径是「confidence **≥** 0.6 ⇒ 阻断」，即 0.6 **本身**够格阻断。
+    #   写成 `<=` 会把 conf=0.60 的要素降级成警告，而文案还写着「< 0.6」——
+    #   **代码与文案自相矛盾**（0.6 < 0.6 为假，却按「< 0.6」报出来），
+    #   且会让「月度」这类恰好取到 0.60 的要素永远进不了阻断级。
+    #   （这条边界由 tools/gates_selftest.py 的 7c-4 边界对照钉住：
+    #     同一要素 needs_confirmation 翻成 False ⇒ severity 必须是 blocking。）
     if float(element.confidence) < BLOCKING_CONFIDENCE_THRESHOLD:
         return SEVERITY_WARNING, "confidence=%s < %s，按警告处理" % (
             element.confidence, BLOCKING_CONFIDENCE_THRESHOLD)

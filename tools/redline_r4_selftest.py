@@ -22,17 +22,37 @@ R4 的判据名里带着两半：「删数据 / 破坏性操作」**和**「改�
 用法：
     python3 tools/redline_r4_selftest.py
 退出码：0 = 全过；1 = 有失败。
+
+⚠️ **必须在仓库根目录运行**（含 `poc-eval/` 与 `wren-docker*/`）：
+   清单里登记的是**仓库内相对路径**，自证要拿真实资产算 sha256。
+   在容器内跑（镜像里没有这 3 份资产）会得出「资产不存在」的假结论。
 """
 import hashlib
 import json
 import os
 import shutil
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+
+# ⚠️ 必须在 import tempfile **之前**指定 tempdir。
+#
+#   本机（WorkBuddy 沙箱）禁止任何"让文件从某路径消失"的操作，而 Python 的
+#   tempfile 用「建一个探测文件再删掉」来验证目录可写 ⇒ 删不掉 ⇒ 探测抛
+#   FileNotFoundError ⇒ `No usable temporary directory found`。
+#   直接指定 tempdir 可**跳过探测**（gettempdir() 见到 tempdir 已设就直接返回）。
+#   ⇒ 本自证不依赖任何外部 PYTHONPATH 设置，自己就能跑。
+import tempfile  # noqa: E402
+
+_TMPROOT = os.path.join(os.path.expanduser("~"), ".workbuddy", "tmp")
+try:
+    os.makedirs(_TMPROOT, exist_ok=True)
+except OSError:
+    _TMPROOT = os.path.join(ROOT, ".tmp_gate")
+    os.makedirs(_TMPROOT, exist_ok=True)
+tempfile.tempdir = _TMPROOT
 
 import redline_guard as rg  # noqa: E402
 
@@ -209,26 +229,48 @@ def run_sha256_cases():
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-    # ---- C1：登记资产被删 ⇒ 不判红（口径：只对内容变更判红，不对文件增删判红）----
+    # ---- C1：登记资产不存在 ⇒ 不判红（口径：只对内容变更判红，不对文件增删判红）----
+    #
+    # ⚠️ 造法**不依赖删文件**（本机沙箱禁止任何"让文件消失"的操作）：
+    #   把登记清单里的资产路径改成**一个本来就不存在的路径** ⇒ 判据看到
+    #   「文件不存在」⇒ 按口径跳过 ⇒ 不判红。等价于「登记资产被删」，
+    #   但全程不碰删除。
     tmp = tempfile.mkdtemp(prefix="r4selftest_")
     try:
         _make_sandbox(tmp, manifest, real_asset)
-        os.remove(os.path.join(tmp, real_asset))
+        mpath = os.path.join(tmp, "tools", "baseline_manifest.json")
+        with open(mpath, encoding="utf-8") as fh:
+            m = json.load(fh)
+        ghost = "poc-eval/__不存在的资产__.json"
+        for a in m["assets"]:
+            if a["path"] == real_asset:
+                a["path"] = ghost
+        with open(mpath, "w", encoding="utf-8") as fh:
+            json.dump(m, fh, ensure_ascii=False, indent=2)
         hits, note = rg.check_frozen_baseline(root=tmp)
         ok = not hits
         if not ok:
-            fails.append("C1 FAILED：删了登记资产却判红（口径应为不判红）：%s" % hits)
-        print("[%s] C1. 登记资产被删 ⇒ %s（口径：不对文件增删判红）" % (
+            fails.append("C1 FAILED：登记资产不存在却判红（口径应为不判红）：%s" % hits)
+        print("[%s] C1. 登记资产不存在 ⇒ %s（口径：不对文件增删判红）" % (
             "OK" if ok else "!!", "⚪ 不判红（符合口径）" if ok else "🔴 判红（与口径不符）"))
         print("        子判据说明：%s" % note)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
     # ---- C2：清单本身缺失 ⇒ 判红（不可判定 ≠ 没违规）----
+    #
+    # ⚠️ 造法**不依赖删文件**（本机沙箱禁止删除）：
+    #   造一个**根本没有 tools/baseline_manifest.json** 的沙箱根 ⇒
+    #   清单"不存在"是**天然状态**，不用去删任何东西。
+    #   判据语义不变：清单读不到 ⇒ 不可判定 ⇒ 必须判红。
     tmp = tempfile.mkdtemp(prefix="r4selftest_")
     try:
-        _make_sandbox(tmp, manifest, real_asset)
-        os.remove(os.path.join(tmp, "tools", "baseline_manifest.json"))
+        # 只放资产、**不放清单** ⇒ 清单天然缺失
+        os.makedirs(os.path.join(tmp, "poc-eval"), exist_ok=True)
+        shutil.copy2(
+            os.path.join(ROOT, real_asset),
+            os.path.join(tmp, real_asset),
+        )
         hits, _ = rg.check_frozen_baseline(root=tmp)
         ok = bool(hits)
         if not ok:
@@ -252,6 +294,43 @@ def run_sha256_cases():
         print("[%s] C3. 登记值确为 sha256 前 16 位（完整值 %s…）" % ("OK" if ok else "!!", full))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+    # ---- C4：C2 不是空过（负向对照）----
+    #
+    # ⚠️ 为什么要这条：C2 断言的是「清单缺失 ⇒ 判红」。若造场景失败（清单其实还在），
+    #   判据会**正确地判绿** ⇒ C2 报红，但那是**用例没造出场景**，不是判据坏了
+    #   （本机沙箱禁删时正是如此）。这属「失败信息字面误导」：报的是「判据漏判」，
+    #   实则是「用例没搭好场景」。
+    #   ⇒ 用一条**对照**把两者区分开：
+    #     · 对照组：清单在、内容一致 ⇒ 必须**不判红**
+    #     · 实验组：清单缺失         ⇒ 必须**判红**
+    #   两者表现不同 ⇒ C2 验的确实是真判据（缺失这条分支真的会红）。
+    tmp_ctrl = tempfile.mkdtemp(prefix="r4selftest_")
+    tmp_exp = tempfile.mkdtemp(prefix="r4selftest_")
+    try:
+        # 对照组：放清单
+        _make_sandbox(tmp_ctrl, manifest, real_asset)
+        ctrl_hits, _ = rg.check_frozen_baseline(root=tmp_ctrl)
+        # 实验组：只放资产、不放清单 ⇒ 清单天然缺失
+        os.makedirs(os.path.join(tmp_exp, "poc-eval"), exist_ok=True)
+        shutil.copy2(
+            os.path.join(ROOT, real_asset),
+            os.path.join(tmp_exp, real_asset),
+        )
+        exp_hits, _ = rg.check_frozen_baseline(root=tmp_exp)
+        ok = (not ctrl_hits) and bool(exp_hits)
+        if not ok:
+            fails.append(
+                "C4 FAILED：对照组 hits=%d（应 0）、实验组 hits=%d（应 >0）⇒ C2 可能是空过"
+                % (len(ctrl_hits), len(exp_hits))
+            )
+        print("[%s] C4. C2 非空过（对照组 %d 命中 / 实验组 %d 命中）" % (
+            "OK" if ok else "!!", len(ctrl_hits), len(exp_hits)))
+        print("        对照组（有清单、内容一致）⇒ %s" % ("不判红 ✅" if not ctrl_hits else "判红 ❌"))
+        print("        实验组（清单缺失）        ⇒ %s" % ("判红 ✅" if exp_hits else "未判红 ❌"))
+    finally:
+        shutil.rmtree(tmp_ctrl, ignore_errors=True)
+        shutil.rmtree(tmp_exp, ignore_errors=True)
 
     return fails
 

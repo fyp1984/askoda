@@ -89,10 +89,33 @@ python3 tools/gate_all.py --layers G0,G1# 日常：静态 + 单元，不写库
 python3 tools/gate_all.py                # 全量：含 G2/G3，会真实连库
 ```
 
+> ⚠️ **在「禁止删除文件」的沙箱环境里**（本机 WorkBuddy 沙箱即是），上面两条命令
+> 会因为 `tempfile` 不可用而让多个自测**假红**（`No usable temporary directory found`）。
+> ⇒ **前置条件**：把仓库自带的 `sitecustomize` 垫片挂到 `PYTHONPATH` **最前面**：
+>
+> ```bash
+> export PYTHONPATH="$PWD/tools/_pyshim:$PYTHONPATH"     # 仓库自带垫片（推荐，版本可控）
+> # 或
+> export PYTHONPATH="$HOME/.workbuddy/pyshim:$PYTHONPATH" # 本机 WorkBuddy 垫片
+> ```
+>
+> ⚠️ **必须排在最前**：Python 只加载 `sys.path` 里**第一个**找到的 `sitecustomize`；
+> 本机 `PYTHONPATH` 默认指向 WorkBuddy 自带 shim，它内部会调 `tempfile.gettempdir()`
+> ⇒ 自己就把 `sitecustomize` 的加载搞炸。
+>
+> 或者直接用仓库提供的入口（它会自动挂好垫片）：
+>
+> ```bash
+> bash tools/run_selftest.sh                # 日常 G0+G1
+> bash tools/run_selftest.sh tools/xxx.py   # 跑单个脚本
+> ```
+>
+> 根因与完整说明见 `docs/DEV_ENV_SANDBOX.md`。
+
 | 层 | 内容 | 项数 | 是否写库 |
 |---|---|---|---|
-| G0 | 静态自检（语法 + 依赖基线） | 65 | 否 |
-| G1 | 单元自证（`*_selftest.py`） | 15 | 否 |
+| G0 | 静态自检（语法 + 依赖基线） | 67 | 否 |
+| G1 | 单元自证（`*_selftest.py`） | 16 | 否 |
 | G2 | 独立复核（`*_check.py`） | 5 | 否 |
 | G3 | 真实链路端到端 | 2 | **是** |
 

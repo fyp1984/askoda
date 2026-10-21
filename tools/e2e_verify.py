@@ -91,11 +91,25 @@ SAMPLE_DEMAND = {
 # 必须实际跑通（非 skipped）的门禁层；L5 结果断言依赖 exec_result，
 # 在 ④ 生成阶段天然 skipped，故只在 ⑤ 断言。
 #
-# 🔴 L-REQ **故意不在此列表里**：它的 skipped 条件是「无 demand_id / 结构化需求取不到」，
-# 而本脚本的 ④ 走的是 sql_generate 链路（该链路当前不传 requirement），
-# L-REQ 必然 skipped。把它塞进来等于给本脚本造一个必红的假红。
-# 等阶段二让 sql_generate/sql_execute_readonly 也串上需求后，再考虑纳入。
-REQUIRED_LAYERS_SQL = ("L1", "L2", "L3", "L4")
+# ✅ L-REQ 已纳入（REQ-COVERAGE 阶段二 · 2026-10-20）。
+#   旧版把它排除在外，理由是「④ 走 sql_generate 链路，该链路当前不传 requirement
+#   ⇒ L-REQ 必然 skipped ⇒ 塞进来等于造一个必红的假红」。
+#   **这个前提已被阶段二接线消掉**：
+#     · gateway/sqlgen.py 的 review() 已带 requirement=_requirement_safe(demand_id)；
+#     · gateway/sqlrun.py 的预审查/后审查同样带 requirement。
+#   实测（走本脚本 ①②③④ 完整流程，真实 HTTP 链路）：
+#     ④ POST /sql HTTP 200
+#     ★★ L-REQ.skipped = False | ok = True
+#        detail: …检出覆盖缺口：阻断 1 / 警告 0（共 8 项要素，其中已覆盖 1、不判 6）…
+#     requirement_gaps = ['[阻断] 月度：GROUP BY 未含任何时间粒度，未覆盖 month；
+#                         满足冻结三条件（confidence=0.6、待确认=False、must_cover）']
+#   ⚠️ 前提是 ④ 之前**已有结构化需求**：本脚本的 ②分析 + ③确认 会产出
+#   analysis_rounds，BFF 的 /sql 路由再幂等调 requirement_structured 落库
+#   （实测 ②③ 之后 structured_requirements 仍为 0，但 ④ 时 BFF 补上了 ⇒ L-REQ 真跑）。
+#   ⚠️ 因此 L-REQ 能否纳入**依赖 ②③ 已跑过**——本脚本的 stage 顺序保证了这一点。
+#   若将来把 ④ 拆出来单独跑（跳过 ②③），L-REQ 会退回 skipped ⇒ 本条断言会红，
+#   那时该改的是**调用顺序**，不是这条断言。
+REQUIRED_LAYERS_SQL = ("L-REQ", "L1", "L2", "L3", "L4")
 # EXPECTED_LAYER_COUNT 由 gateway/gate_contract.py 导入（见文件上方），此处不再定义副本。
 HTTP_TIMEOUT = 300
 
