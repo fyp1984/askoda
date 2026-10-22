@@ -3,7 +3,7 @@ import { api, ApiError, type SimilarPrecheckResp } from '../api/client'
 import { Card, ErrorBox, Loading } from '../components/ui'
 
 /**
- * 页1 · 提交需求
+ * 页1 · 提个需求
  * 表单字段对齐网关 demand_create 的实盘入参（tools/list 核对）：
  *   title / business_context / description / expected_output / contact  为必填；
  *   time_range / expected_finish_at / actor 为可选。demand_id 由服务端生成。
@@ -43,9 +43,15 @@ const REQUIRED: Array<{ key: keyof DemandForm; label: string; hint: string }> = 
 export default function PageSubmit({
   onSubmitted,
   demandId,
+  actor,
+  readonly,
 }: {
   onSubmitted: (id: string) => void
   demandId: string | null
+  /** SSO 就绪前由前端按角色解析的身份；传入后隐藏「提交人」输入框并以其留痕 */
+  actor?: string
+  /** 当前角色对该模块只读时为真，禁用提交 */
+  readonly?: boolean
 }) {
   const [form, setForm] = useState<DemandForm>(EMPTY)
   const [touched, setTouched] = useState<Record<string, boolean>>({})
@@ -101,7 +107,9 @@ export default function PageSubmit({
       }
       if (form.time_range.trim()) payload.time_range = form.time_range.trim()
       if (form.expected_finish_at.trim()) payload.expected_finish_at = form.expected_finish_at.trim()
-      if (form.actor.trim()) payload.actor = form.actor.trim()
+      // 弱鉴权：若上层已解析出 actor（角色身份），优先用它；否则用表单填写值
+      const finalActor = actor || form.actor.trim()
+      if (finalActor) payload.actor = finalActor
 
       const created = await api.createDemand(payload)
       const id = (created as any).demand_id
@@ -119,7 +127,7 @@ export default function PageSubmit({
 
   return (
     <div className="page">
-      <Card title="填写需求">
+      <Card title="填写需求" collapsible id="submit-form">
         <div className="form">
           {REQUIRED.map((r) => {
             const bad = touched[r.key] && !form[r.key].trim()
@@ -148,7 +156,7 @@ export default function PageSubmit({
                     className={bad ? 'invalid' : ''}
                   />
                 )}
-                {bad ? <span className="field-err">这里必须填，缺了会被硬门禁挡下来</span> : null}
+                {bad ? <span className="field-err">这一项必填</span> : null}
               </label>
             )
           })}
@@ -173,10 +181,17 @@ export default function PageSubmit({
           </div>
 
           <div className="field-row">
-            <label className="field">
-              <span className="field-label">提交人</span>
-              <input value={form.actor} placeholder="用于留痕" onChange={(e) => set('actor', e.target.value)} />
-            </label>
+            {actor ? (
+              <label className="field">
+                <span className="field-label">提交人（系统判定）</span>
+                <input value={actor} disabled readOnly title="由当前登录身份自动带入，SSO 就绪后不可改" />
+              </label>
+            ) : (
+              <label className="field">
+                <span className="field-label">提交人</span>
+                <input value={form.actor} placeholder="用于留痕" onChange={(e) => set('actor', e.target.value)} />
+              </label>
+            )}
             <label className="field">
               <span className="field-label">数据集</span>
               <select value={form.dataset} onChange={(e) => set('dataset', e.target.value)}>
@@ -211,8 +226,8 @@ export default function PageSubmit({
           <ErrorBox error={error} />
 
           <div className="actions">
-            <button className="primary" disabled={!canSubmit} onClick={submit}>
-              {busy ? '提交中…' : '提交需求'}
+            <button className="primary" disabled={!canSubmit || readonly} onClick={submit}>
+              {busy ? '提交中…' : readonly ? '只读模式不可提交' : '提交需求'}
             </button>
             {missing.length > 0 ? (
               <span className="hint-inline">还差：{missing.map((m) => m.label).join('、')}</span>
@@ -222,11 +237,11 @@ export default function PageSubmit({
       </Card>
 
       {demandId ? (
-        <Card title="最近一次提交">
+        <Card title="最近一次提交" collapsible id="submit-last">
           <p>
             当前需求编号：<code>{demandId}</code>
           </p>
-          <p className="muted">已自动切换到「查看分析」页。</p>
+          <p className="muted">已自动切换到「读懂你的需求」页。</p>
         </Card>
       ) : null}
       {busy ? <Loading tip="正在提交…" /> : null}

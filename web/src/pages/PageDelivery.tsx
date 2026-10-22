@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { api, type E2eStatus, type SqlExecResp, type SqlResp } from '../api/client'
 import { Card, ErrorBox, Loading, PartialErrorsBox } from '../components/ui'
+import { Section } from '../components/Collapsible'
 import RichText from '../components/RichText'
 import DemandStatusActions from '../components/DemandStatusActions'
 import AuditReplay from '../components/AuditReplay'
 import ResultChart from '../components/ResultChart'
+import { fmtReqVer, genLabel } from '../lib/display'
 
 /**
  * 菜单⑤ · SQL 联调 · 交付
@@ -34,8 +36,8 @@ export default function PageDelivery({
   if (!demandId) {
     return (
       <div className="page">
-        <Card title="SQL 联调 · 交付">
-          <p className="muted">还没有需求。请先到「需求分析 · SQL 生成」提交一条需求。</p>
+        <Card title="出数与交付">
+          <p className="muted">还没有需求。请先到「提个需求」页提交一条。</p>
         </Card>
       </div>
     )
@@ -132,7 +134,9 @@ export default function PageDelivery({
   return (
     <div className="page">
       <Card
-        title={`SQL 联调 · 交付 · ${demandId}`}
+        title={`出数与交付 · ${demandId}`}
+        collapsible
+        id="delivery-main"
         extra={
           <>
             <button onClick={gen} disabled={busy === 'gen'}>
@@ -150,8 +154,8 @@ export default function PageDelivery({
         {busy === 'exec' ? <Loading tip="正在只读执行…" /> : null}
 
         <p className="muted">
-          网关不调用模型：未命中已建模的意图会被硬门禁拒绝（这是设计使然）。
-          此时可在下方填入候选 SQL，由本页提交给网关过门禁后执行。
+          本页直接对库取数（不经大模型）。只有已建模口径能自动生成，未命中会被拦下（设计如此）；
+          涉及新维度时，可填入分析人员提供的候选 SQL，同样过校验再执行。
         </p>
         <textarea
           className="sqlinput"
@@ -162,15 +166,13 @@ export default function PageDelivery({
         />
 
         {sqlText ? (
-          <>
-            <h4 className="sec">待执行 SQL</h4>
+          <Section title="待执行 SQL" id="delivery-pending">
             <pre className="sqlbox">{sqlText}</pre>
-          </>
+          </Section>
         ) : null}
 
         {exec ? (
-          <>
-            <h4 className="sec">执行结果</h4>
+          <Section title="执行结果" id="delivery-exec">
             <p className="muted">{exec.execution_summary}</p>
             <p>
               交付判定：
@@ -181,13 +183,16 @@ export default function PageDelivery({
               )}
               <span className="muted"> <RichText text={exec.deliverable_reason} /></span>
             </p>
-          </>
+          </Section>
         ) : null}
       </Card>
 
       {exec ? (
         <Card
           title={`执行结果 · ${rows.length} 行样本 × ${cols.length} 列`}
+          collapsible
+          id="delivery-rows"
+          count={rows.length}
           extra={
             <div className="seg" role="group" aria-label="结果视图切换">
               <button className={view === 'chart' ? 'seg-btn on' : 'seg-btn'} onClick={() => setView('chart')}>
@@ -237,6 +242,8 @@ export default function PageDelivery({
 
       <Card
         title="生产脚本导出"
+        collapsible
+        id="delivery-export"
         extra={
           <button onClick={download} disabled={!sqlText && !candidate.trim()}>
             下载 .sql
@@ -252,7 +259,7 @@ export default function PageDelivery({
         </details>
       </Card>
 
-      <Card title="迭代记录">
+      <Card title="迭代记录" collapsible id="delivery-iter">
         {runs.length === 0 ? (
           <p className="muted">暂无取数记录。</p>
         ) : (
@@ -271,9 +278,9 @@ export default function PageDelivery({
                 {runs.map((r) => (
                   <tr key={r.sql_run_id}>
                     <td className="mono">{r.sql_run_id}</td>
-                    <td>{r.generator_model}</td>
+                    <td>{genLabel(r.generator_model)}</td>
                     <td>{r.review_status}</td>
-                    <td>v{r.requirement_version}</td>
+                    <td>{fmtReqVer(r.requirement_version)}</td>
                     <td className="mono">{r.created_at}</td>
                   </tr>
                 ))}

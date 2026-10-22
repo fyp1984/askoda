@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type MdlResp, type MdlTable } from '../api/client'
 import { Card, ErrorBox, Loading } from '../components/ui'
+import { Section } from '../components/Collapsible'
 import RichText from '../components/RichText'
 
 /**
@@ -90,6 +91,8 @@ export default function PageMdl({ dataset, onNotify }: { dataset: string; onNoti
     <div className="page">
       <Card
         title={`语义引擎状态 · ${dataset} 库`}
+        collapsible
+        id="mdl-status"
         extra={
           <>
             <button onClick={load} disabled={loading}>
@@ -143,6 +146,8 @@ export default function PageMdl({ dataset, onNotify }: { dataset: string; onNoti
 
       <Card
         title="MDL 模型资产"
+        collapsible
+        id="mdl-assets"
         extra={
           <label className="ds-pick">
             <input
@@ -186,7 +191,7 @@ export default function PageMdl({ dataset, onNotify }: { dataset: string; onNoti
               </table>
             </div>
 
-            <h4 className="sec">字段清单</h4>
+            <Section title="字段清单" id="mdl-fields">
             <label className="ds-pick">
               <span className="ds-lbl">选择表</span>
               <select value={picked} onChange={(e) => setPicked(e.target.value)}>
@@ -239,12 +244,15 @@ export default function PageMdl({ dataset, onNotify }: { dataset: string; onNoti
             ) : (
               <p className="muted">该表暂无字段。</p>
             )}
+            </Section>
           </>
         ) : null}
       </Card>
 
       <Card
         title="语义层自检（dry-run，不执行）"
+        collapsible
+        id="mdl-dryrun"
         extra={
           <button className="primary" onClick={runDry} disabled={dryBusy}>
             {dryBusy ? '预演中…' : '预演'}
@@ -252,7 +260,7 @@ export default function PageMdl({ dataset, onNotify }: { dataset: string; onNoti
         }
       >
         <p className="muted">
-          预演只校验「SQL 引用的对象是否都在 MDL 可见闭集内」，不会真正执行、不返回数据。
+          预演只检查 SQL 用到的表、字段是否都已建模，不会真正跑数、不返回结果。
         </p>
         <textarea className="sqlinput" rows={4} value={sql} onChange={(e) => setSql(e.target.value)} />
         {dry ? (
@@ -271,7 +279,7 @@ export default function PageMdl({ dataset, onNotify }: { dataset: string; onNoti
         ) : null}
       </Card>
 
-      <Card title="业务术语与口径">
+      <Card title="业务术语与口径" collapsible id="mdl-glossary">
         {glossary ? (
           <pre className="sqlbox small">{JSON.stringify(glossary, null, 2)}</pre>
         ) : (

@@ -102,7 +102,7 @@ async def _validation_error_handler(
         content={
             "code": "INVALID_ARGUMENT",
             "message": f"请求参数没填对：{detail}",
-            "hint": "请回到「提交需求」页，把标红的必填字段补齐（至少 1 个字符）后重新提交。",
+            "hint": "请回到「提个需求」页，把标红的必填字段补齐（至少 1 个字符）后重新提交。",
         },
     )
 
@@ -144,6 +144,9 @@ class ConfirmIn(BaseModel):
     answer: str = Field(min_length=1)
     choice: str | None = None
     actor: str = Field(default="")
+    # 答复后会自动重跑一次分析；必须沿用用户当前所在数据集，
+    # 否则 A 库的需求会被静默改按 B 库重算（口径/证据全部漂移）。
+    dataset: str = Field(default="B", description="数据集（A/B），重跑分析时沿用")
 
 
 class SqlIn(BaseModel):
@@ -232,7 +235,7 @@ async def create_demand(body: DemandCreateIn) -> Any:
             code="DEMAND_REJECTED",
             message=reason,
             hint="提交被硬门禁拒绝：上面缺的就是必须补的。"
-                 "请回到「提交需求」页把标红字段补齐后重新提交；"
+                 "请回到「提个需求」页把标红字段补齐后重新提交；"
                  "附件类问题请在附件区换成可识别的表格/文档。",
         )
     return sanitize(result)
@@ -389,7 +392,7 @@ async def analyze(demand_id: str, body: AnalyzeIn) -> Any:
         raise ApiError(
             code="ANALYSIS_FAILED",
             message=reason,
-            hint="分析没能跑起来。请去「提交需求」页确认标题/说明是否写清了"
+            hint="分析没能跑起来。请去「提个需求」页确认标题/说明是否写清了"
                  "统计主体与时间口径，再回到本页重试。",
         )
     return sanitize(result)
@@ -405,7 +408,12 @@ async def e2e_status(demand_id: str, dataset: str = "B", run_limit: int = 20) ->
     """
     specs = {
         "demand": ("demand_get", {"demand_id": demand_id}),
-        "analysis": ("analysis_get", {"demand_id": demand_id}),
+        "analysis": ("analysis_get", {"demand_id": demand_id, "dataset": dataset}),
+        "analysis_global": ("analysis_get", {"demand_id": demand_id}),
+        "analysis_other": (
+            "analysis_get",
+            {"demand_id": demand_id, "dataset": ("A" if dataset == "B" else "B")},
+        ),
         "confirmations": ("confirmation_list", {"demand_id": demand_id}),
         "requirement": ("requirement_get", {"demand_id": demand_id}),
         "context_pack": ("sql_context_pack", {"demand_id": demand_id, "dataset": dataset}),
@@ -422,12 +430,15 @@ async def e2e_status(demand_id: str, dataset: str = "B", run_limit: int = 20) ->
             if reason:
                 # 工具自己说「还没到这一步」（例如尚未 requirement_structured），
                 # 不算故障，但要告诉前端这一块为什么是空的。
+                # 注意：reason 里常夹带工具名（如 requirement_structured），对业务方不可执行；
+                # 故可见 message 用用户话术，原始原因放 detail 供排查。
                 return key, None, {
                     "block": key,
                     "tool": tool,
                     "kind": "not_ready",
-                    "message": reason,
-                    "hint": _NOT_READY_HINT.get(key, "该环节尚未产出，请按左侧流程顺序先完成前一步。"),
+                    "message": _NOT_READY_MSG.get(key, "这一环节还没产出"),
+                    "detail": reason,
+                    "hint": _NOT_READY_HINT.get(key, "该环节尚未产出，请按上方流程顺序先完成前一步。"),
                 }
             return key, data, None
         except McpError as exc:
@@ -453,33 +464,64 @@ async def e2e_status(demand_id: str, dataset: str = "B", run_limit: int = 20) ->
     partial_errors: list[dict] = []
     for key, data, err in results:
         payload[key] = sanitize(data) if data is not None else None
-        if err:
+        # analysis_other 只是「另一个数据集是否做过分析」的探测，其它数据集没分析
+        # 是常态，不算故障，不能写进 partial_errors 误导用户。
+        if err and key != "analysis_other":
             partial_errors.append(err)
+
+    # 需求实际所属数据集：取最新一轮（跨数据集）的 dataset，用于前端自动对齐。
+    # 与上方按 dataset 过滤的 analysis 不同——analysis 反映「当前选中的数据集」，
+    # effective_dataset 反映「该需求分析过的那条数据集」，二者不一致时前端提示切换。
+    effective_dataset = (payload.get("analysis_global") or {}).get("dataset") or dataset
+
+    # 该需求在哪些数据集上做过分析（用于前端判断：只有一个时自动对齐；
+    # 多个时尊重手动选择并提示切换，避免把电商域需求一直卡在零售会员域）。
+    datasets_with_analysis: list[str] = []
+    if payload.get("analysis"):
+        datasets_with_analysis.append(dataset)
+    other = "A" if dataset == "B" else "B"
+    if payload.get("analysis_other"):
+        datasets_with_analysis.append(other)
+    # 去重保序
+    datasets_with_analysis = list(dict.fromkeys(datasets_with_analysis))
 
     return {
         "demand_id": demand_id,
         "dataset": dataset,
+        "effective_dataset": effective_dataset,
+        "datasets_with_analysis": datasets_with_analysis,
         **payload,
         "partial_errors": partial_errors,
         "healthy": not partial_errors,
     }
 
 
+# 尚未产出时给业务方看的「是什么缺了」（不带工具名/技术术语）
+_NOT_READY_MSG = {
+    "requirement": "还没有生成结构化技术需求",
+    "context_pack": "还没有生成取数上下文包",
+    "runs": "还没有取数执行记录",
+    "analysis": "还没有分析轮次",
+    "confirmations": "还没有待确认口径",
+    "demand": "取不到该需求",
+}
+
 _NOT_READY_HINT = {
-    "requirement": "还没有结构化技术需求。请先在「查看分析」页确认口径，"
+    "requirement": "还没有结构化技术需求。请先到「对一对关键说法」页把待确认口径答复完，"
                 "再点「生成 SQL」，系统会自动结构化。",
-    "context_pack": "还没有取数上下文包。请先完成口径确认，再点「生成 SQL」。",
-    "runs": "还没有取数记录。请到「看 SQL 与结果」页点「生成 SQL」。",
-    "analysis": "还没有分析轮次。请到「提交需求」页完成提交后点「开始分析」。",
+    "context_pack": "还没有取数上下文包。请先到「对一对关键说法」页答复待确认口径，"
+                    "再点「生成 SQL」，系统会自动生成取数上下文。",
+    "runs": "还没有取数记录。请到「让系统写出 SQL」页点「生成 SQL」。",
+    "analysis": "还没有分析轮次。请到「提个需求」页完成提交后点「开始分析」。",
     "confirmations": "没有待确认问题，说明当前没有需要业务拍板的口径。",
     "demand": "取不到该需求。请确认需求编号是否正确，或该需求是否已被清理。",
 }
 
 
-# 10. POST /api/v1/demand/{id}/confirm —— 口径确认答复
+# 10. POST /api/v1/demand/{id}/confirm —— 对一对关键说法（口径确认答复）
 @app.post(f"{API}/demand/{{demand_id}}/confirm", tags=["确认"])
 async def confirm(demand_id: str, body: ConfirmIn) -> Any:
-    """答复一条口径确认。
+    """答复一条待确认口径（「对一对关键说法」页）。
 
     实盘行为：答复本身**不会**回填槽位、也不会作为 P2 证据进入证据链。
     必须在答复后重跑一次 analyze。所以这里内部串行做「答复 → 重跑分析」，
@@ -500,14 +542,14 @@ async def confirm(demand_id: str, body: ConfirmIn) -> Any:
         raise ApiError(
             code="CONFIRM_FAILED",
             message=reason,
-            hint="答复没有提交成功。请到「口径确认」页检查是否选了该问题的选项，"
+            hint="答复没有提交成功。请到「对一对关键说法」页检查是否选了该问题的选项，"
                  "或在「其他（请补充说明）」里补充文字后再提交。",
         )
 
     before = await call("analysis_get", {"demand_id": demand_id})
     reanalysis = await call(
         "analysis_first_round",
-        {"demand_id": demand_id, "dataset": "B", "actor": body.actor},
+        {"demand_id": demand_id, "dataset": body.dataset or "B", "actor": body.actor},
     )
 
     backfilled = _detect_backfill(before, reanalysis)
@@ -585,7 +627,7 @@ async def sql_generate(demand_id: str, body: SqlIn) -> Any:
         raise ApiError(
             code="SQL_GENERATE_BLOCKED",
             message=reason,
-            hint="取数被硬门禁拦住了。请到「口径确认」页把标红（blocking）的口径答复完，"
+            hint="取数被硬门禁拦住了。请到「对一对关键说法」页把标红（blocking）的口径答复完，"
                  "再回来重新生成 SQL——未确认的关键口径不得直接进入取数。",
         )
     return sanitize(result)

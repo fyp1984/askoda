@@ -83,6 +83,8 @@ export default function PageDatasource({
     <div className="page">
       <Card
         title={`数据源接入 · ${dataset} 库`}
+        collapsible
+        id="ds-status"
         extra={
           <>
             <button onClick={loadVersion} disabled={loading}>
@@ -113,12 +115,11 @@ export default function PageDatasource({
           </div>
         </div>
         <p className="muted">
-          版本号是「按名排序后的 表.列:类型 清单」的 sha256 前 8 位——同一库两次扫描必须同值，
-          这是「可复现」的可证明点。
+          版本号对应这次扫描的字段清单；库结构没变，版本号就不变。
         </p>
       </Card>
 
-      <Card title="表结构与数据字典（扫描结果）">
+      <Card title="表结构与数据字典（扫描结果）" collapsible id="ds-tables">
         {tables.length === 0 ? (
           <p className="muted">还没有扫描结果，点上方「扫描 Schema」。</p>
         ) : (
@@ -157,6 +158,8 @@ export default function PageDatasource({
 
       <Card
         title="Schema 差异与 MDL 候选"
+        collapsible
+        id="ds-candidates"
         extra={
           <button onClick={loadCandidates} disabled={candBusy || !candDemand.trim()}>
             {candBusy ? '生成中…' : '生成候选'}

@@ -262,6 +262,8 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
     <div className="page">
       <Card
         title="知识库状态"
+        collapsible
+        id="kb-status"
         extra={
           <button onClick={load} disabled={loading}>
             {loading ? '刷新中…' : '刷新'}
@@ -288,7 +290,7 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
         ) : null}
       </Card>
 
-      <Card title="知识收集">
+      <Card title="知识收集" collapsible id="kb-collect">
         <div className="uploadbar">
           <input
             ref={fileRef}
@@ -306,8 +308,7 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
           {polling ? <span className="muted">正在轮询解析进度…</span> : null}
         </div>
         <p className="muted">
-          支持 {ALLOWED.join('、')}，单个文件 ≤ {MAX_MB}MB。上传后自动触发解析，
-          解析完成（状态显示「已解析」）即可被知识检索命中。
+          支持 {ALLOWED.join('、')}，单文件 ≤ {MAX_MB}MB。上传后自动解析，状态变「已解析」即可被检索。
         </p>
         {uploadMsg ? (
           <div className={uploadMsg.kind === 'ok' ? 'okbox' : 'errbox'}>
@@ -329,6 +330,8 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
 
       <Card
         title="知识库资产"
+        collapsible
+        id="kb-assets"
         extra={
           loading ? (
             <span className="muted">加载中…</span>
@@ -383,6 +386,8 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
 
       <Card
         title="知识检索"
+        collapsible
+        id="kb-search"
         extra={
           <button className="primary" onClick={doSearch} disabled={searchBusy || !q.trim()}>
             {searchBusy ? '检索中…' : '检索'}
@@ -430,6 +435,8 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
 
       <Card
         title="引用溯源（知识引用留痕）"
+        collapsible
+        id="kb-cites"
         extra={
           <button onClick={loadCites} disabled={citeBusy}>
             {citeBusy ? '加载中…' : '加载'}

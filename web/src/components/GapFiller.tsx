@@ -20,13 +20,15 @@ export default function GapFiller({
     needs?: { kind?: string; owner?: string }
   } | null
   dataset: string
-  onRetried: () => void
+  onRetried: () => void | Promise<void>
 }) {
   const [assets, setAssets] = useState<{ tables: string[]; knowledge: string[] } | null>(null)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'what' | 'gap' | 'how'>('gap')
   const [uploading, setUploading] = useState(false)
   const [uploadMsg, setUploadMsg] = useState('')
+  const [realigning, setRealigning] = useState(false)
+  const [realignMsg, setRealignMsg] = useState('')
 
   const title = block?.title || '需要补全知识后才能出数'
   const kind = block?.needs?.kind || '口径未建模'
@@ -80,11 +82,28 @@ export default function GapFiller({
         content_type: 'text/markdown',
         actor: '业务/技术补全',
       })
-      setUploadMsg(`✅ 已上传《${r?.name || file.name}》，入库需 1–3 分钟；完成后点「重新对齐」验证。`)
+      setUploadMsg(
+        `✅ 已上传《${r?.name || file.name}》，入库通常很快；完成后点「重新对齐」验证。`,
+      )
     } catch (e: any) {
       setUploadMsg(`❌ 上传失败：${e?.message || e}`)
     } finally {
       setUploading(false)
+    }
+  }
+
+  // 重新对齐：先重跑分析摄入新知识，再重新生成。此前静默回调、无任何反馈，
+  // 用户感知「点了没反应」（2026-10-22 修复）。
+  const handleRetry = async () => {
+    setRealigning(true)
+    setRealignMsg('正在重新分析并摄入新知识…')
+    try {
+      await onRetried()
+      setRealignMsg('✅ 已重新对齐并重新生成，请查看上方 SQL 与门禁结果')
+    } catch (e: any) {
+      setRealignMsg(`❌ 重新对齐失败：${e?.message || e}`)
+    } finally {
+      setRealigning(false)
     }
   }
 
@@ -214,11 +233,16 @@ export default function GapFiller({
       ) : null}
 
       <div className="gapfoot">
-        <button className="primary" onClick={onRetried}>
-          重新对齐
+        <button className="primary" onClick={handleRetry} disabled={realigning}>
+          {realigning ? '重新对齐中…' : '重新对齐'}
         </button>
         <span className="tip">补完后点此验证 · 急用可在下方粘贴候选 SQL 兜底</span>
       </div>
+      {realignMsg ? (
+        <p className={`upmsg ${realignMsg.startsWith('✅') ? 'ok' : 'err'}`}>
+          <RichText text={realignMsg} />
+        </p>
+      ) : null}
     </div>
   )
 }

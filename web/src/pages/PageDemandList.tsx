@@ -8,7 +8,7 @@ import { Card, ErrorBox, Loading } from '../components/ui'
  * 为什么必须有这一页：需求编号原先只存在 React useState 里，刷新即丢，
  * 业务人员离开页面后自己提交过的需求一条都找不回来。
  * 本页把服务端已有的 demand_list 暴露成入口，点击任意一条即把
- * demandId 交给上层，后续四页流程（分析 / 口径确认 / SQL / 交付）复用同一条需求。
+ * demandId 交给上层，后续四页流程（读懂你的需求 / 对一对关键说法 / 让系统写出 SQL / 出数与交付）复用同一条需求。
  */
 const PAGE_SIZE = 20
 
@@ -57,6 +57,8 @@ export default function PageDemandList({
     <div className="page">
       <Card
         title="我的需求"
+        collapsible
+        id="list-main"
         extra={
           <>
             <label className="hint-inline">
@@ -95,7 +97,7 @@ export default function PageDemandList({
             <div className="emptybox-hint">
               {status
                 ? '试试把筛选切回「全部」，或换一个状态。'
-                : '请到「提交需求」页填写需求表单；提交成功后需求编号会出现在这里，刷新页面也不会丢。'}
+                : '请到「提个需求」页填写需求表单；提交成功后需求编号会出现在这里，刷新页面也不会丢。'}
             </div>
           </div>
         ) : (
