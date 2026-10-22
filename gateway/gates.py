@@ -443,11 +443,23 @@ def _requirement_check(requirement, sql=None):
                 "跳过原因：覆盖判定底座不可用（reqcov 依赖 sqlglot，当前环境无法加载），"
                 "本层不参与总状态。")
         got = reqelem_mod.build_elements_from_requirement(requirement)
+    except RuntimeError as e:
+        # 🔴 OPEN_ITEMS #4b：底座粒度守卫（time_granularity 被覆盖）触发，
+        #   绝不静默吞成 skipped。守卫失败 = 覆盖判定防火墙已废，
+        #   blocking 模式判红（不交付），report-only 模式也显式报警。
+        _gm = "覆盖判定底座守卫触发（粒度 matcher 被覆盖）：%s" % str(e)[:200]
+        if _req_coverage_mode() == _REQ_MODE_BLOCKING:
+            return {"ok": False, "skipped": False, "gaps": [_gm],
+                    "detail": _REQ_SCOPE_PREFIX + _gm}
+        return {"ok": True, "skipped": False, "gaps": [_gm],
+                "detail": (_REQ_SCOPE_PREFIX + "⚠️ " + _gm
+                           + "（report-only 未阻断，但守卫已失效，请排查后重载 matcher）")}
     except Exception as e:  # noqa: BLE001
-        # 取要素失败 ⇒ skipped，**绝不判红**：抽不出要素不等于需求没被满足。
+        # 取要素失败 => skipped，绝不判红：抽不出要素不等于需求没被满足。
         return _skipped(
             "跳过原因：要素清单构造失败（%s: %s），本层不参与总状态。"
             % (type(e).__name__, str(e)[:160]))
+
     if not isinstance(got, dict) or got.get("ok") is False:
         return _skipped(
             "跳过原因：取不到需求要素清单（%s），本层不参与总状态。"
@@ -922,7 +934,10 @@ def review(
     layers.append({
         "layer": "L-SQLFluff",
         "name": "SQLFluff 风格检查",
-        "ok": bool(sf_res.get("skipped")) or bool(sf_res.get("ok", False)),
+        # ⚠️ P2 修正：skipped（一期未启用）**绝不**等价 ok=True（假绿）。
+        #   L-SQLFluff / L-GX 不在 blocking_layers，故 skipped→ok=False 不会让
+        #   总状态翻红；此处只保证「没跑的层不显示绿」，避免误判门禁全绿。
+        "ok": bool(sf_res.get("ok", False)),
         "skipped": bool(sf_res.get("skipped", False)),
         "detail": sf_res.get("reason", sf_res.get("detail", "")),
     })
@@ -930,7 +945,9 @@ def review(
     layers.append({
         "layer": "L-GX",
         "name": "Great Expectations 断言",
-        "ok": bool(gx_res.get("skipped")) or bool(gx_res.get("ok", False)),
+        # ⚠️ P2 修正：skipped（一期未启用）**绝不**等价 ok=True（假绿）。
+        #   见上方 L-SQLFluff 同款注释：skipped 只表示「未启用」，不表示「通过」。
+        "ok": bool(gx_res.get("ok", False)),
         "skipped": bool(gx_res.get("skipped", False)),
         "detail": gx_res.get("reason", gx_res.get("detail", "")),
     })

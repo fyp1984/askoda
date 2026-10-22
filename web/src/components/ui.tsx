@@ -2,6 +2,7 @@ import React from 'react'
 import type { PartialError } from '../api/client'
 import { ApiError } from '../api/client'
 import RichText from './RichText'
+import { useCollapse } from './Collapsible'
 
 /** 统一错误展示：必须显式呈现 hint（「下一步该干什么」），不允许只报错不指路。
  *  ★ message / hint 多数直接来自 BFF 与网关的错误串，可能夹带 markdown 强调或
@@ -44,7 +45,7 @@ export function PartialErrorsBox({ errors }: { errors: PartialError[] }) {
 const BLOCK_LABEL: Record<string, string> = {
   demand: '需求详情',
   analysis: '分析结果',
-  confirmations: '口径确认',
+  confirmations: '待确认口径',
   requirement: '结构化需求',
   context_pack: '取数上下文',
   runs: '取数记录',
@@ -59,21 +60,57 @@ export function Card({
   extra,
   children,
   tone,
+  collapsible = false,
+  defaultOpen = true,
+  id,
+  count,
+  desc,
 }: {
   title?: string
   extra?: React.ReactNode
   children: React.ReactNode
   tone?: 'default' | 'muted'
+  /** 头部加折叠按钮：页面分区过长时，把不关注的分区收起，避免整页过长 */
+  collapsible?: boolean
+  defaultOpen?: boolean
+  /** 折叠态持久化 key；不传则按 title 派生（同名跨页面会共享折叠偏好） */
+  id?: string
+  count?: number | string
+  desc?: string
 }) {
+  const key = id || (title ? `card:${title}` : 'card:unnamed')
+  const { open, toggle } = useCollapse(key, defaultOpen)
+  const cls = [
+    'card',
+    tone === 'muted' ? 'card-muted' : '',
+    collapsible ? 'card-collapsible' : '',
+    open ? '' : 'collapsed',
+  ]
+    .filter(Boolean)
+    .join(' ')
   return (
-    <section className={`card${tone === 'muted' ? ' card-muted' : ''}`}>
+    <section className={cls}>
       {title ? (
         <header className="card-head">
-          <h3>{title}</h3>
+          {collapsible ? (
+            <button
+              type="button"
+              className="card-toggle"
+              onClick={toggle}
+              aria-expanded={open}
+              title={open ? '收起此卡片' : '展开此卡片'}
+            >
+              <span className="card-caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
+              <span className="card-title">{title}</span>
+              {count !== undefined && count !== '' ? <span className="card-count">{count}</span> : null}
+            </button>
+          ) : (
+            <h3>{title}</h3>
+          )}
           {extra ? <div className="card-extra">{extra}</div> : null}
         </header>
       ) : null}
-      <div className="card-body">{children}</div>
+      {open ? <div className="card-body">{children}</div> : null}
     </section>
   )
 }

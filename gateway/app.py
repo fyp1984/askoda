@@ -741,10 +741,13 @@ def analysis_rounds(demand_id: str) -> dict:
 
 
 @mcp.tool
-def analysis_get(demand_id: str, round_no: int | None = None) -> dict:
-    """取某一轮的完整结果（默认最新一轮）：槽位、证据链、规则校验、确认问题。"""
+def analysis_get(demand_id: str, round_no: int | None = None, dataset: str | None = None) -> dict:
+    """取某一轮的完整结果（默认最新一轮）：槽位、证据链、规则校验、确认问题。
+
+    dataset 给定时只返回该数据集的轮次；不给定则返回最新一轮（跨数据集）。
+    """
     try:
-        return analysis_mod.get_round(demand_id, round_no)
+        return analysis_mod.get_round(demand_id, round_no, dataset)
     except Exception as e:
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 

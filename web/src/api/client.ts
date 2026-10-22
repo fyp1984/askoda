@@ -77,8 +77,10 @@ export const api = {
     post<Record<string, unknown>>(`/demand/${encodeURIComponent(demandId)}/analyze`, { dataset, actor }),
   e2eStatus: (demandId: string, dataset = 'B') =>
     request<E2eStatus>(`/demand/${encodeURIComponent(demandId)}/e2e-status?dataset=${dataset}`),
-  confirm: (demandId: string, body: { question_id: string; answer: string; choice?: string; actor?: string }) =>
-    post<ConfirmResp>(`/demand/${encodeURIComponent(demandId)}/confirm`, body),
+  confirm: (
+    demandId: string,
+    body: { question_id: string; answer: string; choice?: string; actor?: string; dataset?: string },
+  ) => post<ConfirmResp>(`/demand/${encodeURIComponent(demandId)}/confirm`, body),
   sqlGenerate: (demandId: string, dataset: string, candidateSql?: string | string[]) =>
     post<SqlResp>(`/demand/${encodeURIComponent(demandId)}/sql`, {
       dataset,
@@ -252,6 +254,10 @@ export type PartialError = {
 export type E2eStatus = {
   demand_id: string
   dataset: string
+  /** 需求实际所属数据集（最新一轮跨数据集的 dataset）；与 dataset 不一致时前端提示切换 */
+  effective_dataset?: string
+  /** 该需求在哪些数据集上做过分析（只有一个时前端自动对齐，多个时提示手动切换） */
+  datasets_with_analysis?: string[]
   demand: Record<string, any> | null
   analysis: Record<string, any> | null
   confirmations: Record<string, any> | null

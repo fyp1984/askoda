@@ -1,0 +1,38 @@
+name: 门禁（G0 静态 + G1 单元，离线）
+
+# 触发：推到 main 或开 PR 时自动跑「日常门禁」（G0 + G1）。
+#
+# 口径对齐：与仓库 tools/run_selftest.sh 的默认行为一致——只跑离线可验证的两层：
+#   · G0 静态自检（py_compile + 依赖基线 + 环境变量自检）
+#   · G1 单元自证（tools/*_selftest.py）
+#
+# 为什么只跑 G0+G1：G2（*_check.py 独立复核）与 G3（探活 / *_verify.py 真实链路）
+# 需要完整的 docker compose 栈（postgres / Wren MCP / RAGFlow），不适合在托管 CI
+# 里起整套栈。这两层在「本地 / 部署流水线」里跑（见 README 的本地门禁说明）。
+#
+# ⚠️ 若 G1 里某脚本需要外部服务（库 / Wren / RAGFlow）而当前无服务，
+#    该脚本应**自行优雅 SKIP 并以 0 退出**（参考 tools/sqlrun_selftest.py 的写法），
+#    而不是报红——保证日常门禁在纯离线 CI 里稳定可重放。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install gateway dependencies
+        run: pip install -r gateway/requirements.txt
+
+      - name: Run offline gate (G0 + G1)
+        run: python tools/gate_all.py --layers G0,G1

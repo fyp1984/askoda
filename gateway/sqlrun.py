@@ -420,6 +420,25 @@ def execute_readonly(sql, dataset="B", demand_id=None, requirement_version=None,
     result["fallback_matrix"] = fallback_matrix
     if fallback_extra:
         result["fallback"] = fallback_extra
+
+    # PRD ⑭ 最小闭环：交付 → 候选知识回流（可选开关，绝不影响交付）。
+    # 默认关闭；KNOWLEDGE_BACKFLOW_ENABLED=1 且配置了候选数据集才回流。
+    # 整个调用包在 try/except 里，且 propose_candidate_knowledge 内部也兜底，
+    # 任何异常都只记 warning，绝不反噬交付链路。
+    try:
+        from knowledge_backflow import propose_candidate_knowledge
+        _bf = propose_candidate_knowledge({
+            "demand_id": demand_id,
+            "dataset": dataset,
+            "requirement": _requirement,
+            "final_sql": final_delivery_sql,
+            "generator": generator or generator_model,
+        })
+        if not _bf.get("skipped"):
+            result["knowledge_backflow"] = _bf
+    except Exception:  # noqa: BLE001
+        # 回流失败不影响交付；此处静默吞掉（propose 内已记录 reason）
+        pass
     return result
 
 

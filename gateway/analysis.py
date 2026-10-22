@@ -168,15 +168,23 @@ def _recheck_rule_r4(slots, stored_risks):
     return out, True
 
 
-def get_round(demand_id, round_no=None):
-    """取某一轮完整结果（默认最新一轮）。"""
+def get_round(demand_id, round_no=None, dataset=None):
+    """取某一轮完整结果（默认最新一轮）。
+
+    dataset 给定时，只在指定数据集的轮次里取最新一轮——否则会拿到另一条
+    数据集的旧轮次，掩盖「当前数据集尚未分析」的真实状态（2026-10-22 修复）。
+    """
     if round_no is None:
-        row = db.query_one(
-            "SELECT max(round_no) AS n FROM analysis_rounds WHERE demand_id=%s",
-            (demand_id,),
-        )
+        sql = "SELECT max(round_no) AS n FROM analysis_rounds WHERE demand_id=%s"
+        params: list = [demand_id]
+        if dataset:
+            sql += " AND dataset=%s"
+            params.append(dataset)
+        row = db.query_one(sql, tuple(params))
         if not row or row["n"] is None:
-            raise AnalysisError("该需求还没有分析轮次：%s" % demand_id)
+            raise AnalysisError(
+                "该需求在数据集 %s 还没有分析轮次：%s" % (dataset or "?", demand_id)
+            )
         round_no = int(row["n"])
     r = db.query_one(
         "SELECT * FROM analysis_rounds WHERE demand_id=%s AND round_no=%s",

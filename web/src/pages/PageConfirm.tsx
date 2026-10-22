@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { api, type E2eStatus } from '../api/client'
 import { Card, ErrorBox, Loading, PartialErrorsBox } from '../components/ui'
+import { Section } from '../components/Collapsible'
 import RichText from '../components/RichText'
+import { slotLabel } from '../lib/display'
 
 /**
- * 页3 · 口径确认
+ * 页3 · 对一对关键说法（口径确认）
  *
  * 实测行为（关键）：答复提交后**必须重跑一次 analyze**，
  * 否则答复不会作为 P2 证据进入证据链、也不会回填槽位。
@@ -12,12 +14,18 @@ import RichText from '../components/RichText'
  */
 export default function PageConfirm({
   demandId,
+  dataset,
   status,
   onRefresh,
+  onGoSql,
 }: {
   demandId: string | null
+  /** 当前数据集：答复后重跑分析必须沿用，否则会静默换库重算 */
+  dataset: string
   status: E2eStatus | null
   onRefresh: () => void
+  /** 待确认口径清空后，一键跳到「让系统写出 SQL」 */
+  onGoSql?: () => void
 }) {
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [busyQ, setBusyQ] = useState<string | null>(null)
@@ -33,8 +41,8 @@ export default function PageConfirm({
   if (!demandId) {
     return (
       <div className="page">
-        <Card title="口径确认">
-          <p className="muted">还没有需求。请先到「提交需求」页提交一条。</p>
+        <Card title="对一对关键说法">
+          <p className="muted">还没有需求。请先到「提个需求」页提交一条。</p>
         </Card>
       </div>
     )
@@ -62,6 +70,7 @@ export default function PageConfirm({
         answer: answerText,
         choice: answerText,
         actor: '',
+        dataset,
       })
       setBackfill({ question: questionId, ...(resp.backfill as any) })
       setAnswers((a) => ({ ...a, [questionId]: '' }))
@@ -76,27 +85,39 @@ export default function PageConfirm({
   return (
     <div className="page">
       <Card
-        title={`口径确认 · ${demandId}`}
+        title={`对一对关键说法 · ${demandId}`}
+        collapsible
+        id="confirm-main"
         extra={
           <span className="muted">
             待确认 {conf?.open_count ?? 0} 条 · 已答复 {conf?.answered_count ?? 0} 条
           </span>
         }
       >
+        <p className="muted page-lead">
+          把有歧义、需要你拍板的口径定下来。<b>答复 → 自动回填 → 清空即可生成 SQL。</b>
+        </p>
         <ErrorBox error={error} />
         <PartialErrorsBox errors={status?.partial_errors || []} />
 
         {open.length === 0 ? (
-          <p className="muted">
-            当前没有待确认的口径。
-            {items.length > 0 ? '已答复记录见下方。' : '若系统未产出问题，通常说明该需求的口径已足够明确。'}
-          </p>
+          <div className="confirm-done">
+            <p className="muted">
+              当前没有待确认的口径，本页已清空。
+              {items.length > 0 ? '已答复记录见下方。' : '若系统未产出问题，通常说明该需求的口径已足够明确。'}
+            </p>
+            {onGoSql ? (
+              <button type="button" className="primary" onClick={onGoSql}>
+                下一步：让系统写出 SQL →
+              </button>
+            ) : null}
+          </div>
         ) : (
           <div className="qlist">
             {open.map((q) => (
               <div className="q" key={q.question_id}>
                 <div className="q-head">
-                  <span className="q-slot">槽位：{q.slot}</span>
+                  <span className="q-slot">槽位：{slotLabel(q.slot)}</span>
                   <span className="q-id">{q.question_id}</span>
                 </div>
                 {/* 问题/后果/选项都由后端 confirmation_generate 生成，
@@ -127,7 +148,7 @@ export default function PageConfirm({
                     {busyQ === q.question_id ? '提交并重跑分析中…' : '提交答复并重跑分析'}
                   </button>
                   <span className="hint-inline">
-                    答复会自动触发一轮重分析，答复将作为 P2 证据进入证据链
+                    提交后自动重跑分析，答复会回填到对应口径
                   </span>
                 </div>
               </div>
@@ -139,17 +160,15 @@ export default function PageConfirm({
 
         {backfill ? (
           <div className={`backfill${backfill.backfilled ? ' backfill-ok' : ' backfill-none'}`}>
-            <h4 className="sec">
-              上一条答复的回填结果
-              <span className="muted">（问题 <RichText text={backfill.question} />）</span>            </h4>
+            <Section title="上一条答复的回填结果" id="confirm-backfill">
             <p>
-              证据链 P2「业务确认」条数：
+              已被采纳为「业务确认」的条数：
               <b className={backfill.p2_evidence_count > 0 ? 'ok-text' : 'bad-text'}>
                 {backfill.p2_evidence_count}
               </b>
             </p>
             {backfill.slots_changed.length === 0 ? (
-              <p className="muted">本轮没有槽位发生变化（答复已进入证据链，但该槽位仍未被自动判定）。</p>
+              <p className="muted">答复已记录，但这条口径还没自动定稿；可重新分析或稍后再看。</p>
             ) : (
               <div className="table-wrap">
                 <table className="grid">
@@ -186,13 +205,14 @@ export default function PageConfirm({
                 {e.answered_by ? <span className="muted">答复人：{e.answered_by}</span> : null}
               </div>
             ))}
+            </Section>
           </div>
         ) : null}
 
         {items.length > 0 ? (
           <>
-            <h4 className="sec">全部确认记录</h4>
-            <div className="table-wrap">
+            <Section title="全部确认记录" id="confirm-records" count={items.length}>
+              <div className="table-wrap">
               <table className="grid">
                 <thead>
                   <tr>
@@ -206,7 +226,7 @@ export default function PageConfirm({
                   {items.map((i) => (
                     <tr key={i.confirmation_id}>
                       <td className="ev-content"><RichText text={i.question} /></td>
-                      <td>{i.slot}</td>
+                      <td>{slotLabel(i.slot)}</td>
                       <td><RichText text={i.answer || '-'} /></td>
                       <td>
                         {i.answered ? (
@@ -220,6 +240,7 @@ export default function PageConfirm({
                 </tbody>
               </table>
             </div>
+            </Section>
           </>
         ) : null}
       </Card>

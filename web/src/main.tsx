@@ -2,6 +2,10 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import ErrorBoundary from './components/ErrorBoundary'
+// 令牌层：primitive（raw ramp）必须先于 semantic（语义别名）加载；
+// styles.css 迁移完成后只引用 semantic 层变量。
+import './tokens/primitive.css'
+import './tokens/semantic.css'
 import './styles.css'
 
 /**
