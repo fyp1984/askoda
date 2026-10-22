@@ -12,10 +12,11 @@
 
 为什么 generate() 里允许传 candidate_sql
 -----------------------------------------
-硬约束里「网关侧不调用任何 LLM」——自由生成能力放在客户端 Agent，它会把
-candidate_sql 作为参数回传给网关；网关只做"收+审+存"。客户端 Agent 挂掉时，
-网关不会断链——此时 candidate_sql=None，回落 planner.plan(ds, nl) 确定性兜底。
-两条路径的产出都要立刻过 gates.review()，保证"不管 SQL 从哪来，网关只放行同一套门禁"。
+两条生成来源并存：① 客户端 Agent 把 candidate_sql 回传给网关（网关只做"收 + 审 + 存"）；
+② 网关侧**大模型原生生成**（可选，见 sqlgen_llm.py；未配置即禁用，自动回落确定性）。
+无论 SQL 从哪来，都立刻过 gates.review()——网关只放行同一套门禁。
+客户端 Agent 挂掉且未启用大模型时不会断链：candidate_sql=None → 回落 planner.plan
+确定性兜底（封闭世界、未命中即拒）。
 """
 import db
 import secrets
@@ -551,7 +552,8 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
 
     生成器优先级：
       candidate_sql 非空（客户端 Agent 产出）  → generator=client-agent
-      candidate_sql 为空                      → generator=deterministic-planner
+      candidate_sql 为空且启用大模型           → generator=llm（sqlgen_llm，门禁不过则回落）
+      candidate_sql 为空且未启用大模型         → generator=deterministic-planner
         (planner.plan(ds, nl)，ds=数据集对象；nl=需求标题+描述 or structured_requirement
          subject.value + output_fields.value 拼接)
     """
@@ -621,17 +623,57 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
                 title = sub
                 desc = fields
         nl = (title.strip() + " " + desc.strip()).strip()
-        if not nl:
-            generation_risks.append("确定性兜底：构造 nl 为空 → planner 会返回 _refuse（不猜 SQL）")
-            planned = planner_mod._refuse(
-                dataset, "构造自然语言失败",
-                "无法从 demand_requests / structured_requirements 构造出可读 nl",
-                "先保证 demand_requests 有 title/description，或 requirement 槽位非空",
-            )
-        else:
-            planned = planner_mod.plan(ds, nl)
-        sql_draft = planned.get("sql") or ""
-        if planned.get("blocked"):
+
+        # ── 大模型原生生成（可选旁路）────────────────────────────────
+        # 产品本身对接大模型：网关侧优先用 LLM 生成复杂需求，失败/未配置再回落确定性规划器。
+        # 这是**新增旁路**：不改 candidate_sql 路径，也不改未配置时的既有行为。
+        # 质量由 sqlgen_llm 内部「生成→门禁校验→修复」闭环保证；不过门禁则绝不下发。
+        _llm_used = False
+        _structured = _requirement_safe(demand_id)
+        if nl:
+            try:
+                import sqlgen_llm as _llmmod  # 惰性导入：模块缺失不影响既有链路
+                if _llmmod.is_enabled():
+                    _lr = _llmmod.generate_sql(
+                        demand_id=demand_id, dataset=dataset, nl=nl, structured=_structured
+                    )
+                    if _lr.get("ok") and str(_lr.get("sql") or "").strip():
+                        sql_draft = str(_lr["sql"]).strip()
+                        generator_label = "llm"
+                        _llm_used = True
+                        generation_notes.append(
+                            "大模型生成并通过门禁：%s"
+                            % (str(_lr.get("explanation") or "")[:200] or "已通过门禁")
+                        )
+                        for _n in (_lr.get("notes") or []):
+                            generation_notes.append(str(_n))
+                        for _rk in (_lr.get("risks") or []):
+                            generation_risks.append(str(_rk))
+                    else:
+                        generation_risks.append(
+                            "大模型生成未采用，已回落确定性规划器：%s"
+                            % (str(_lr.get("error") or "")[:200] or "无可用 SQL")
+                        )
+            except Exception as _e:  # noqa: BLE001
+                generation_risks.append(
+                    "大模型生成异常，已回落确定性规划器：%s: %s"
+                    % (type(_e).__name__, str(_e)[:160])
+                )
+
+        blocked = False
+        if not _llm_used:
+            if not nl:
+                generation_risks.append("确定性兜底：构造 nl 为空 → planner 会返回 _refuse（不猜 SQL）")
+                planned = planner_mod._refuse(
+                    dataset, "构造自然语言失败",
+                    "无法从 demand_requests / structured_requirements 构造出可读 nl",
+                    "先保证 demand_requests 有 title/description，或 requirement 槽位非空",
+                )
+            else:
+                planned = planner_mod.plan(ds, nl)
+            sql_draft = planned.get("sql") or ""
+            blocked = planned.get("blocked")
+        if blocked:
             #结构化返回，勿再拼成机器格式字符串（2026-10-07 用户反馈：
             #   「有很多文档格式的文字输出，排版不友好」——那正是把
             #   intent=/reason=/guide= 拼在一起直接透出所致）。
@@ -662,7 +704,7 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
                 ],
                 "needs": _classify_gap(_extract_between(_reason, "当前差距：", None) or _reason),
             }
-        else:
+        elif not _llm_used:
             generation_notes.append(
                 "确定性兜底命中 intent=%s；引用 MDL 对象 %d 个" % (
                     planned.get("intent"), len(planned.get("objects") or []),

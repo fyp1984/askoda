@@ -194,6 +194,16 @@ services:
       KNOWLEDGE_API_URL: "${KNOWLEDGE_API_URL:-http://host.docker.internal:19380/api/v1}"
       KNOWLEDGE_API_KEY: "${KNOWLEDGE_API_KEY:-}"
       KNOWLEDGE_DATASET_ID: "${KNOWLEDGE_DATASET_ID:-}"
+      # ── 大模型原生 SQL 生成（可选）────────────────────────────────
+      # 三项（BASE_URL/API_KEY/MODEL）齐全即启用；不配则保持确定性规划器，
+      # 与历史行为完全一致。兼容 OpenAI / DeepSeek / DashScope(qwen) 等
+      # OpenAI 兼容端点（路径 .../chat/completions）。LLM_ENABLED=0 可强制关闭。
+      LLM_BASE_URL: "${LLM_BASE_URL:-}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_MODEL: "${LLM_MODEL:-}"
+      LLM_ENABLED: "${LLM_ENABLED:-auto}"
+      LLM_TIMEOUT: "${LLM_TIMEOUT:-60}"
+      LLM_MAX_REPAIR: "${LLM_MAX_REPAIR:-1}"
     ports:
       # 宿主机 18080（8080 已被本项目 demo-server 长期占用）
       - "${GATEWAY_HOST_PORT:-18080}:8080"

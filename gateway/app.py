@@ -993,9 +993,10 @@ def sql_generate(demand_id: str, dataset: str = "B",
                  candidate_sql: str | list[str] | None = None) -> dict:
     """M5-2 · 生成 SQL 初稿（两段式第二段）。
 
-    `candidate_sql` 为调用方（客户端 Agent）产出的 SQL：非空则采用，为空则**回落确定性
-    规划器**。**网关侧不调用任何模型**——自由生成由客户端承担。生成后立即过门禁，
-    结果放在 `review` 字段。
+    `candidate_sql` 为调用方（客户端 Agent）产出的 SQL：非空则采用；为空时，若已配置
+    大模型（`LLM_BASE_URL/API_KEY/MODEL`）则走 `sqlgen_llm` 原生生成（门禁不过自动回落），
+    否则**回落确定性规划器**。生成后立即过门禁，结果放在 `review` 字段（`generator`
+    取值可能是 `client-agent` / `llm` / `deterministic-planner`）。
 
     M6-2：`candidate_sql` 可传**多条候选**（list[str]）。多条且差异过大时会 `hold`——
     不下发 SQL（`sql_draft` 置空）、只保留计划草稿供人工选定，返回 `hold` /
