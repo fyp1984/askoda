@@ -447,13 +447,21 @@ def plan_b(dataset, nl):
                 _objects(dataset, ["ads_member_repurchase_di"]),
             )
     if "复购率" in t:
+        # 排序意图（2026-10-23 基线实测补）：「各门店复购率排名」原样只分组不排序，
+        # 而"排名"没有排序就等于没有排名。⚠️ 复购率的口径要求"不单独给比率"
+        # （分母需业务确认，见上一条），所以这里按**分子**（复购用户数）降序，
+        # 不做"比率排名"的暗示。
+        _rank_r = bool(re.search(
+            r"排名|排行|最高|最低|从高到低|从低到高|降序|升序|(?:前|top)\s*\d+",
+            t, re.IGNORECASE))
         if "按门店" in t or "各门店" in t:
             return _ok(
                 "B",
-                "复购率·门店月",
+                "复购率·门店月" + ("排名" if _rank_r else ""),
                 "SELECT s.store_name, r.stat_month, SUM(r.repurchase_flag) AS 复购用户数, "
                 "SUM(r.order_cnt) AS 活跃订单量 FROM ads_member_repurchase_di r "
-                "JOIN dim_store s ON r.store_id = s.store_id GROUP BY s.store_name, r.stat_month",
+                "JOIN dim_store s ON r.store_id = s.store_id GROUP BY s.store_name, r.stat_month"
+                + (" ORDER BY 复购用户数 DESC" if _rank_r else ""),
                 _objects(dataset, ["ads_member_repurchase_di", "dim_store"]),
             )
         return _ok(
@@ -469,6 +477,27 @@ def plan_b(dataset, nl):
                 rules=["复购率必须随附分母（活跃会员数），不单独给比率"],
             ),
         )
+    if "复购" in t:
+        # ⚠️ 泛化说法兜底（2026-10-23 基线实测补）：
+        #   上面两条只认「复购率」「复购用户数」这两个**精确词**，而业务方最自然的
+        #   说法是「会员复购情况」——它一个字都不匹配，于是掉进兜底"未命中已建模意图"
+        #   被硬拒。可是 ads_member_repurchase_di 与 repurchase_flag 明明就在库里
+        #   ⇒ 这是"明明有数据却说没有"，比算错更伤信任。
+        #   ⇒ 未指定比率/用户数时，给**按月复购总览**（复购用户数 + 活跃订单量），
+        #     **不替业务方算比率**：比率的分母口径（活跃会员？全部会员？）需要业务确认，
+        #     自作主张算出来的比率会被直接拿去汇报。
+        return _ok(
+            "B",
+            "复购情况·按月总览",
+            "SELECT r.stat_month, SUM(r.repurchase_flag) AS 复购用户数, "
+            "SUM(r.order_cnt) AS 活跃订单量 FROM ads_member_repurchase_di r "
+            "GROUP BY r.stat_month ORDER BY r.stat_month",
+            _objects(
+                dataset,
+                ["ads_member_repurchase_di"],
+                rules=["不单独给复购率：分母口径需业务确认，本意图只给分子与活跃订单量"],
+            ),
+        )
     if ("会员数" in t or "会员人数" in t) and ("门店" in t):
         return _ok(
             "B",
@@ -476,6 +505,38 @@ def plan_b(dataset, nl):
             "SELECT s.store_name AS 归属门店, COUNT(*) AS 会员数 "
             "FROM dim_member m JOIN dim_store s ON m.store_id = s.store_id GROUP BY s.store_name",
             _objects(dataset, ["dim_member", "dim_store"]),
+        )
+    if "客单价" in t:
+        # ⚠️ 2026-10-23 基线实测补：客单价是**派生指标**（销售额 ÷ 订单数），
+        #   却被兜底逻辑当成"物理数据缺失"来报——原文案是
+        #   「B 库无「客单价」相关表」。客单价本来就不是一张表，
+        #   这句提示会把业务方引到"去找数据源"的错方向（真实情况是：数据齐全，只是没建模）。
+        #   与 L-REQ「调用方未传 demand_id」是同一类病：**提示指错方向比不提示更贵**。
+        #   口径：仅已完成订单（排除退款），分母用不同订单号，避免一张订单多明细被重复计。
+        if "各门店" in t or "按门店" in t or "门店" in t:
+            return _ok(
+                "B",
+                "客单价·门店",
+                "SELECT s.store_name, "
+                "ROUND(CAST(SUM(o.pay_amount) / COUNT(DISTINCT o.order_id) AS DECIMAL(10,2)), 2) "
+                "AS 客单价 FROM dwd_order_di o JOIN dim_store s ON o.store_id = s.store_id "
+                "WHERE o.order_status = '已完成' GROUP BY s.store_name",
+                _objects(
+                    dataset,
+                    ["dwd_order_di", "dim_store"],
+                    rules=["客单价口径：仅已完成订单；分母取不同订单号（COUNT DISTINCT order_id）"],
+                ),
+            )
+        return _ok(
+            "B",
+            "客单价·总",
+            "SELECT ROUND(CAST(SUM(o.pay_amount) / COUNT(DISTINCT o.order_id) AS DECIMAL(10,2)), 2) "
+            "AS 客单价 FROM dwd_order_di o WHERE o.order_status = '已完成'",
+            _objects(
+                dataset,
+                ["dwd_order_di"],
+                rules=["客单价口径：仅已完成订单；分母取不同订单号（COUNT DISTINCT order_id）"],
+            ),
         )
     if "活跃会员数" in t or ("活跃" in t and "会员" in t):
         if m1:
@@ -507,6 +568,18 @@ def plan_b(dataset, nl):
                 "SELECT COUNT(*) AS 升级人数 FROM ads_member_grade_change_wi "
                 "WHERE change_type = '升级' AND change_month >= '%s' AND change_month < '%04d-%02d-01'"
                 % (m1, ny, nm),
+                _objects(dataset, ["ads_member_grade_change_wi"]),
+            )
+        # ⚠️ 月度维度（2026-10-23 基线实测补）：`change_month` 就在表里，
+        #   需求说「按月/趋势」时却只按 change_type 分组 ⇒ 时间维度整体丢失。
+        #   这类"表里有、需求也要、SQL 不给"的缺口，正是 REQ-COVERAGE 要抓的。
+        if any(k in t for k in ("按月", "月度", "每月", "趋势", "各月")):
+            return _ok(
+                "B",
+                "升降级·按月趋势",
+                "SELECT change_month AS 月份, change_type AS 异动类型, COUNT(*) AS 数量 "
+                "FROM ads_member_grade_change_wi "
+                "GROUP BY change_month, change_type ORDER BY 月份, change_type",
                 _objects(dataset, ["ads_member_grade_change_wi"]),
             )
         return _ok(
@@ -572,7 +645,13 @@ def plan_b(dataset, nl):
                 "FROM dws_store_daily_agg d JOIN dim_store s ON d.store_id = s.store_id GROUP BY s.store_name",
                 _objects(dataset, ["dws_store_daily_agg", "dim_store"]),
             )
-        if "门店" in t and "各" in t:
+        # 排序意图要在分支条件之前算出来：因为「前5名门店销售额」这类说法里
+        # **没有「各」**，但"前N名"本身就隐含"逐门店列出来再排"⇒ 必须能进这个分支，
+        # 否则会掉进兜底"未命中已建模意图"被硬拒（实测如此）。
+        _rank = bool(re.search(
+            r"排名|排行|最高|最低|从高到低|从低到高|降序|升序|(?:前|top)\s*\d+",
+            t, re.IGNORECASE))
+        if "门店" in t and ("各" in t or _rank):
             # ⚠️ 粒度优先（2026-10-23 实测补）：原实现只认「各门店」，不看需求里的
             #   「按月 / 月度 / 每月」⇒ 需求写"按月"，SQL 却只按门店 GROUP BY，
             #   月度要素直接丢失。这类 SQL 以前能过（因为没人比对需求），
@@ -582,25 +661,65 @@ def plan_b(dataset, nl):
             _by_month = bool(_months_in(t)) or any(
                 k in t for k in ("按月", "月度", "每月", "分月", "各月")
             )
+            # ⚠️ 同族缺陷第二次（2026-10-23 基线实测补）：这句话里**说了几样东西，
+            #   就要出几样**。原实现写死只出「销售额」，于是
+            #     「各门店月度订单量和销售额」→ SQL 里没有订单数（要素被吞），
+            #     「各门店销售额排名」        → SQL 里没有 ORDER BY（排名不排序，
+            #                                    业务方拿到一堆无序行，"排名"形同虚设）。
+            #   这两类都属"需求说了、SQL 没有"，只是过去没人逐项比对需求。
+            #   与粒度那条同一个道理：**门禁能拦，但产品不能只会拦**。
+            #   ⇒ 判据只认明确的业务说法，避免过度拟合：
+            #     · 订单数：订单量 / 订单数 / 单量 / 多少单（「销量」是件数，不混进来）
+            #     · 排序：排名 / 排行 / 最高 / 最低 / 从高到低 / 从低到高 / 前N名 / topN
+            #       ⚠️ 不认单字「前」（「目前」「之前」会误命中）。
+            _need_cnt = any(k in t for k in ("订单量", "订单数", "单量", "多少单"))
+            _cnt_sel = ", COUNT(*) AS 订单数" if _need_cnt else ""
+            # ⚠️ 同族缺陷第三次（2026-10-23 基线实测补）：
+            #   「各门店销售额**占比**」原样返回金额，占比一个字都没有 ——
+            #   需求要的是"每天门店占全店多少"，拿到的是一堆绝对数，
+            #   业务方只能自己拿计算器除。属"说了没做"，与排名/订单量同一族。
+            #   口径：占比 = 本店金额 ÷ 同范围合计，用窗口函数求分母（不额外查一遍库）。
+            #     · 不带月度 ⇒ 分母＝全部门店合计；
+            #     · 带月度   ⇒ 分母＝**同月**门店合计（跨月比较没有意义）。
+            _need_share = any(k in t for k in ("占比", "比重", "份额", "占总"))
+            _share_month = (", ROUND(CAST(SUM(o.pay_amount) * 100.0 / "
+                            "SUM(SUM(o.pay_amount)) OVER "
+                            "(PARTITION BY date_trunc('month', o.order_date)) "
+                            "AS DECIMAL(10,2)), 2) AS 占比百分比"
+                            if (_need_share and _by_month) else "")
+            _share_plain = (", ROUND(CAST(SUM(o.pay_amount) * 100.0 / "
+                            "SUM(SUM(o.pay_amount)) OVER () "
+                            "AS DECIMAL(10,2)), 2) AS 占比百分比"
+                            if (_need_share and not _by_month) else "")
+            _suffix = ("排名" if _rank else "") + ("·含订单数" if _need_cnt else "") \
+                + ("·含占比" if _need_share else "")
             if _by_month:
+                _order = ("月份, 销售额 DESC" if _rank else "月份, s.store_name")
                 return _ok(
                     "B",
-                    "销售额·门店月",
+                    "销售额·门店月" + _suffix,
                     "SELECT s.store_name, date_trunc('month', o.order_date) AS 月份, "
-                    "SUM(o.pay_amount) AS 销售额 "
+                    "SUM(o.pay_amount) AS 销售额" + _cnt_sel + _share_month + " "
                     "FROM dwd_order_di o JOIN dim_store s ON o.store_id = s.store_id "
                     "WHERE o.order_status = '已完成' "
                     "GROUP BY s.store_name, date_trunc('month', o.order_date) "
-                    "ORDER BY 月份, s.store_name",
-                    _objects(dataset, ["dwd_order_di", "dim_store"]),
+                    "ORDER BY " + _order,
+                    _objects(
+                        dataset, ["dwd_order_di", "dim_store"],
+                        rules=["占比口径：分母为同月各门店合计（窗口函数），非全期合计"],
+                    ) if _need_share else _objects(dataset, ["dwd_order_di", "dim_store"]),
                 )
             return _ok(
                 "B",
-                "销售额·门店",
-                "SELECT s.store_name, SUM(o.pay_amount) AS 销售额 "
+                "销售额·门店" + _suffix,
+                "SELECT s.store_name, SUM(o.pay_amount) AS 销售额" + _cnt_sel + _share_plain + " "
                 "FROM dwd_order_di o JOIN dim_store s ON o.store_id = s.store_id "
-                "WHERE o.order_status = '已完成' GROUP BY s.store_name",
-                _objects(dataset, ["dwd_order_di", "dim_store"]),
+                "WHERE o.order_status = '已完成' GROUP BY s.store_name"
+                + (" ORDER BY 销售额 DESC" if _rank else ""),
+                _objects(
+                    dataset, ["dwd_order_di", "dim_store"],
+                    rules=["占比口径：分母为全部门店合计（窗口函数）"],
+                ) if _need_share else _objects(dataset, ["dwd_order_di", "dim_store"]),
             )
         if "工作日" in t or "周末" in t or "日型" in t:
             return _ok(
@@ -619,11 +738,25 @@ def plan_b(dataset, nl):
                 _objects(dataset, ["dwd_order_di"]),
             )
     if "品类" in t:
+        # 同族：需求说「排名/最高/最低」就要排序，否则"排名"只是列出来（2026-10-23 基线实测）。
+        _rank_cat = bool(re.search(
+            r"排名|排行|最高|最低|从高到低|从低到高|降序|升序|(?:前|top)\s*\d+",
+            t, re.IGNORECASE))
+        # 同族：说「占比/比重/份额」就要算出占比（2026-10-23 基线实测补）。
+        # 口径：品类金额 ÷ 全部品类合计，窗口函数求分母。
+        _share_cat = any(k in t for k in ("占比", "比重", "份额", "占总"))
         return _ok(
             "B",
-            "品类销售额",
-            "SELECT category_name, SUM(sales_amount) AS 销售额 FROM dwd_order_detail_di GROUP BY category_name",
-            _objects(dataset, ["dwd_order_detail_di"]),
+            "品类销售额" + ("排名" if _rank_cat else "") + ("·含占比" if _share_cat else ""),
+            "SELECT category_name, SUM(sales_amount) AS 销售额"
+            + (", ROUND(CAST(SUM(sales_amount) * 100.0 / SUM(SUM(sales_amount)) OVER () "
+               "AS DECIMAL(10,2)), 2) AS 占比百分比" if _share_cat else "") + " "
+            "FROM dwd_order_detail_di GROUP BY category_name"
+            + (" ORDER BY 销售额 DESC" if _rank_cat else ""),
+            _objects(
+                dataset, ["dwd_order_detail_di"],
+                rules=["占比口径：分母为全部品类合计（窗口函数）"],
+            ) if _share_cat else _objects(dataset, ["dwd_order_detail_di"]),
         )
     if ("每月" in t or "趋势" in t) and ("订单" in t or "销售" in t):
         return _ok(
@@ -688,7 +821,9 @@ def _explain_gap_b(dataset, t):
         "仓储": ["仓储", "仓库", "warehouse"],
         "物流": ["物流", "配送", "shipping", "logistics"],
         "商品类目": ["品类", "类目", "category"],
-        "客单价": ["客单价", "均价"],
+        # ⚠️ 这里曾有「客单价」条目，2026-10-23 移除：客单价是**派生指标**
+        #   （销售额 ÷ 订单数），不是一张表 ⇒ 把它判成「数据缺失」是错的，
+        #   会把业务方引去找数据源。已改为真实意图（见 plan_b 的「客单价」分支）。
     }
     for human, kws in kw_table.items():
         if any(k in t for k in kws):

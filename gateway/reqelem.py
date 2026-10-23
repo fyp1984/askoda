@@ -1563,15 +1563,17 @@ def _assert_base_granularity_intact(reqcov, snap):
         % (MATCHER_KIND_TIME_GRANULARITY,
            getattr(fn, "__module__", "?"), getattr(fn, "__name__", "?"))
     )
-    # 🔴 **留下两处痕迹**（抛异常可能被调用方降级成静默跳过，见下）：
+    # 🔴 **留下两处痕迹**（异常本身可能被调用方降级，痕迹是第二道保险）：
     #   ① 模块级列表：可被同进程内的调用方/自证查询（不依赖日志）；
     #   ② stderr 告警：即使异常被 except 吞掉，**日志里仍有明确痕迹**。
-    # ⚠️ 为什么要两处：守卫的意图是"判据被静默废掉这件事**不能静默**"，
-    #   但当前调用点（``gates.py`` 的 ``_requirement_check``）把
-    #   ``ensure_instance_matchers()`` 放在 **try 块内** ⇒ 这里的 RuntimeError
-    #   会被那个 except 捕获 ⇒ 退化成 ``_skipped("要素清单构造失败…")``
-    #   ⇒ **L-REQ 静默 skipped、门禁不红** —— 守卫的"响亮失败"被降级成了"静默跳过"。
-    #   ⇒ 抛异常这一侧不足以保证"不能静默"，必须另有痕迹。
+    # ⚠️ 为什么要两处：守卫的意图是"判据被静默废掉这件事**不能静默**"。
+    #   当前唯一调用点（``gates.py`` 的 ``_requirement_check``）已单独接住
+    #   ``RuntimeError``：blocking 模式判红（不交付）、report-only 模式显式报警，
+    #   **不会**退化成 ``_skipped``（2026-10-23 实测：覆盖 matcher 后 review
+    #   的 status 直接变「不通过」，L-REQ 层 ok=False、skipped=False）。
+    #   但**新调用方**未必这么写 —— 所以抛异常之外仍要留痕迹：
+    #   万一将来有人把 ``ensure_instance_matchers()`` 塞进一个笼统的
+    #   ``except Exception`` 里，这两处痕迹就是唯一的线索。
     GRANULARITY_GUARD_FAILURES.append(msg)
     sys.stderr.write(
         "\n[reqelem] 🔴 粒度 matcher 守卫触发：%s\n"

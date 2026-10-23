@@ -202,6 +202,101 @@ def _t_planner_month_granularity():
     assert "date_trunc" not in sql_p, "没要求按月却加了月度维度（过度拟合）：%s" % sql_p
 
 
+class _StubDS(object):
+    """B 库的最小替身：只提供 plan_b 需要的 `models` 键。
+
+    ⚠️ 用**全部 8 张表**而不是只放两张：`_objects()` 会按 models 求交集，
+    替身缺表时 SQL 里的表会被悄悄过滤掉，判据就测不到真实形态了。
+    """
+    key = "B"
+    models = {name: {} for name in (
+        "ads_coupon_order_di", "ads_member_grade_change_wi", "ads_member_repurchase_di",
+        "dim_member", "dim_store", "dwd_order_detail_di", "dwd_order_di",
+        "dws_store_daily_agg",
+    )}
+
+
+def _plan_b(text):
+    import planner as pl
+    r = pl.plan_b(_StubDS(), text)
+    return (r.get("sql") or ""), r
+
+
+@case("规划器：说「排名」就要排序；没说就不要加（双向防过拟合）")
+def _t_planner_rank():
+    """2026-10-23 基线实测缺陷：`各门店销售额排名` 生成的 SQL **没有 ORDER BY** ——
+    "排名"只是把行列出来，业务方拿到的是一堆无序数据。"""
+    ranked, _r = _plan_b("各门店销售额排名")
+    assert "order by" in ranked.lower(), "说了排名却没有排序：%s" % ranked
+    assert "desc" in ranked.lower(), "排序方向必须是降序（排名＝从高到低）：%s" % ranked
+
+    plain, _r2 = _plan_b("各门店销售额")
+    assert "order by" not in plain.lower(), "没要求排序却加了 ORDER BY（过度拟合）：%s" % plain
+
+    # ⚠️ 单字「前」不能当排序信号：「目前」「之前」会误命中
+    cur, _r3 = _plan_b("目前各门店销售额")
+    assert "order by" not in cur.lower(), "「目前」被误判成排序意图：%s" % cur
+
+    top, _r4 = _plan_b("前5名门店销售额")
+    assert "order by" in top.lower(), "「前5名」没有排序：%s" % top
+
+
+@case("规划器：一句话要两样东西就要出两样（订单量 + 销售额）")
+def _t_planner_two_metrics():
+    """2026-10-23 基线实测缺陷：`各门店月度订单量和销售额` 只出了销售额，
+    订单数被整段吞掉。这类"说了没做"以前没人逐项比对需求，所以一直没被发现。"""
+    sql, _r = _plan_b("各门店月度订单量和销售额")
+    assert "count(" in sql.lower(), "要了订单量却没有计数：%s" % sql
+    assert "order_cnt" in sql or "订单数" in sql, "订单数没有出现在输出列：%s" % sql
+    assert "pay_amount" in sql, "销售额丢了：%s" % sql
+    assert "date_trunc('month'" in sql, "月度维度丢了：%s" % sql
+
+
+@case("规划器：说「占比」就要算出占比（占比的分母范围要跟维度一致）")
+def _t_planner_share():
+    total, _r = _plan_b("各门店销售额占比")
+    assert "over (" in total.lower(), "说了占比却没有窗口函数算分母：%s" % total
+    assert "partition by" not in total.lower(), (
+        "不带月度却在窗口里分区了（分母变成每行自己）：%s" % total)
+
+    monthly, _r2 = _plan_b("各门店按月的销售额占比")
+    assert "partition by" in monthly.lower(), (
+        "月度占比没有按月分区 ⇒ 分母成了全期合计，跨月比较没有意义：%s" % monthly)
+
+
+@case("规划器：客单价是派生指标（不能被判成「数据缺失」）")
+def _t_planner_aov():
+    """2026-10-23 基线实测缺陷：客单价走了兜底，提示「B 库无客单价相关表」——
+    客单价本来就不是一张表，这句提示会把业务方引去找数据源。"""
+    sql, r = _plan_b("各门店客单价")
+    assert "客单价" in sql, "客单价需求没有生成 SQL：%s / %s" % (sql, r.get("reason"))
+    assert "count(distinct" in sql.lower(), (
+        "客单价分母必须是不同订单号（一单多明细会重复计）：%s" % sql)
+    assert "pay_amount" in sql, "客单价分子应为实付金额：%s" % sql
+
+    overall, _r2 = _plan_b("客单价")
+    assert "客单价" in overall, "整体客单价也没出数：%s" % overall
+
+
+@case("规划器：泛化说法「复购情况」不该被当成「未建模」硬拒")
+def _t_planner_repurchase_generic():
+    sql, r = _plan_b("会员复购情况")
+    assert sql, "表与字段都在库里却拒了（这是「明明有数据说没有」）：%s" % r.get("reason")
+    assert "repurchase_flag" in sql, "复购口径没用到标记列：%s" % sql
+    # 不替业务方算比率：分母口径未确认，算了会被直接拿去汇报
+    assert "复购率" not in sql, "未指定比率却自己算了复购率：%s" % sql
+
+
+@case("规划器：说「按月」就要按月分组（等级异动）")
+def _t_planner_grade_change_month():
+    sql, _r = _plan_b("会员等级异动按月趋势")
+    assert "change_month" in sql, "change_month 就在表里，说按月却没按月分组：%s" % sql
+    assert "group by" in sql.lower(), "没有分组：%s" % sql
+
+    plain, _r2 = _plan_b("会员等级异动情况")
+    assert "change_month" not in plain, "没要求按月却加了月份维度：%s" % plain
+
+
 def main():
     failed = []
     for name, fn in CASES:

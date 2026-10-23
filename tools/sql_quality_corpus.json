@@ -1,0 +1,332 @@
+{
+  "version": 1,
+  "about": [
+    "SQL 质量基线题集（资产，入库）。",
+    "",
+    "为什么要有这份题集",
+    "------------------",
+    "确定性规划器有封闭意图库，大模型是开放生成 ⇒ 没有固定题集＋固定评分口径，",
+    "「SQL 质量更好了」这句话就无法证明，也没法防回退：改一句 prompt 或改一个分支，",
+    "到底变好还是变坏，只能靠感觉。本文件把「感觉」换成可复算的数字。",
+    "",
+    "期望值怎么定的（重要）",
+    "----------------------",
+    "⚠️ 期望值按**业务上应该怎样**写，**不按当前实现怎样**写。",
+    "所以首次跑出来的分数可能很低——那是**真实差距**，不是题集写错了。",
+    "把期望值改成「现状」可以让分数好看，但那等于自己给自己发合格证，本单不做。",
+    "",
+    "两类题",
+    "------",
+    "· kind=sql    ：语义层里有对应建模、业务上确实能出数 ⇒ 应当生成 SQL。",
+    "                must_have 是「正确 SQL 必须出现的东西」（口径列、维度列、聚合）。",
+    "                must_not_have 是「正确 SQL 绝不能出现的东西」（技术装载列等陷阱）。",
+    "· kind=refuse ：不该出数（敏感 / 未建模 / 待上架 / 跨域无关系 / 粒度不符 /",
+    "                库里根本没有这个维度）⇒ 应当明确拒绝并说清原因。",
+    "                refuse_reason 是「拒绝理由里必须出现的说法」，任一组命中即可。",
+    "",
+    "⚠️ kind=sql 的题不是「必须由确定性规划器答」——大模型答出来同样算过。",
+    "   本基线量的是**产品整体**的出数能力与门禁通过率，不是某个引擎的覆盖率。",
+    "   每条结果里的 generator 字段会注明是谁生成的，便于分开看。"
+  ],
+  "cases": [
+    {
+      "id": "B-01",
+      "dataset": "B",
+      "text": "各门店销售额",
+      "kind": "sql",
+      "must_have": ["store_name", "pay_amount", "已完成"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "门店维度×实付金额；销售额口径必须排除退款（仅已完成）"
+    },
+    {
+      "id": "B-02",
+      "dataset": "B",
+      "text": "各门店按月的销售额",
+      "kind": "sql",
+      "must_have": ["store_name", "pay_amount", "date_trunc('month'", "月份"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "同时要求两个维度（门店 + 月）⇒ GROUP BY 必须两列都在；装载时间不是业务日期"
+    },
+    {
+      "id": "B-03",
+      "dataset": "B",
+      "text": "各门店月度订单量和销售额",
+      "kind": "sql",
+      "must_have": ["store_name", "pay_amount", "count(", "date_trunc('month'"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "一句话要了两样东西（订单量 + 销售额）⇒ SQL 必须两样都有，少一样就是要素被吞"
+    },
+    {
+      "id": "B-04",
+      "dataset": "B",
+      "text": "各门店销售额排名",
+      "kind": "sql",
+      "must_have": ["store_name", "pay_amount", "order by", "desc"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "说了「排名」就必须排序；只列出来不排序，业务方拿到的是一堆无序行"
+    },
+    {
+      "id": "B-05",
+      "dataset": "B",
+      "text": "前5名门店销售额",
+      "kind": "sql",
+      "must_have": ["store_name", "pay_amount", "order by", "desc"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "「前N名」隐含逐门店列出再倒序；这条里没有「各」字，最容易被漏"
+    },
+    {
+      "id": "B-06",
+      "dataset": "B",
+      "text": "各品类销售额",
+      "kind": "sql",
+      "must_have": ["category_name", "sales_amount", "group by"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "品类维度×销售金额"
+    },
+    {
+      "id": "B-07",
+      "dataset": "B",
+      "text": "各品类销售额排名",
+      "kind": "sql",
+      "must_have": ["category_name", "sales_amount", "order by", "desc"],
+      "must_not_have": [],
+      "note": "同 B-04，品类维度也要排序"
+    },
+    {
+      "id": "B-08",
+      "dataset": "B",
+      "text": "各大区销售额",
+      "kind": "sql",
+      "must_have": ["region_name", "pay_amount", "group by"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "dim_store 有 region_name，是真实可用维度"
+    },
+    {
+      "id": "B-09",
+      "dataset": "B",
+      "text": "各门店日均销售额",
+      "kind": "sql",
+      "must_have": ["store_name", "avg(", "sales_amount"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "日均要用日均粒度表 dws_store_daily_agg 求平均，不能拿订单明细 sum 再除"
+    },
+    {
+      "id": "B-10",
+      "dataset": "B",
+      "text": "各门店会员数",
+      "kind": "sql",
+      "must_have": ["store_name", "count(", "dim_member"],
+      "must_not_have": [],
+      "note": "会员按归属门店聚合"
+    },
+    {
+      "id": "B-11",
+      "dataset": "B",
+      "text": "会员等级分布",
+      "kind": "sql",
+      "must_have": ["grade", "count("],
+      "must_not_have": [],
+      "note": "分布＝按枚举值计数"
+    },
+    {
+      "id": "B-12",
+      "dataset": "B",
+      "text": "门店坪效",
+      "kind": "sql",
+      "must_have": ["area_sqm", "sales_amount"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "坪效＝销售额/经营面积，两个列都必须在"
+    },
+    {
+      "id": "B-13",
+      "dataset": "B",
+      "text": "工作日和周末的销售额对比",
+      "kind": "sql",
+      "must_have": ["day_type", "sales_amount"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "day_type 是现成枚举维度，不需要自己推日期类型"
+    },
+    {
+      "id": "B-14",
+      "dataset": "B",
+      "text": "会员复购情况",
+      "kind": "sql",
+      "must_have": ["repurchase_flag"],
+      "must_not_have": [],
+      "note": "语义层有 ads_member_repurchase_di＋repurchase_flag，业务上确实能出数 ⇒ 不该拒"
+    },
+    {
+      "id": "B-15",
+      "dataset": "B",
+      "text": "各门店的复购率",
+      "kind": "sql",
+      "must_have": ["repurchase_flag", "store_id"],
+      "must_not_have": [],
+      "note": "复购率＝复购标记聚合；门店维度在 ads_member_repurchase_di 里现成"
+    },
+    {
+      "id": "B-16",
+      "dataset": "B",
+      "text": "会员等级异动情况",
+      "kind": "sql",
+      "must_have": ["change_type"],
+      "must_not_have": [],
+      "note": "ads_member_grade_change_wi 就是专表，升级/降级都在 change_type 里"
+    },
+    {
+      "id": "B-17",
+      "dataset": "B",
+      "text": "会员手机号明细",
+      "kind": "refuse",
+      "refuse_reason": [["手机号"], ["敏感"]],
+      "note": "手机号是敏感字段，未建模且对 AI 不可见 ⇒ 必须拒，不能靠猜"
+    },
+    {
+      "id": "B-18",
+      "dataset": "B",
+      "text": "各门店核销率",
+      "kind": "refuse",
+      "refuse_reason": [["核销率"], ["未定义", "未建模"]],
+      "note": "「核销率」没有登记口径 ⇒ 必须拒，而不是自己编一个算法"
+    },
+    {
+      "id": "B-19",
+      "dataset": "B",
+      "text": "按装载时间看各门店销售额",
+      "kind": "refuse",
+      "refuse_reason": [["装载时间"], ["非业务日期", "技术字段"]],
+      "note": "装载时间是技术字段，用它当业务日期会得出错误结论 ⇒ 必须拒并指出改用 order_date"
+    },
+    {
+      "id": "B-20",
+      "dataset": "B",
+      "text": "复购按日的趋势",
+      "kind": "refuse",
+      "refuse_reason": [["颗粒度", "粒度"], ["按日", "日粒度"]],
+      "note": "复购汇总是月粒度表，按日分析物理上做不到 ⇒ 必须拒并说明原因"
+    },
+    {
+      "id": "B-21",
+      "dataset": "B",
+      "text": "订单和优惠券核销关联分析",
+      "kind": "refuse",
+      "refuse_reason": [["关系", "关联"], ["跨域", "无建模"]],
+      "note": "订单表与券核销表之间没有建模关系路径 ⇒ 硬 join 会得出无意义结果"
+    },
+    {
+      "id": "B-22",
+      "dataset": "B",
+      "text": "各门店券成本",
+      "kind": "refuse",
+      "refuse_reason": [["券成本", "待上架"], ["准入", "D3"]],
+      "note": "口径待上架（未过准入）⇒ 不允许出数，否则等于绕开治理"
+    },
+    {
+      "id": "B-23",
+      "dataset": "B",
+      "text": "各门店客单价",
+      "kind": "sql",
+      "must_have": ["store_name", "pay_amount", "count(distinct"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "客单价＝销售额÷订单数，是派生指标不是一张表；分母必须取不同订单号，否则一单多明细会重复计"
+    },
+    {
+      "id": "B-24",
+      "dataset": "B",
+      "text": "各门店销售额占比",
+      "kind": "sql",
+      "must_have": ["store_name", "pay_amount", "over ("],
+      "must_not_have": ["dw_insert_time"],
+      "note": "说了「占比」就得算出占比，只给绝对数等于让业务方自己拿计算器除"
+    },
+    {
+      "id": "B-25",
+      "dataset": "B",
+      "text": "各门店按月的销售额占比",
+      "kind": "sql",
+      "must_have": ["date_trunc('month'", "over (", "partition by"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "月度占比的分母必须是同月合计，不能是全期合计——跨月比较没有意义"
+    },
+    {
+      "id": "B-26",
+      "dataset": "B",
+      "text": "各品类销售额占比",
+      "kind": "sql",
+      "must_have": ["category_name", "sales_amount", "over ("],
+      "must_not_have": [],
+      "note": "同 B-24，品类维度"
+    },
+    {
+      "id": "B-27",
+      "dataset": "B",
+      "text": "各门店复购率排名",
+      "kind": "sql",
+      "must_have": ["repurchase_flag", "order by", "desc"],
+      "must_not_have": [],
+      "note": "排名必须排序；且复购口径不单独给比率（分母待业务确认），排序按复购用户数"
+    },
+    {
+      "id": "B-28",
+      "dataset": "B",
+      "text": "会员等级异动按月趋势",
+      "kind": "sql",
+      "must_have": ["change_month", "change_type", "group by"],
+      "must_not_have": [],
+      "note": "change_month 就在表里，说「按月」就该按月分组"
+    },
+    {
+      "id": "B-29",
+      "dataset": "B",
+      "text": "各门店会员数和销售额",
+      "kind": "sql",
+      "must_have": ["dim_member", "count(", "pay_amount"],
+      "must_not_have": [],
+      "note": "⚠️ 已知差距：跨指标组合（会员数取 dim_member、销售额取 dwd_order_di）当前只出前一个。要修得先做「指标组合」这一层，不是补个分支能解决的"
+    },
+    {
+      "id": "B-30",
+      "dataset": "B",
+      "text": "各门店销售额最高的月份",
+      "kind": "sql",
+      "must_have": ["store_name", "date_trunc('month'", "order by"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "⚠️ 已知差距：要的是「每店各自最高的那个月」（分组内取最大），当前退化成按门店排名、月份整个丢了。需要窗口/argmax 能力"
+    },
+    {
+      "id": "A-01",
+      "dataset": "A",
+      "text": "订单状态分布",
+      "kind": "sql",
+      "must_have": ["status", "count(", "orders"],
+      "must_not_have": [],
+      "note": "按枚举值计数；状态码含义在列注释里（1已下单…4已退款）"
+    },
+    {
+      "id": "A-02",
+      "dataset": "A",
+      "text": "各品类销售额",
+      "kind": "sql",
+      "must_have": ["category_name", "subtotal"],
+      "must_not_have": [],
+      "note": "品类在 products.category_name（退化列），金额在 order_items.subtotal"
+    },
+    {
+      "id": "A-03",
+      "dataset": "A",
+      "text": "商品销量与销售额排行",
+      "kind": "sql",
+      "must_have": ["quantity", "subtotal", "order by"],
+      "must_not_have": [],
+      "note": "「排行」必须排序；销量看 quantity、金额看 subtotal"
+    },
+    {
+      "id": "A-04",
+      "dataset": "A",
+      "text": "各门店销售额",
+      "kind": "refuse",
+      "refuse_reason": [["未", "没有"], ["门店", "维度", "建模", "模式"]],
+      "note": "A 库 6 张表里没有门店维度 ⇒ 必须拒。这条是「不许猜」的关键判据：拒对比编一个出来重要得多"
+    }
+  ]
+}

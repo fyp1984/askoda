@@ -52,6 +52,46 @@ python3 tools/gate_all.py --strict
 
 > 门禁按命名约定**自动发现**同目录脚本：`*_selftest.py` → G1、`*_check.py` → G2、`*_verify.py` → G3。退出码即准入结论：0 全绿，1 有红项。
 
+#### 2.1 SQL 质量基线（问「SQL 变好还是变坏」时看这个）
+
+```bash
+# 跑固定题集，出六个可复算指标（离线：只要两份 MDL，不连库、不起容器）
+python3 tools/sql_quality_baseline.py
+
+# 确认这套分数可以作为起点后，显式写成基线（会留 updated_at）
+python3 tools/sql_quality_baseline.py --update
+
+# 另存 md + json 到 tools/_artifacts/（运行产物，不入库）
+python3 tools/sql_quality_baseline.py --report
+```
+
+题集是 `tools/sql_quality_corpus.json`（34 题：27 条该出数 / 7 条该拒绝）。
+每题写明 `must_have`（正确 SQL 必须出现的东西）、`must_not_have`（陷阱列）或
+`refuse_reason`（拒绝理由必须说到的说法），以及 `note`（业务上为什么该这样）。
+
+判红口径**只有一条：不得低于基线**。分数低不判红——那是已知差距（已登记
+`docs/OPEN_ITEMS.md` #12/#19/#20），把"没达到理想值"判红会变成天天红 ⇒ 团队绕过门禁。
+
+⚠️ 三个别误读的地方：
+1. 它量的是**离线确定性链路**（规划器 + 五层门禁），**不含大模型**；
+2. 期望值按"业务上应该怎样"写，不是按"当前实现怎样"写，所以首次跑分数难看是正常的；
+3. 改题集里的 `must_have` 可以让分数变好看，那等于降低验收标准——改之前先想清楚。
+
+#### 2.2 门禁项数回填（加了脚本导致 G2 报红时用）
+
+```bash
+# 预览：只显示该改哪几处，什么都不写
+python3 tools/gate_count_sync.py
+
+# 确认后真正回填（只改 README 那一行 + CONTRIBUTING 表里 G0–G3 四行的数字）
+python3 tools/gate_count_sync.py --write
+```
+
+为什么要有这个命令：`tools/gate_count_check.py` 是**判据**，刻意只判定不写文档
+（判据一旦能改文档，"文档与实际一致"就不再是事实）。但"加了脚本 → 忘了回填 → 门禁红"
+已经踩过多次，所以把**写**单独做成一个人主动跑的显式命令。
+关键差别是**谁做决定**：命令只执行人已经做出的决定。
+
 ### 3 端到端演练
 
 ```bash
