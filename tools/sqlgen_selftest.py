@@ -389,6 +389,40 @@ def _t_planner_top_category():
         "「最高的品类」被串到「最高的月份」分支了：%s" % sql)
 
 
+@case("规划器：品类销售额必须排除退款订单（明细表没有状态字段，必须 JOIN 订单表）")
+def _t_planner_category_excludes_refund():
+    """2026-10-23 人工验收准备时实测发现的真缺陷。
+
+    原来品类分支是 `FROM dwd_order_detail_di GROUP BY category_name`，
+    **没有任何订单状态过滤** ⇒ 把已退款订单也算进销售额（实测 10300.4）；
+    而门店销售额排除了退款（9644.5）。同一个「销售额」两个维度两个口径，
+    差 655.9 —— 业务方一核对就发现对不上，而系统里找不到任何解释。
+
+    ⚠️ 关键点不是"有没有 WHERE"，而是"**明细表根本没有 order_status 字段**"
+      （实测语义层报错：Valid fields are detail_id / order_id / store_id / sku_id /
+       category_name / quantity / ...）⇒ 必须 JOIN 订单表才可能过滤。
+      所以这条判据同时断言 JOIN 与 WHERE，缺一条都不算过。
+    """
+    sql, _r = _plan_b("各品类销售额")
+    low = sql.lower()
+    assert "order_status" in low and "已完成" in sql, (
+        "品类销售额没有排除退款订单（口径与门店销售额不一致）：%s" % sql)
+    assert "dwd_order_di" in low, (
+        "明细表没有订单状态字段，必须有订单表 JOIN 才可能过滤退款：%s" % sql)
+    assert "join" in low, "没有 JOIN 订单表：%s" % sql
+
+    # 占比与排名两个变体同样要带过滤（同一段代码，但历史上就是"改一处漏一处"）
+    share, _r2 = _plan_b("各品类销售额占比")
+    assert "order_status" in share.lower(), "占比变体丢了退款过滤：%s" % share
+    rank, _r3 = _plan_b("各品类销售额排名")
+    assert "order_status" in rank.lower(), "排名变体丢了退款过滤：%s" % rank
+
+    # 每店最高品类走的是另一段代码，也要带过滤
+    topcat, _r4 = _plan_b("各门店销售额最高的品类")
+    assert "order_status" in topcat.lower(), (
+        "每店最高品类没排除退款（与品类销售额口径不一致）：%s" % topcat)
+
+
 def main():
     failed = []
     for name, fn in CASES:

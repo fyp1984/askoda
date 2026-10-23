@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-10-23 15:11:44",
+  "updated_at": "2026-10-23 16:31:25",
   "about": [
     "SQL 质量基线（资产，入库）。由 tools/sql_quality_baseline.py --update 写入。",
     "⚠️ 这个文件记的是「当前真实水平」，不是「目标水平」。",
@@ -8,10 +8,10 @@
     "而改期望值等于降低验收标准 —— 改之前先想清楚是不是真的不该要求。"
   ],
   "metrics": {
-    "total": 43,
-    "sql_cases": 36,
+    "total": 44,
+    "sql_cases": 37,
     "refuse_cases": 7,
-    "generated": 36,
+    "generated": 37,
     "generated_rate": 1.0,
     "gate_pass_rate": 1.0,
     "element_rate": 1.0,
@@ -59,6 +59,7 @@
     "B-37": true,
     "B-38": true,
     "B-39": true,
+    "B-40": true,
     "A-01": true,
     "A-02": true,
     "A-03": true,

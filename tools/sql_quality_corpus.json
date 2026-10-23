@@ -253,9 +253,9 @@
       "dataset": "B",
       "text": "各品类销售额占比",
       "kind": "sql",
-      "must_have": ["category_name", "sales_amount", "over ("],
+      "must_have": ["category_name", "sales_amount", "over (", "order_status"],
       "must_not_have": [],
-      "note": "同 B-24，品类维度"
+      "note": "同 B-24，品类维度；且必须排除退款——明细表没有订单状态字段，要 JOIN 订单表才能过滤。不排除的话品类合计会比门店合计多出一截，业务方一对账就发现对不上"
     },
     {
       "id": "B-27",
@@ -373,6 +373,15 @@
       "must_have": ["dim_member", "pay_amount", "limit 3"],
       "must_not_have": [],
       "note": "组合＋前N名：两个指标都要出，且必须真的限 3 行。组合分支最容易「只顾对齐、忘了限行」"
+    },
+    {
+      "id": "B-40",
+      "dataset": "B",
+      "text": "各品类销售额",
+      "kind": "sql",
+      "must_have": ["category_name", "sales_amount", "order_status"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "品类销售额必须排除退款订单。2026-10-23 人工验收准备时实测：原实现完全不过滤状态，品类合计 10300.4，而门店合计 9644.5 —— 同一个「销售额」两个维度两个口径。明细表本身没有 order_status 字段，所以必须 JOIN 订单表，这不是可选优化"
     },
     {
       "id": "A-01",

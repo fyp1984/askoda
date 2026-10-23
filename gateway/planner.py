@@ -958,13 +958,18 @@ def plan_b(dataset, nl):
                 "SUM(d.sales_amount) AS 销售额, "
                 "ROW_NUMBER() OVER (PARTITION BY s.store_name "
                 "ORDER BY SUM(d.sales_amount) DESC) AS 名次 "
-                "FROM dwd_order_detail_di d JOIN dim_store s ON d.store_id = s.store_id "
+                "FROM dwd_order_detail_di d "
+                "JOIN dwd_order_di o ON d.order_id = o.order_id "
+                "JOIN dim_store s ON d.store_id = s.store_id "
+                "WHERE o.order_status = '已完成' "
                 "GROUP BY s.store_name, d.category_name"
                 ") t WHERE t.名次 = 1 ORDER BY t.销售额 DESC",
                 _objects(
-                    dataset, ["dwd_order_detail_di", "dim_store"],
+                    dataset, ["dwd_order_detail_di", "dwd_order_di", "dim_store"],
                     rules=["每店各取销售额最高的那一个品类（组内排名后取第 1 名），"
-                           "不是跨店排名"],
+                           "不是跨店排名",
+                           "仅已完成订单；明细表本身没有订单状态字段，"
+                           "必须 JOIN 订单表才能排除退款"],
                 ),
             )
         # 排序意图要在分支条件之前算出来：因为「前5名门店销售额」这类说法里
@@ -1096,18 +1101,32 @@ def plan_b(dataset, nl):
         # 同族：说「占比/比重/份额」就要算出占比（2026-10-23 基线实测补）。
         # 口径：品类金额 ÷ 全部品类合计，窗口函数求分母。
         _share_cat = any(k in t for k in ("占比", "比重", "份额", "占总"))
+        # 🔴 必须排除退款（2026-10-23 人工验收准备时实测发现的真缺陷）：
+        #   原来写 `FROM dwd_order_detail_di GROUP BY category_name`，**没有任何订单状态过滤**
+        #   ⇒ 品类销售额把已退款订单也算进去了（实测 10300.4），而门店销售额排除了退款
+        #   （实测 9644.5）。同一个"销售额"，两个维度两个口径，差 655.9 ——
+        #   业务方一核对就发现对不上，而且**从系统里找不到任何解释**（因为它自己不自洽）。
+        #   明细表本身**没有 order_status 字段**，所以只能 JOIN 订单表过滤；这不是"可以加
+        #   也可以不加"的优化，是口径正确性的前提。
+        #   修完：品类合计 9702.5，与订单实付 9644.5 只差 58.0 —— 那是"原价 vs 实付"
+        #   的优惠折扣差，属于**可解释**的正常差异，而不是把退款算进来的错误。
         return _ok(
             "B",
             "品类销售额" + ("排名" if _rank_cat else "") + ("·含占比" if _share_cat else ""),
-            "SELECT category_name, SUM(sales_amount) AS 销售额"
-            + (", ROUND(CAST(SUM(sales_amount) * 100.0 / SUM(SUM(sales_amount)) OVER () "
+            "SELECT d.category_name, SUM(d.sales_amount) AS 销售额"
+            + (", ROUND(CAST(SUM(d.sales_amount) * 100.0 / SUM(SUM(d.sales_amount)) OVER () "
                "AS DECIMAL(10,2)), 2) AS 占比百分比" if _share_cat else "") + " "
-            "FROM dwd_order_detail_di GROUP BY category_name"
+            "FROM dwd_order_detail_di d "
+            "JOIN dwd_order_di o ON d.order_id = o.order_id "
+            "WHERE o.order_status = '已完成' "
+            "GROUP BY d.category_name"
             + (" ORDER BY 销售额 DESC" if _rank_cat else ""),
             _objects(
-                dataset, ["dwd_order_detail_di"],
-                rules=["占比口径：分母为全部品类合计（窗口函数）"],
-            ) if _share_cat else _objects(dataset, ["dwd_order_detail_di"]),
+                dataset, ["dwd_order_detail_di", "dwd_order_di"],
+                rules=(["占比口径：分母为全部品类合计（窗口函数，已排除退款）"]
+                       if _share_cat else
+                       ["仅已完成订单；明细表无订单状态字段，必须 JOIN 订单表排除退款"]),
+            ),
         )
     if ("每月" in t or "趋势" in t) and ("订单" in t or "销售" in t):
         return _ok(

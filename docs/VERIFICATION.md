@@ -65,7 +65,7 @@ python3 tools/sql_quality_baseline.py --update
 python3 tools/sql_quality_baseline.py --report
 ```
 
-题集是 `tools/sql_quality_corpus.json`（43 题：36 条该出数 / 7 条该拒绝）。
+题集是 `tools/sql_quality_corpus.json`（44 题：37 条该出数 / 7 条该拒绝）。
 每题写明 `must_have`（正确 SQL 必须出现的东西）、`must_not_have`（陷阱列）或
 `refuse_reason`（拒绝理由必须说到的说法），以及 `note`（业务上为什么该这样）。
 
