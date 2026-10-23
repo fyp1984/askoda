@@ -297,6 +297,98 @@ def _t_planner_grade_change_month():
     assert "change_month" not in plain, "没要求按月却加了月份维度：%s" % plain
 
 
+@case("规划器：同比/环比按「日历」对基期，不用行号窗口")
+def _t_planner_yoy_mom():
+    """2026-10-23 基线实测缺陷：说「同比 / 环比」→ 返回一张普通月度销售额表，
+    对比那一段整段丢掉。
+
+    ⚠️ 这里钉的不是"有没有对比列"，而是**基期怎么取**：
+      `LAG(SUM(x), 1) OVER (ORDER BY 月份)` 在月份连续时与日历自连接**结果完全一样**，
+      只有缺一个月时才分道扬镳 —— 行号窗口会拿两个月前的数当"上月"，
+      而 SQL 照样跑通、门禁照样过，**只是数字是错的**。
+      所以必须断言"没有 LAG"，否则哪天有人图省事换成窗口函数，
+      在连续月份的数据上看不出任何区别，测试也不会红。
+    """
+    # ⚠️ 断言一律对 lower() 做：SQL 里的关键字是 `INTERVAL` / `ORDER BY` 大写，
+    #   直接对原文断言会因为大小写而永远失败（这里第一次写就踩了）。
+    mom, _r = _plan_b("各门店销售额环比")
+    _m = mom.lower()
+    assert "interval '1 month'" in _m, "环比基期没有按日历取上一个月：%s" % mom
+    assert "lag(" not in _m, (
+        "用了行号窗口取基期：缺月时会拿错月份且不报错：%s" % mom)
+    assert "环比" in mom, "没有环比列：%s" % mom
+    assert "interval '1 year'" not in _m, "只要环比却带上了同比：%s" % mom
+
+    yoy, _r2 = _plan_b("销售额同比")
+    _y = yoy.lower()
+    assert "interval '1 year'" in _y, "同比基期没有按日历年取：%s" % yoy
+    assert "lag(" not in _y, "同比用了行号窗口：%s" % yoy
+    # 基期金额列必须一起出：否则增长率整列 NULL 时业务方分不清"没数据"还是"算错"
+    assert "去年同期" in yoy, (
+        "没输出基期金额列 ⇒ 增长率空的时候说不出原因：%s" % yoy)
+
+    both, _r3 = _plan_b("各门店销售额同比和环比")
+    _b = both.lower()
+    assert "interval '1 year'" in _b and "interval '1 month'" in _b, (
+        "要了两样却只给一样：%s" % both)
+
+    plain, _r4 = _plan_b("各门店销售额")
+    assert "interval" not in plain.lower(), (
+        "没要同比环比却加了对比（过度拟合）：%s" % plain)
+
+
+@case("规划器：组合分支里的「排名 / 前N名」不能被吃掉")
+def _t_planner_combo_rank():
+    """2026-10-23 基线实测缺陷：`各门店会员数和销售额排名` 返回按**门店名**排的表
+    —— 排序是有的，只是排在错的列上。这比"没有排序"更难发现：
+    SQL 里有 ORDER BY、门禁看不出问题，只有拿去做"前十名"时才发现顺序不对。
+    """
+    plain, _r = _plan_b("各门店会员数和销售额")
+    assert "order by s.store_name" in plain.lower(), (
+        "不排名时应按门店名稳定输出：%s" % plain)
+    assert "desc" not in plain.lower(), "没要求排名却降序了（过度拟合）：%s" % plain
+    assert "limit" not in plain.lower(), "没要求前N名却限行了：%s" % plain
+
+    ranked, _r2 = _plan_b("各门店会员数和销售额排名")
+    assert "desc" in ranked.lower(), "说了排名却没有降序：%s" % ranked
+    assert "销售额" in ranked, "排名基数不是销售额：%s" % ranked
+    # 两个指标一个都不能少（排名不该把组合吃掉）
+    assert "dim_member" in ranked and "pay_amount" in ranked, (
+        "排名把跨指标组合吃掉了：%s" % ranked)
+
+    top3, _r3 = _plan_b("各门店会员数和销售额前3名")
+    assert "limit 3" in top3.lower(), (
+        "「前3名」只排序不限行 ⇒ 返回全榜单：%s" % top3)
+
+
+@case("规划器：中位数必须是 MEDIAN，不是 SUM")
+def _t_planner_median():
+    sql, _r = _plan_b("各门店销售额中位数")
+    assert "median(" in sql.lower(), "问中位数没给 MEDIAN：%s" % sql
+    _flat = sql.lower().replace(" ", "")
+    assert "sum(o.pay_amount)as销售额" not in _flat, (
+        "中位数被换成了合计 —— 中位数的意义正是「不被少数大额订单拉高」，"
+        "换成 SUM 等于把这个问题取消了：%s" % sql)
+
+
+@case("规划器：说「每天」就要落到日粒度")
+def _t_planner_daily():
+    sql, _r = _plan_b("各门店每天的销售额")
+    assert "order_date" in sql, "日粒度没有用业务日期：%s" % sql
+    assert "date_trunc('month'" not in sql, (
+        "说了「每天」却按月分组（粒度丢失）：%s" % sql)
+
+
+@case("规划器：「最高的品类」要出品类列（组内取最大，不是跨店排名）")
+def _t_planner_top_category():
+    sql, _r = _plan_b("各门店销售额最高的品类")
+    assert "category_name" in sql, "问品类却没有品类列（问 A 答 B）：%s" % sql
+    assert "row_number" in sql.lower(), "没有组内排名，取不出「每店最高的那个」：%s" % sql
+    assert "partition by" in sql.lower(), "组内排名没有分区 ⇒ 变成全表排名：%s" % sql
+    assert "date_trunc('month'" not in sql, (
+        "「最高的品类」被串到「最高的月份」分支了：%s" % sql)
+
+
 def main():
     failed = []
     for name, fn in CASES:

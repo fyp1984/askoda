@@ -282,7 +282,7 @@
       "kind": "sql",
       "must_have": ["dim_member", "count(", "pay_amount"],
       "must_not_have": [],
-      "note": "⚠️ 已知差距：跨指标组合（会员数取 dim_member、销售额取 dwd_order_di）当前只出前一个。要修得先做「指标组合」这一层，不是补个分支能解决的"
+      "note": "跨指标组合：会员数来自 dim_member、销售额来自 dwd_order_di，两者必须按门店各自聚合后再对齐。少一个指标就是「安静地少给一列」，界面上看不出来"
     },
     {
       "id": "B-30",
@@ -291,7 +291,88 @@
       "kind": "sql",
       "must_have": ["store_name", "date_trunc('month'", "order by"],
       "must_not_have": ["dw_insert_time"],
-      "note": "⚠️ 已知差距：要的是「每店各自最高的那个月」（分组内取最大），当前退化成按门店排名、月份整个丢了。需要窗口/argmax 能力"
+      "note": "要的是「每店各自最高的那个月」（分组内取最大）；退化成「按门店排名」等于换了问题——问哪个月最好，答成哪个店最好，而且看起来很像对的"
+    },
+    {
+      "id": "B-31",
+      "dataset": "B",
+      "text": "各门店销售额环比",
+      "kind": "sql",
+      "must_have": ["store_name", "interval '1 month'", "销售额环比增长百分比"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "环比＝与上一个月比。基期必须按日历对上（月份 − 1 个月），不能用行号窗口 LAG(...,1)：缺一个月就会拿两个月前的数当上月，而且结果照样出、门禁查不出来"
+    },
+    {
+      "id": "B-32",
+      "dataset": "B",
+      "text": "销售额同比",
+      "kind": "sql",
+      "must_have": ["interval '1 year'", "去年同期销售额", "销售额同比增长百分比"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "同比＝与去年同期同月比。基期金额列必须一起输出：缺基期时增长率整列 NULL，不给基期金额，业务方分不清是「没有可比数据」还是「系统算错了」"
+    },
+    {
+      "id": "B-33",
+      "dataset": "B",
+      "text": "各门店销售额同比和环比",
+      "kind": "sql",
+      "must_have": ["interval '1 year'", "interval '1 month'", "销售额同比增长百分比", "销售额环比增长百分比"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "一句话要两样就给两样；两个基期各按自己的日历偏移取，不能拿同比顶环比"
+    },
+    {
+      "id": "B-34",
+      "dataset": "B",
+      "text": "各门店会员数和销售额排名",
+      "kind": "sql",
+      "must_have": ["dim_member", "pay_amount", "order by", "desc"],
+      "must_not_have": [],
+      "note": "组合需求里的「排名」不能被组合逻辑吃掉。按门店名排序＝排序存在但排错列：SQL 里有 ORDER BY、门禁看不出问题，只有做「前十名」时才发现顺序不对"
+    },
+    {
+      "id": "B-35",
+      "dataset": "B",
+      "text": "各门店销售额前三名",
+      "kind": "sql",
+      "must_have": ["order by", "desc", "limit 3"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "「前三名」要真的限行。只排序不限行＝把前三名悄悄变成全榜单，业务方贴进汇报就是整张表"
+    },
+    {
+      "id": "B-36",
+      "dataset": "B",
+      "text": "各门店销售额中位数",
+      "kind": "sql",
+      "must_have": ["median", "store_name"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "中位数不是平均数、更不是 SUM。问中位数给合计，是「给了一个很像的错答案」——中位数的意义正是「不被少数大额订单拉高」，换成合计等于把这个问题本身取消了"
+    },
+    {
+      "id": "B-37",
+      "dataset": "B",
+      "text": "各门店每天的销售额",
+      "kind": "sql",
+      "must_have": ["order_date", "group by"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "说了「每天」就必须落到日粒度；退化成按门店总计，趋势、异常日、活动效果全部抹掉。日期用业务日期 order_date，不是装载时间"
+    },
+    {
+      "id": "B-38",
+      "dataset": "B",
+      "text": "各门店销售额最高的品类",
+      "kind": "sql",
+      "must_have": ["category_name", "row_number", "partition by"],
+      "must_not_have": ["dw_insert_time"],
+      "note": "问「哪个品类」必须出品类列；退化成按门店排名＝换了问题。与 B-30 同族：问 A 答 B，长得还挺像"
+    },
+    {
+      "id": "B-39",
+      "dataset": "B",
+      "text": "各门店会员数和销售额前3名",
+      "kind": "sql",
+      "must_have": ["dim_member", "pay_amount", "limit 3"],
+      "must_not_have": [],
+      "note": "组合＋前N名：两个指标都要出，且必须真的限 3 行。组合分支最容易「只顾对齐、忘了限行」"
     },
     {
       "id": "A-01",
