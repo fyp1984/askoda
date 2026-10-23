@@ -16,15 +16,15 @@
     },
     {
       "path": "wren-docker-b/workspace/mdl.json",
-      "sha256_prefix": "56eb7a9aaf072425",
-      "expected_bytes": 11939,
-      "note": "B 库语义层清单；R1 已覆盖，登记作纵深防御"
+      "sha256_prefix": "247aa9c0da8a5bc5",
+      "expected_bytes": 121,
+      "note": "B 库语义层清单；R1 已覆盖，登记作纵深防御。⚠️ 2026-10-23 换业务域重置：已置空（models=0），待新库接入后必须重新冻结为真实内容"
     },
     {
       "path": "wren-docker/workspace/mdl.json",
-      "sha256_prefix": "e86818354208c44a",
-      "expected_bytes": 3976,
-      "note": "A 库语义层清单；R1 已覆盖，登记作纵深防御"
+      "sha256_prefix": "247aa9c0da8a5bc5",
+      "expected_bytes": 121,
+      "note": "A 库语义层清单；R1 已覆盖，登记作纵深防御。⚠️ 2026-10-23 换业务域重置：已置空（models=0），待新库接入后必须重新冻结为真实内容"
     }
   ]
 }
