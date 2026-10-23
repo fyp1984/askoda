@@ -344,7 +344,12 @@ def generate_sql(demand_id=None, dataset="B", nl="", structured=None, knowledge=
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": "数据集不可用：%s" % str(e)[:160], "attempts": [], "risks": []}
 
-    max_repair = max(0, int(os.getenv("LLM_MAX_REPAIR", "1") or 1))
+    # 修复轮次：优先取生效配置（前端「系统设置」可调），否则回落环境变量。
+    # 上限 3 轮——再多的「修 → 判 → 再修」在实践中只会烧 token，不会救回结构错的需求。
+    max_repair = llm.config().get("max_repair")
+    if max_repair is None:
+        max_repair = max(0, int(os.getenv("LLM_MAX_REPAIR", "1") or 1))
+    max_repair = max(0, min(3, int(max_repair)))
     messages = build_generation_messages(ds, nl, structured=structured, knowledge=knowledge)
     attempts, notes, risks = [], [], []
     last_err = ""

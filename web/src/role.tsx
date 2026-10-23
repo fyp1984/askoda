@@ -81,7 +81,7 @@ export const NAV_ITEMS: NavItem[] = [
     key: 'system',
     label: '系统设置',
     zone: 'govern',
-    desc: '数据空间与全局配置',
+    desc: '大模型连接与全局配置',
     access: { R1: 'hidden', R2: 'hidden', R3: 'readonly', R4: 'full' },
   },
 ]

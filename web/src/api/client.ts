@@ -156,6 +156,12 @@ export const api = {
     request<Record<string, any>>(
       `/datasource/candidates?demand_id=${encodeURIComponent(demandId)}&dataset=${encodeURIComponent(dataset)}`,
     ),
+
+  // ---- 系统设置 · 大模型连接 ----
+  // 密钥只进不出：GET 回来的是掩码（credential_masked），提交时留空 = 不改动原值。
+  llmSettings: () => request<LlmSettings>('/settings/llm'),
+  saveLlmSettings: (body: LlmSettingsIn) => post<LlmSaveResp>('/settings/llm', body),
+  testLlm: (body: LlmTestIn) => post<LlmTestResp>('/settings/llm/test', body),
 }
 
 // ---- M8 新增响应形状 ----
@@ -402,4 +408,98 @@ export type SqlRunReplayResp = {
   versions: ReplayVersion[]
   replay: ReplaySnapshot | null
   notice?: string
+}
+
+// ---------------------------------------------------------------------------
+// 系统设置 · 大模型连接
+// ---------------------------------------------------------------------------
+/** 供应商预设（由后端下发，前端不硬编码；新增一家只需后端加一条）。 */
+export type LlmProvider = {
+  key: string
+  label: string
+  base_url: string
+  models: string[]
+  note?: string
+}
+
+export type LlmSettings = {
+  ok: boolean
+  /** 生效来源：db=界面保存的；env=环境变量；none */
+  source?: 'db' | 'env' | 'none'
+  provider?: string
+  base_url?: string
+  model?: string
+  /** 用户意图（开关原值） */
+  enabled?: boolean
+  /** 实际是否会调用大模型（开关打开 且 三项配齐） */
+  effective?: boolean
+  configured?: boolean
+  /** 还缺哪几项：base_url / api_key / model */
+  missing?: string[]
+  temperature?: number
+  timeout?: number
+  max_repair?: number
+  /** 库里是否已有持久化配置（有 = 环境变量不再生效） */
+  persisted?: boolean
+  updated_by?: string
+  updated_at?: string
+  /** 凭据只给「有没有」和「尾号」。缺字段时按「已保存但不回显」处理。 */
+  has_credential?: boolean
+  credential_masked?: string
+  env_configured?: boolean
+  env_model?: string
+  db_error?: string
+  providers?: LlmProvider[]
+  recent_changes?: Array<{
+    action: string
+    actor?: string
+    at?: string
+    credential_changed?: boolean
+    model?: string
+  }>
+}
+
+export type LlmSettingsIn = {
+  provider?: string
+  base_url?: string
+  model?: string
+  /** 留空 = 保持原有密钥不变 */
+  api_key?: string
+  enabled?: boolean
+  temperature?: number
+  timeout?: number
+  max_repair?: number
+  clear_credential?: boolean
+  reset?: boolean
+  actor?: string
+}
+
+export type LlmSaveResp = {
+  ok: boolean
+  changed?: string[]
+  warnings?: string[]
+  notice?: string
+  effective?: boolean
+  settings?: LlmSettings
+}
+
+export type LlmTestIn = {
+  provider?: string
+  base_url?: string
+  model?: string
+  /** 留空则用已保存的密钥测 */
+  api_key?: string
+  timeout?: number
+}
+
+export type LlmTestResp = {
+  ok: boolean
+  latency_ms?: number
+  reply?: string
+  model_reported?: string
+  /** true = 这次用的是库里已存的密钥，不是本次输入 */
+  used_saved_credential?: boolean
+  notice?: string
+  error?: string
+  config?: { base_url?: string; model?: string; credential_masked?: string }
 }

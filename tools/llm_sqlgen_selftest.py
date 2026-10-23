@@ -15,6 +15,10 @@
 **不测**：真实模型调用（需网络与密钥）、gates.review 的真实五层判定
 （需 sqlglot，在容器/CI 内由其它门禁覆盖）。校验层在此用桩替换，只验证编排正确。
 
+与"本机元数据库里存了什么"**完全解耦**：本脚本强制 `LLM_SETTINGS_SOURCE=env`，
+只认环境变量。否则开发机上留了一条已启用的界面配置，"未配置应禁用"这类用例
+就会变红——同一份代码在别人机器上是绿的，这种红灯没法治。
+
 用法：python3 tools/llm_sqlgen_selftest.py   （退出码 0=全过，1=有失败）
 """
 import contextlib
@@ -25,6 +29,9 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.dirname(_HERE)
 sys.path.insert(0, os.path.join(_REPO, "gateway"))
+
+# 强制"只认环境变量"：本脚本断言的是配置解析**逻辑**，不是某台机器上的配置现状。
+os.environ["LLM_SETTINGS_SOURCE"] = "env"
 
 # registry 在 import 时读取 MDL_B_PATH；必须提前指向仓库内的真实 MDL。
 _B_MDL = os.path.join(_REPO, "wren-docker-b", "workspace", "mdl.json")

@@ -6,6 +6,8 @@
 1. **需求单与流转事件**：`demand_requests` / `demand_events`（M2 需求受理落库）。
 2. **轻量元数据字典**：`table_docs` / `column_docs` / `business_glossary`
    （M2 元数据采集，供语义理解与口径解释引用）。
+3. **运行期配置**：`llm_settings`（大模型连接，前端「系统设置」写、网关读）
+   与 `config_events`（配置变更留痕）。
 
 为什么不放进模拟库 A/B
 ----------------------
@@ -355,6 +357,48 @@ DDL = [
     "ON knowledge_citations (demand_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_knowledge_citations_doc "
     "ON knowledge_citations (document_id)",
+    # ------------------------------------------------------------------
+    # 运行期配置（M8 · 系统设置）。**单行表**：settings_id 恒为 1。
+    #
+    # 为什么是单行而不是 key-value：大模型配置是一组互相约束的字段
+    # （选了供应商 ⇒ 地址与模型名要跟着走），拆成 kv 之后「配了一半」这种
+    # 状态在库里根本表达不出来，只能靠代码猜。一行一个整体，语义才闭合。
+    #
+    # 关于 api_key 明文：当前为单租户内网部署，密钥落库但**从不回显**
+    # （出参只给掩码，见 llm_settings.get_settings）。生产接管密钥托管
+    # （KMS / 云 Secret Manager）前，这把库的访问权就等于密钥权——
+    # 已记入 docs/ACCESS_POSTURE.md 的部署边界。
+    # ------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS llm_settings (
+        settings_id INTEGER PRIMARY KEY,
+        provider    TEXT NOT NULL DEFAULT 'deepseek',
+        base_url    TEXT NOT NULL DEFAULT '',
+        api_key     TEXT NOT NULL DEFAULT '',
+        model       TEXT NOT NULL DEFAULT '',
+        enabled     BOOLEAN NOT NULL DEFAULT true,
+        temperature NUMERIC(4,2) NOT NULL DEFAULT 0,
+        timeout     INTEGER NOT NULL DEFAULT 60,
+        max_repair  INTEGER NOT NULL DEFAULT 1,
+        updated_by  TEXT NOT NULL DEFAULT 'system',
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    # 配置变更留痕。与 demand_events 分开：那条链是「业务单据流转」，
+    # 这条是「系统参数变更」，混在一起会让需求单的复盘看到一堆无关事件。
+    # detail 里**永远不存密钥**，只记「是否换过凭据」。
+    """
+    CREATE TABLE IF NOT EXISTS config_events (
+        event_id    BIGSERIAL PRIMARY KEY,
+        scope       TEXT NOT NULL,
+        action      TEXT NOT NULL,
+        actor       TEXT NOT NULL DEFAULT 'system',
+        detail      JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_config_events_scope "
+    "ON config_events (scope, event_id DESC)",
 ]
 
 
@@ -386,6 +430,8 @@ def table_stats():
         "structured_requirements",
         "sql_runs",
         "knowledge_citations",
+        "llm_settings",
+        "config_events",
     ):
         try:
             out[t] = query_one("SELECT count(*) AS n FROM %s" % t)["n"]

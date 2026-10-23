@@ -13,7 +13,7 @@
     git hooks）。
 
 ⇒ 六条红线整体处于「**靠人记得手动跑**」的状态。实测过的后果：
-   `git rm gateway/app.py` ⇒ 48 个已注册 MCP 工具全部消失，而 R2 判 CLEAR；
+   `git rm gateway/app.py` ⇒ 51 个已注册 MCP 工具全部消失，而 R2 判 CLEAR；
    G0 `py_compile` 拦不住（少一个文件 ≠ 语法错）、requirements 拦不住、R3–R6 全不相关
    ⇒ **整个仓库没有任何一层兜得住**。
 

@@ -41,10 +41,10 @@ code, .mono, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, m
 .health { font-size: 12px; padding: 2px 8px; border-radius: 10px; }
 .health.ok { background: var(--ok-bg); color: var(--ok); }
 .health.bad { background: var(--danger-bg); color: var(--danger); }
-.did { background: #eef2f7; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+.did { background: var(--bg-panel-2); padding: 2px 8px; border-radius: 4px; font-size: 12px; }
 
 .tabs { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); padding-bottom: 10px; flex-wrap: wrap; }
-.tab { border: 1px solid var(--line); background: #fff; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.tab { border: 1px solid var(--line); background: var(--panel); padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
 .tab.active { background: var(--primary); border-color: var(--primary); color: #fff; }
 .badge-n, .badge-r { margin-left: 6px; border-radius: 9px; padding: 0 6px; font-size: 11px; color: #fff; }
 .badge-n { background: var(--warn); }
@@ -71,11 +71,25 @@ code, .mono, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, m
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .card-head h3 { margin: 0; font-size: var(--text-md); }
 .card-extra { display: flex; gap: 8px; flex-wrap: wrap; }
+/* 卡片正文里的独立勾选行（开关）。
+   不复用 .ds-pick：那个是顶部工具栏专用，带 margin-left:auto，
+   放进卡片正文会把勾选框挤到中间、说明文字甩到最右。 */
+.checkline {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin: var(--space-2) 0 0; font-size: 13px; color: var(--color-text-secondary);
+}
+.checkline > input[type="checkbox"] { flex: 0 0 auto; margin-top: 2px; }
+.checkline > span { flex: 1 1 auto; min-width: 0; line-height: 1.5; }
+
 .card-body { padding: 14px 16px; }
+
+/* 卡片副标题（Card 的 desc）：一句话交代这张卡在讲什么。
+   参数化前它是「声明了却没人渲染」的死参数 —— 顺手补上，别让接口对着空实现。 */
+.card-desc { margin: 0 0 10px; font-size: 12px; line-height: 1.6; }
 
 button.primary { background: var(--primary); color: #fff; border: 1px solid var(--primary); }
 button.primary:hover:not(:disabled) { background: var(--primary-d); }
-button { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 7px 13px; cursor: pointer; font-size: 13px; }
+button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 6px; padding: 7px 13px; cursor: pointer; font-size: 13px; }
 button:disabled { opacity: .5; cursor: not-allowed; }
 
 .form { display: flex; flex-direction: column; gap: 14px; }
@@ -95,10 +109,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .req { color: var(--danger); font-style: normal; margin-left: 6px; font-size: 11px; }
 .field input, .field textarea, .field select {
   border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: inherit; width: 100%;
+  background: var(--panel); color: var(--text); /* 显式给底色：否则暗色下是浏览器默认白底黑字 */
   min-width: 0; /* grid/flex 子项默认 min-width:auto，会撑破容器 */
 }
 .field input:focus, .field textarea:focus, .field select:focus { outline: 2px solid rgba(31,95,208,.25); border-color: var(--primary); }
-.field input.invalid, .field textarea.invalid { border-color: var(--danger); background: #fffafa; }
+.field input.invalid, .field textarea.invalid { border-color: var(--danger); background: var(--danger-bg); }
 .field-err { color: var(--danger); font-size: 11px; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 
@@ -119,14 +134,14 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .errbox li { margin: 3px 0; }
 .errbox-title { color: var(--danger); font-weight: 600; }
 .errbox-code { margin-left: 8px; font-size: 11px; background: rgba(200,52,43,.12); padding: 1px 6px; border-radius: 4px; }
-.errbox-hint { margin-top: 4px; font-size: 12px; color: #8a2b24; }
+.errbox-hint { margin-top: 4px; font-size: 12px; color: var(--danger); }
 
 .warnbox { border: 1px solid #f0dca8; background: var(--warn-bg); border-radius: 6px; padding: 10px 12px; margin: 10px 0; }
 .warnbox-title { color: var(--warn); font-weight: 600; }
 .warnbox-list { margin: 6px 0 0; padding-left: 18px; }
 .warnbox-list li { margin-bottom: 4px; }
 .warnbox-msg { margin-left: 8px; color: var(--muted); }
-.warnbox-hint { margin-top: 4px; font-size: 12px; color: #7a5200; }
+.warnbox-hint { margin-top: 4px; font-size: 12px; color: var(--state-warning-text); }
 .sim { margin-left: 8px; font-size: 11px; color: var(--warn); }
 
 .loading { padding: 10px 0; color: var(--primary); font-size: 13px; }
@@ -223,7 +238,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: 6px; }
 table.grid { border-collapse: collapse; width: 100%; font-size: 12px; }
 table.grid th, table.grid td { border-bottom: 1px solid var(--line); padding: 7px 9px; text-align: left; vertical-align: top; }
-table.grid th { background: #f2f4f7; font-weight: 600; white-space: nowrap; }
+table.grid th { background: var(--bg-panel-2); font-weight: 600; white-space: nowrap; }
 table.grid tr:last-child td { border-bottom: none; }
 .row-p2 { background: #f4fbf7; }
 .row-ok td { background: #fbfdfc; }
@@ -273,7 +288,7 @@ table.grid td:first-child, table.grid th:first-child { white-space: nowrap; }
 .gate-layer-name { font-weight: var(--weight-semibold); color: var(--color-text); }
 .gate-layer-code { font-size: var(--text-xs); color: var(--color-text-muted); background: var(--bg-panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 6px; }
 
-.trace { display: flex; gap: 24px; flex-wrap: wrap; padding: 10px 12px; background: #f2f4f7; border-radius: 6px; margin-bottom: 10px; }
+.trace { display: flex; gap: 24px; flex-wrap: wrap; padding: 10px 12px; background: var(--bg-panel-2); border-radius: 6px; margin-bottom: 10px; }
 .trace-k { display: block; font-size: 11px; color: var(--muted); }
 
 .foot { margin-top: 24px; text-align: center; color: var(--muted); font-size: 12px; }
@@ -287,8 +302,8 @@ table.grid td:first-child, table.grid th:first-child { white-space: nowrap; }
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #fbfcfd;
-  color: #1a1a1a;
+  background: var(--bg-panel-2);
+  color: var(--text);
   resize: vertical;
 }
 .sqlinput:focus { outline: 2px solid #2f6fb0; outline-offset: 1px; }
@@ -300,8 +315,8 @@ table.grid td:first-child, table.grid th:first-child { white-space: nowrap; }
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #fff;
-  color: #1a1a1a;
+  background: var(--panel);
+  color: var(--text);
 }
 .textinput:focus { outline: 2px solid #2f6fb0; outline-offset: 1px; }
 

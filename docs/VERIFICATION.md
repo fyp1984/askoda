@@ -16,7 +16,7 @@
 # 双探活（HTTP + MCP 全链路），加 --deep 额外真执行一次 gateway_health
 python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep
 
-# MCP 工具面验收（48 个工具 + 真实调用比对，对照《实施推进与验收方案》）
+# MCP 工具面验收（51 个工具 + 真实调用比对，对照《实施推进与验收方案》）
 python3 tools/mcp_acceptance_check.py
 
 # 门禁自证（纯离线，不依赖数据库）

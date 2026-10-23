@@ -35,10 +35,17 @@ import urllib.request
 
 关于 LLM 归属（重要，勿误读）
 ----------------------------
-**网关侧不内置 LLM。** 语义分析在网关内以「证据编排 + 确定性规则」落地，结论一律带
-来源与置信度；需要自由生成的部分（如拗口需求的口语化改写）由**客户端 Agent** 承担。
-因此 M3 的验收与 30 题回放可以在任意 Agent（豆包 / Codex / WorkBuddy）上跑，
-不存在"必须先选定某个模型"这类前置条件。
+**网关可选调用大模型，但默认不调。** 两件事要分开看：
+
+1. **语义分析（M3）不依赖任何模型**：结论由「证据编排 + 确定性规则」产出，
+   一律带来源与置信度，可在任意 Agent（豆包 / Codex / WorkBuddy）上回放验收。
+2. **SQL 生成有一条可选的大模型旁路**（`gateway/llm.py` + `gateway/sqlgen_llm.py`）：
+   配置齐全（`llm_settings` 或 `LLM_*` 环境变量）才启用；启用后仍有闭集 prompt →
+   硬校验（含 L-REQ 要素覆盖）→ 修复闭环三道约束，门禁不过即回落确定性规划器。
+   **未配置时的行为与引入大模型之前逐字一致**——这是「可选」二字的唯一可信证明。
+
+配置入口在网关侧（`llm_config_*` 三工具，持久化到元数据库），前端「系统设置」调用它，
+于是换模型不必重建镜像；环境变量仍作为「没人在界面上配过」时的默认值。
 
 里程碑落点
 ----------
@@ -106,6 +113,27 @@ def _probe(dataset):
 # ---------------------------------------------------------------------------
 # HTTP 探活端点
 # ---------------------------------------------------------------------------
+def _llm_probe():
+    """大模型配置状态（**不参与 core_ok**）。
+
+    没配大模型是**正常状态**（走确定性规划器），不是故障。放进探活只是为了
+    让运维一眼看到「现在到底谁在生成 SQL」，以及配置从哪来（界面 / 环境变量）。
+    返回体里没有任何地址与密钥。
+    """
+    try:
+        import llm_settings
+
+        eff = llm_settings.effective()
+        return {
+            "ok": True,
+            "enabled": bool(eff.get("enabled")),
+            "source": eff.get("source"),
+            "note": llm_settings.status_line(),
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}
+
+
 def _probe_components():
     """M2/M3 三个外部依赖的连通性：元数据库 / 附件存储 / 知识库。"""
     meta = db.healthy()
@@ -120,6 +148,7 @@ def _probe_components():
         "meta_db": meta,
         "attachments": attachments.health(),
         "knowledge": knowledge.health(),
+        "llm": _llm_probe(),
     }
 
 
@@ -1347,9 +1376,116 @@ def demand_similar_precheck(
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
 
+@mcp.tool
+def llm_config_get() -> dict:
+    """读取当前大模型配置（**只回掩码，不回明文密钥**）+ 生效状态 + 供应商预设。
+
+    返回体关键字段：
+      · `source`：`db`（界面保存的）/ `env`（环境变量）/ `none`
+      · `effective`：是否真的会调用大模型；False 时 `missing` 说明还缺什么
+      · `has_credential` / `credential_masked`：凭据是否已设置、尾号（用于「确认填的是哪一把」）
+      · `providers`：可选供应商预设（前端下拉直接渲染，不在前端硬编码）
+      · `recent_changes`：最近若干次变更留痕（谁改的、改了什么、什么时候）
+    """
+    try:
+        import llm_settings
+
+        return {"ok": True, **llm_settings.get_settings()}
+    except ImportError as e:
+        return {"ok": False, "not_ready": True, "reason": "配置模块不可用：%s" % str(e)[:160]}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:240])}
+
+
+@mcp.tool
+def llm_config_set(
+    provider: str = "",
+    base_url: str = "",
+    model: str = "",
+    api_key: str = "",
+    enabled: bool = True,
+    temperature: float = 0.0,
+    timeout: int = 60,
+    max_repair: int = 1,
+    clear_credential: bool = False,
+    reset: bool = False,
+    actor: str = "",
+) -> dict:
+    """保存大模型配置（部分更新），写入元数据库后**立即生效**，无需重启。
+
+    参数约定（`gateway/llm_settings.save_settings` 有完整说明）：
+      · `api_key` 留空 = **保持原有密钥不变**（界面上回显的是掩码，不可能当密钥提交）；
+      · 要清空密钥 ⇒ `clear_credential=True`；
+      · 要退回环境变量配置 ⇒ `reset=True`（删除持久化行，不是留一条空配置）。
+
+    未配齐（地址 / 密钥 / 模型名）或开关打开却没有密钥 ⇒ 返回 `ok=False` 与具体 `errors`，
+    **不会落库半套配置**。
+    """
+    try:
+        import llm_settings
+    except ImportError as e:
+        return {"ok": False, "not_ready": True, "reason": "配置模块不可用：%s" % str(e)[:160]}
+    try:
+        if reset:
+            return llm_settings.reset_settings(actor=actor)
+        return llm_settings.save_settings(
+            {
+                "provider": provider,
+                "base_url": base_url,
+                "model": model,
+                "api_key": api_key,
+                "enabled": enabled,
+                "temperature": temperature,
+                "timeout": timeout,
+                "max_repair": max_repair,
+                "clear_credential": clear_credential,
+            },
+            actor=actor,
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:240])}
+
+
+@mcp.tool
+def llm_config_test(
+    provider: str = "",
+    base_url: str = "",
+    model: str = "",
+    api_key: str = "",
+    timeout: int = 20,
+) -> dict:
+    """用「界面上的这份草稿」发一次最小请求，验证地址 / 密钥 / 模型名是否都对。
+
+    与 `llm_config_set` 的分工：**先测后存**。填错任一项的症状都是「生成不出 SQL」，
+    真正的报错藏在重试之后；点一下测试，十秒内就能分清是谁的问题。
+
+    不传任何参数 ⇒ 测当前生效配置。传了参数 ⇒ 只测这份草稿，**不改动生效配置**
+    （并发场景下「为试一次就换了线上模型」是不可接受的副作用）。
+    返回 `used_saved_credential=True` 表示这次用的是库里已存的密钥而非本次输入，
+    前端要如实告诉用户，避免「测通了但保存后不通」的困惑。
+    """
+    try:
+        import llm_settings
+    except ImportError as e:
+        return {"ok": False, "not_ready": True, "reason": "配置模块不可用：%s" % str(e)[:160]}
+    try:
+        return llm_settings.test_connection(
+            {
+                "provider": provider,
+                "base_url": base_url,
+                "model": model,
+                "api_key": api_key,
+            },
+            timeout=timeout,
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:240])}
+
+
 def main():
     print("%s v%s 启动：http://%s:%d%s" % (GATEWAY_NAME, GATEWAY_VERSION, HOST, PORT, MCP_PATH))
     print("健康检查：http://127.0.0.1:%d/healthz" % PORT)
+
     # 建表（幂等）。此前只有 tools/collect_metadata.py 会调它，网关自身从不建表——
     # 于是「全新部署 + 首次调用」必然失败，且要等到第一次写库才暴露。放在启动时做掉。
     # 元数据库未就绪时不阻断启动（探活会把状态如实报成 degraded），只是打个警告。

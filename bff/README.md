@@ -69,6 +69,9 @@ cd web && npm run dev        # 监听 18000，/api 代理到 18081
 | GET | `/api/v1/datasets` | datasets |
 | GET | `/api/v1/health` | gateway_health |
 | GET | `/api/v1/tools` | tools/list（前端自解释排查用） |
+| GET | `/api/v1/settings/llm` | llm_config_get（**只回掩码密钥**） |
+| POST | `/api/v1/settings/llm` | llm_config_set（写库即生效，无需重建镜像） |
+| POST | `/api/v1/settings/llm/test` | llm_config_test（先测后存，不改动生效配置） |
 
 统一错误体：`{code, message, hint}`。`hint` 必填，写「下一步该干什么」——
 任何硬门禁拒绝都要说明「为什么拒绝 + 去哪里治理」，不允许只报错不指路。
@@ -109,8 +112,12 @@ curl http://127.0.0.1:18081/api/v1/health   # 200
 开发期热重载见根目录 `README.md`「开发期热重载」与 `docker-compose.dev.yml`
 文件头注释（含 gateway 为何只能 restart 的实测原因）。
 
-> ⚠️ **当前无鉴权，仅限本机访问。** `18081` 上的23 个接口与前端应用都没有
+> ⚠️ **当前无鉴权，仅限本机访问。** `18081` 上的全部接口与前端应用都没有
 > 访问控制，不要暴露到公网或局域网。
+>
+> 其中 `POST /api/v1/settings/llm` 能改写「系统用哪个大模型、用哪把密钥」，
+> 在没有鉴权之前它是**权限最高**的写接口——本机演示可接受，任何多人可达的环境
+> 必须先补鉴权（见 `docs/ACCESS_POSTURE.md`）。
 
 ## 7. 红线约束（自检已跑通）
 

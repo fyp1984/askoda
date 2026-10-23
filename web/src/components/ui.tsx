@@ -110,7 +110,15 @@ export function Card({
           {extra ? <div className="card-extra">{extra}</div> : null}
         </header>
       ) : null}
-      {open ? <div className="card-body">{children}</div> : null}
+      {open ? (
+        <div className="card-body">
+          {/* 卡片副标题：一句话说清「这张卡在讲什么」，避免用户在长页里靠猜。
+              刻意放在 body 顶部而不是标题行——标题行右侧是操作区，
+              塞长文本会把按钮挤变形。 */}
+          {desc ? <p className="card-desc muted">{desc}</p> : null}
+          {children}
+        </div>
+      ) : null}
     </section>
   )
 }

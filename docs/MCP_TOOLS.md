@@ -1,9 +1,9 @@
-# MCP 工具面参考（48 个工具）
+# MCP 工具面参考（51 个工具）
 
 > 本文是 [Askoda](../README.md) 的**能力清单与操作手册**。
 > 想快速跑起来看[快速开始](../README.md#快速开始)；要部署到机器上看[部署手册](DEPLOYMENT.md)。
 
-48 个工具由网关通过**一个** streamable-http 端点暴露，按业务域分为九组。
+51 个工具由网关通过**一个** streamable-http 端点暴露，按业务域分为十组。
 **工具名与入参以 `gateway/app.py` 的 `@mcp.tool` 注册处为唯一事实源**，
 下表与之逐条一致（自动核验：`python3 tools/mcp_acceptance_check.py`）。
 返回字段的完整承诺与边界条件见项目文档工作空间的《MCP 工具契约与注册说明》。
@@ -23,8 +23,9 @@
 | 7 | 语义分析与确认闭环 | 7 | `analysis_first_round` `analysis_rounds` `analysis_get` `analysis_evidence` `confirmation_generate` `confirmation_list` `confirmation_answer` |
 | 8 | 结构化需求与上下文包 | 5 | `schema_scan` `requirement_structured` `requirement_get` `schema_candidates` `sql_context_pack` |
 | 9 | 生成 · 门禁 · 执行 | 8 | `sql_review` `sql_plan` `sql_generate` `sql_execute_readonly` `sql_run_get` `sql_run_list` `sql_run_replay` `sql_optimize` |
+| 10 | 系统配置（大模型连接） | 3 | `llm_config_get` `llm_config_set` `llm_config_test` |
 
-合计 **48**。
+合计 **51**。
 
 > ⚠️ **工具面是按位契约**：修改工具的**入参名或顺序**会让已发布的调用方全部失效。
 > 新增可以，**改名与改顺序不行**——这是六条红线之一。
@@ -146,7 +147,7 @@
 
 | 工具                     | 入参                                                  | 返回要点                                                                       | 用途      |
 | ---------------------- | --------------------------------------------------- | -------------------------------------------------------------------------- | ------- |
-| `sql_review`           | ★`sql`, `dataset="B"`                               | 门禁审查 `{status, layers[]}`：L-REQ 需求要素齐备性 / L1 语法 / L2 静态规则（分级阻断）/ L3 只读 / L4 语义 / L5 结果断言 | 门禁      |
+| `sql_review`           | ★`sql`, `dataset="B"`                               | 门禁审查 `{status, layers[]}`：L-REQ 需求要素覆盖判定 / L1 语法 / L2 静态规则（分级阻断）/ L3 只读 / L4 语义 / L5 结果断言 | 门禁      |
 | `sql_plan`             | ★`demand_id`, `dataset="B"`                         | 计划草稿（不含 SQL 正文）；选不出唯一解给候选集合并标「需人工审核」                                       | 生成第 1 段 |
 | `sql_generate`         | ★`demand_id`, `dataset="B"`, `candidate_sql=None`   | SQL 初稿；`candidate_sql` 为空则回落确定性规划器；多条且差异过大时 `hold`                         | 生成第 2 段 |
 | `sql_execute_readonly` | ★`demand_id`, `dataset="B"`, `sql=None`, `actor=""` | 先过门禁，全过才执行；每次写一条 `sql_runs`（溯源齐全，可回放）                                    | 执行      |
@@ -158,6 +159,21 @@
 > **L2 分级阻断**：4 条硬错误规则命中即**阻断** —— `JOIN_WITHOUT_CONDITION` / `ONE_TO_MANY_UNHANDLED` / `UNMAPPED_OBJECT_REF` / `ENUM_VALUE_INVALID`；其余 7 条只记警告、不阻断。
 >
 > **两套规则别混**：上述 L2 是 **SQL 静态规则**（`gateway/rules.py`，11 条，看 SQL AST）；而域 7 `analysis_first_round` 的 `rule_check`（R1–R7）是**需求语义规则**（`gateway/semantics.py`，看需求文本）。二者分层、独立演进、互不覆盖。
+
+#### 域 10 · 系统配置 · 大模型连接（3）
+
+| 工具                | 入参                                                                                                                                                                          | 返回要点                                                                                                       | 用途     |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------ |
+| `llm_config_get`  | —                                                                                                                                                                           | `{source, effective, missing[], has_credential, credential_masked, providers[], recent_changes[]}`；**不回明文密钥** | 读配置与生效状态 |
+| `llm_config_set`  | `provider=""`, `base_url=""`, `model=""`, `api_key=""`, `enabled=true`, `temperature=0`, `timeout=60`, `max_repair=1`, `clear_credential=false`, `reset=false`, `actor=""` | 部分更新；`api_key` 留空=不改，`clear_credential`=清空，`reset`=退回环境变量；校验不过返回 `{ok:false, errors[]}` 且**不落库**          | 保存并即时生效 |
+| `llm_config_test` | `provider=""`, `base_url=""`, `model=""`, `api_key=""`, `timeout=20`                                                                                                        | `{ok, latency_ms, notice, used_saved_credential, config{...}}`；失败时 `notice` 给人话、`error` 留原始原因                 | 先测后存    |
+
+> **配置优先级**：元数据库 `llm_settings` 有行 ⇒ 整行生效（界面保存的）；没有行 ⇒ `LLM_*` 环境变量。
+> **不在字段级混合**——一半来自库、一半来自环境变量的组合没人能解释清楚。
+> 未配置（或开关关闭）时 `sql_generate` 回落确定性规划器，行为与引入大模型之前**逐字一致**。
+>
+> **密钥只进不出**：三个工具的任何出参都不含明文密钥（只给 `credential_masked` 尾号）；
+> 变更留痕写 `config_events`，只记「是否换过凭据」，不记密钥本身。
 
 #### 典型操作动线（八步链路）
 
@@ -184,7 +200,7 @@ demand_create
 # 1) 探活：status=ok，双库都 ok
 curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool
 
-# 2) 握手 + 取工具面（应返回 48 个工具）
+# 2) 握手 + 取工具面（应返回 51 个工具）
 SID=$(curl -sD- -o/dev/null -X POST http://127.0.0.1:18080/mcp \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}}' \
@@ -210,7 +226,7 @@ curl -s -X POST http://127.0.0.1:18080/mcp \
 #### 5.10.1 接入前后自查（3 步）
 
 1. `curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool` → `status` 应为 `ok`（知识库单独展示，不可用不拖垮整体，会如实进 `degraded`）；
-2. 客户端 `tools/list` → 应为 **48 个**；
+2. 客户端 `tools/list` → 应为 **51 个**；
 3. 冒烟：调 `datasets` 看双库（A / B）是否都在册。
 
 #### 5.10.2 常用运维动作
@@ -219,7 +235,7 @@ curl -s -X POST http://127.0.0.1:18080/mcp \
 docker compose ps                 # 看状态（wren-mcp-a/b、assistant-minio 无 healthcheck，只显示 Up 是正常的，见 5.2）
 docker compose up -d --build      # 改过 gateway/ 后重建
 python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # 双探活（HTTP + MCP，含真调一次 gateway_health）
-python3 tools/mcp_acceptance_check.py                                 # 工具面 48 个逐条核对
+python3 tools/mcp_acceptance_check.py                                 # 工具面 51 个逐条核对
 ```
 
 > ⚠️ 容器内代码平铺 `/app`，但 `tools/` 不在 build context —— 跑容器内脚本前需 `docker cp`；走 HTTP 的脚本**必须在宿主跑**，容器内会 connection refused。

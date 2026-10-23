@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from config import BFF_PORT, SERVE_STATIC, STATIC_DIR
 from mcp_client import McpError, get_client
+import llm_view
 from sanitize import redact_mcp_tool, sanitize
 
 import os
@@ -1008,6 +1009,134 @@ async def datasource_candidates(demand_id: str, dataset: str = "B") -> Any:
     return sanitize(
         await call("schema_candidates", {"demand_id": demand_id, "dataset": dataset})
     )
+
+
+# --------------------------------------------------------------------------
+# M8 · 菜单④ 系统设置 · 大模型连接
+#
+# 为什么把「配模型」做成产品能力而不是部署参数
+# --------------------------------------------
+# 私有化交付时，客户换模型（自建 vLLM / 甲方指定的供应商）不该走「改 compose +
+# 重建镜像 + 重启」——那是运维动作，且每次都要我们到场。做成界面之后，客户自己
+# 选供应商、填密钥、点「测试连接」确认通不通，十秒闭环。
+#
+# 安全边界（三条，别放宽）：
+#   1. 密钥**只进不出**：网关侧就只返回掩码，BFF 再加一层 sanitize，前端拿不到明文；
+#   2. 保存类接口必须带 `actor` 留痕（谁在什么时候把模型换成了哪个）；
+#   3. 测试连接只发一次最小请求、不落任何内容，避免「拿测试接口当免费模型用」。
+# --------------------------------------------------------------------------
+def _llm_view(raw: Any) -> Any:
+    """先 sanitize，再把「模型端点」按窄口补回（规则与理由见 `bff/llm_view.py`）。
+
+    为什么必须补：sanitize 会按键把 `*url*` 换成占位符，实测会让设置页的
+    「接口地址」输入框变空，用户改模型名时把端点一起丢掉。
+    """
+    return llm_view.view(raw, sanitize)
+
+
+class LlmSettingsIn(BaseModel):
+    provider: str = Field(default="", description="预设 key：deepseek/dashscope/zhipu/moonshot/openai/custom")
+    base_url: str = Field(default="", description="OpenAI 兼容根地址，如 https://api.deepseek.com/v1")
+    model: str = Field(default="", description="模型名，如 deepseek-chat")
+    # 密钥留空 = 保持原有不变（界面回显的是掩码，不可能把掩码当密钥提交回来）
+    api_key: str = Field(default="", description="留空表示不修改")
+    enabled: bool = Field(default=True)
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    timeout: int = Field(default=60, ge=5, le=600)
+    max_repair: int = Field(default=1, ge=0, le=3)
+    clear_credential: bool = Field(default=False, description="显式清空已存密钥")
+    reset: bool = Field(default=False, description="删除持久化配置，回落环境变量")
+    actor: str = Field(default="")
+
+
+class LlmTestIn(BaseModel):
+    provider: str = Field(default="")
+    base_url: str = Field(default="")
+    model: str = Field(default="")
+    api_key: str = Field(default="", description="留空则用已保存的密钥测")
+    timeout: int = Field(default=20, ge=3, le=120)
+
+
+@app.get(f"{API}/settings/llm", tags=["系统设置"])
+async def settings_llm_get() -> Any:
+    """当前大模型配置（掩码）、生效状态、供应商预设与最近变更。"""
+    try:
+        data = await call("llm_config_get", {})
+    except McpError as exc:
+        raise ApiError(
+            code="LLM_CONFIG_UNAVAILABLE",
+            message=str(exc),
+            hint="网关未就绪或元数据库不可用；请先看「后端状态」与网关 /healthz。",
+        )
+    return _llm_view(data)
+
+
+@app.post(f"{API}/settings/llm", tags=["系统设置"])
+async def settings_llm_save(body: LlmSettingsIn) -> Any:
+    """保存大模型配置：**写库即生效**，不需要重修镜像或重启服务。
+
+    校验不过会返回具体原因（缺地址 / 缺模型名 / 开了开关却没密钥），
+    不会落库半套配置——半套配置的症状是「看起来配好了但生成永远回落」。
+    """
+    try:
+        data = await call(
+            "llm_config_set",
+            {
+                "provider": body.provider,
+                "base_url": body.base_url,
+                "model": body.model,
+                "api_key": body.api_key,
+                "enabled": body.enabled,
+                "temperature": body.temperature,
+                "timeout": body.timeout,
+                "max_repair": body.max_repair,
+                "clear_credential": body.clear_credential,
+                "reset": body.reset,
+                "actor": body.actor,
+            },
+        )
+    except McpError as exc:
+        raise ApiError(
+            code="LLM_CONFIG_SAVE_FAILED",
+            message=str(exc),
+            hint="配置未写入。请确认元数据库可用，再重试保存。",
+        )
+    if _tool_rejected(data):
+        # 校验类拒绝要原样把三条原因带回去，前端才能逐条提示
+        errs = data.get("errors") if isinstance(data, dict) else None
+        raise ApiError(
+            code="LLM_CONFIG_INVALID",
+            message="；".join(errs) if errs else str(_tool_rejected(data)),
+            hint="按提示补齐后重新保存；配置未生效前，SQL 生成仍走确定性规划器。",
+        )
+    return _llm_view(data)
+
+
+@app.post(f"{API}/settings/llm/test", tags=["系统设置"])
+async def settings_llm_test(body: LlmTestIn) -> Any:
+    """用草稿配置试发一次请求：先测通，再保存。
+
+    返回 `used_saved_credential=true` 时表示这次用的是已保存的密钥而非本次输入——
+    前端必须如实转述，否则会出现「测通了、保存后不通」的困惑。
+    """
+    try:
+        data = await call(
+            "llm_config_test",
+            {
+                "provider": body.provider,
+                "base_url": body.base_url,
+                "model": body.model,
+                "api_key": body.api_key,
+                "timeout": body.timeout,
+            },
+        )
+    except McpError as exc:
+        raise ApiError(
+            code="LLM_TEST_FAILED",
+            message=str(exc),
+            hint="网关未就绪或请求超时；请先确认后端状态，再重试测试。",
+        )
+    return _llm_view(data)
 
 
 # --------------------------------------------------------------------------

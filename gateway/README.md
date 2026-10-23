@@ -1,11 +1,16 @@
-# 服务端网关（MCP 工具面 48 个 · 双库语义层 · 门禁 · 只读执行 · 留痕回放）
+# 服务端网关（MCP 工具面 51 个 · 双库语义层 · 门禁 · 只读执行 · 留痕回放）
 
 数据需求智能分析助手的服务端入口：对 Agent 暴露 MCP 工具，对内接入 Wren 语义层双库、
 自有元数据库与附件对象存储，对下接入 RAGFlow 知识底座。
 
-> **网关侧不内置 LLM。** 语义分析以「证据编排 + 确定性规则」落地，结论一律带来源与置信度；
-> 需要自由生成的部分由**客户端 Agent** 承担。因此 M3 的验收与回放可在任意 Agent
-> （豆包 / Codex / WorkBuddy）上跑，不存在"必须先选定某个模型"这类前置条件。
+> **语义分析不依赖任何模型。** 结论以「证据编排 + 确定性规则」落地，一律带来源与置信度，
+> 因此 M3 的验收与回放可在任意 Agent（豆包 / Codex / WorkBuddy）上跑，
+> 不存在"必须先选定某个模型"这类前置条件。
+>
+> **SQL 生成另有一条可选的大模型旁路**（`llm.py` + `sqlgen_llm.py`）：配置齐全才启用，
+> 启用后仍有闭集 prompt → 硬校验（含 L-REQ）→ 修复闭环三道约束，门禁不过即回落确定性规划器。
+> **未配置时行为与引入大模型之前逐字一致**。配置入口为 `llm_config_*` 三工具（前端「系统设置」调用），
+> 换模型不必重建镜像；`LLM_*` 环境变量只作「没人在界面上配过」时的默认值。
 
 ## 一、一键起停
 
@@ -49,9 +54,9 @@ docker compose up -d --build
 
 宿主机端口用 `18080` 而非 `8080`：`8080` 已被本项目 `demo-server.py` 长期占用。
 
-## 三、MCP 工具面（48 个 · 九域）
+## 三、MCP 工具面（51 个 · 十域）
 
-> 按落地批次分列：**M1–M3 第一批（28 个）** + **M4–M6 第二批（13 个）** + **后续补齐（7 个）**，合计 48 个。
+> 按落地批次分列：**M1–M3 第一批（28 个）** + **M4–M6 第二批（13 个）** + **后续补齐（7 个）** + **M8 系统配置（3 个）**，合计 51 个。
 > 逐条入参默认值与返回要点，以 [MCP 工具参考](../docs/MCP_TOOLS.md) 与项目文档《MCP 工具契约与注册说明》为事实源（`app.py` 增删工具须同批更新）。
 
 ### M1 · 语义层与问数
@@ -122,7 +127,7 @@ docker compose up -d --build
 
 | 工具 | 入参 | 说明 |
 |---|---|---|
-| `sql_review` | `sql`, `dataset="B"` | 门禁审查（L-REQ 需求要素齐备性 / L1 语法 / L2 静态规则·分级阻断 / L3 只读 / L4 语义 dry-plan / L5 结果断言） |
+| `sql_review` | `sql`, `dataset="B"` | 门禁审查（L-REQ 需求要素覆盖判定 / L1 语法 / L2 静态规则·分级阻断 / L3 只读 / L4 语义 dry-plan / L5 结果断言） |
 | `sql_plan` | `demand_id`, `dataset="B"` | 计划草稿（不含 SQL 正文）；选不出唯一解给候选集合并标「需人工审核」 |
 | `sql_generate` | `demand_id`, `dataset="B"`, `candidate_sql=None` | SQL 初稿；`candidate_sql` 为空则回退确定性规划器 |
 | `sql_execute_readonly` | `demand_id`, `dataset="B"`, `sql=None`, `actor=""` | 全过门禁才执行，每次写一条 `sql_runs`（溯源齐全，可回放） |
@@ -167,14 +172,26 @@ docker compose up -d --build
 ### 原「设计边界（尚未做）」的现状
 
 - SQL 生成链路（语义层门禁之后）→ **M4 已落地**（plan → generate 两段式）
-- 门禁 → **M5 已落地**（L-REQ 需求要素齐备性 / L1 语法 / L2 静态规则·分级阻断 / L3 只读 / L4 语义 dry-plan / L5 结果断言）；SQLFluff / Great Expectations 留插槽、默认关闭
-- 需求单的**对话式补全**（多轮追问缺失字段）→ 由**客户端 Agent** 承担（网关不内置 LLM）；网关侧为一次性校验 + 澄清问答闭环（`confirmation_*`）
+- 门禁 → **M5 已落地**（L-REQ 需求要素覆盖判定 / L1 语法 / L2 静态规则·分级阻断 / L3 只读 / L4 语义 dry-plan / L5 结果断言）；SQLFluff / Great Expectations 留插槽、默认关闭
+- 需求单的**对话式补全**（多轮追问缺失字段）→ 由**客户端 Agent** 承担；网关侧为一次性校验 + 澄清问答闭环（`confirmation_*`）
+
+### M8 · 系统配置 · 大模型连接（3）
+
+| 工具 | 入参 | 说明 |
+|---|---|---|
+| `llm_config_get` | — | 读当前配置（**只回掩码**）、生效状态、还缺什么、供应商预设、最近变更 |
+| `llm_config_set` | `provider` `base_url` `model` `api_key=""` `enabled=true` `temperature=0` `timeout=60` `max_repair=1` `clear_credential=false` `reset=false` `actor=""` | 部分更新并**即时生效**；`api_key` 留空=不改、`clear_credential`=清空、`reset`=退回环境变量；校验不过不落库 |
+| `llm_config_test` | `provider` `base_url` `model` `api_key=""` `timeout=20` | 用草稿配置试发一次请求（先测后存），`used_saved_credential` 标明用的是哪把密钥 |
+
+> 优先级：`llm_settings` 表有行 ⇒ 整行生效；无行 ⇒ `LLM_*` 环境变量。**不做字段级混合。**
+> 未配置或开关关闭 ⇒ `sql_generate` 回落确定性规划器，行为与引入大模型之前一致。
+
 
 ## 四、代码结构
 
 | 文件 | 职责 |
 |---|---|
-| `app.py` | FastMCP 服务端：48 个工具、`/healthz` 路由、启动入口（启动时幂等建表） |
+| `app.py` | FastMCP 服务端：51 个工具、`/healthz` 路由、启动入口（启动时幂等建表） |
 | `wren.py` | Wren MCP 客户端（streamable-http，会话复用 + 失效重握手） |
 | `registry.py` | 数据集注册表（Wren 端点 + MDL 路径 + PG DSN），**换库只改注册项** |
 | `planner.py` | 确定性规划器兜底（A/B 两套意图库）+ 只读门禁 |
@@ -196,7 +213,7 @@ docker compose up -d --build
 ```bash
 # 在仓库根目录
 python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # 双探活
-python3 tools/mcp_acceptance_check.py                                 # MCP 工具面 48 个逐条核对
+python3 tools/mcp_acceptance_check.py                                 # MCP 工具面 51 个逐条核对
 python3 tools/gate_all.py --layers G0,G1                              # 静态 + 单元门禁（快跑，不写库）
 
 # 离线自证（改动脱敏 / 检索 / 闸门后随手复跑）

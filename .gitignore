@@ -14,6 +14,9 @@ dist/
 # 依赖用 `cd web && npm install` 重装，构建产物由 vite 重新生成。
 web/node_modules/
 node_modules/
+
+# 浏览器自动化工具（playwright-cli）的会话产物：快照/截图，仅本地调试用
+.playwright-cli/
 .vite/
 *.tsbuildinfo
 npm-debug.log*

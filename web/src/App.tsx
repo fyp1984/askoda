@@ -12,6 +12,7 @@ import PageAnalysis from './pages/PageAnalysis'
 import PageConfirm from './pages/PageConfirm'
 import PageSql from './pages/PageSql'
 import PageDelivery from './pages/PageDelivery'
+import PageSettings from './pages/PageSettings'
 import DemandStatusActions from './components/DemandStatusActions'
 import { Card } from './components/ui'
 
@@ -56,15 +57,6 @@ function persistDemand(id: string | null, step: StepKey) {
   }
   const qs = params.toString()
   window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`)
-}
-
-/** 向导五步 stepKey → 节点序号（'list' 不在向导内）。 */
-const STEP_TO_NODE: Record<string, number> = {
-  submit: 0,
-  analysis: 1,
-  confirm: 2,
-  sql: 3,
-  delivery: 4,
 }
 
 function AppShell() {
@@ -182,7 +174,6 @@ function AppShell() {
   }, [])
 
   const blocking = (status?.analysis?.rule_check?.blocking_risks as unknown[] | undefined)?.length ?? 0
-  const openConf = (status?.confirmations?.open_count as number | undefined) ?? 0
   const demandStatus = status?.demand?.status
 
   const readonlyModule = isReadonly(menu)
@@ -332,13 +323,7 @@ function AppShell() {
           ) : null}
 
           {menu === 'system' ? (
-            <div className="page">
-              <Card title="系统设置" collapsible id="system">
-                <p className="muted">
-                  数据空间（租户）与全局配置在此管理。当前为演示态，相关能力建设中。
-                </p>
-              </Card>
-            </div>
+            <PageSettings readonly={readonlyModule} actor={actor} onNotify={notify} />
           ) : null}
         </main>
       </div>

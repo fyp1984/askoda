@@ -28,6 +28,15 @@
 | `LLM_TEMPERATURE` | `0` | 采样温度（SQL 生成建议 0，保确定性） |
 
 三项（base_url/api_key/model）任一缺失即 `configured=False`、`enabled=False`。
+
+配置从哪来（优先级，勿猜）
+--------------------------
+1. **元数据库 `llm_settings` 有行** ⇒ 整行生效（即前端「系统设置」里保存的配置，
+   见 `gateway/llm_settings.py`）。终端用户改模型不需要重建镜像。
+2. **没有行** ⇒ 本模块下表的环境变量（部署期配置，容器/离线环境照旧可用）。
+
+两条路径解析同一组字段，故 `llm_settings` 复用本模块的 `_env_config()`，
+避免「环境变量怎么解析」出现第二份实现而逐渐漂移。
 """
 from __future__ import annotations
 
@@ -54,8 +63,9 @@ def _float_env(name, default):
         return default
 
 
-def config():
-    """读环境变量，返回 LLM 配置与启用状态（纯函数，便于测试）。"""
+def _env_config():
+    """环境变量口径（不含持久化配置）。保留为独立函数：`llm_settings` 复用它，
+    避免「环境变量到底怎么解析」出现第二份实现而逐渐漂移。"""
     base_url = (os.getenv("LLM_BASE_URL") or "").strip().rstrip("/")
     api_key = (os.getenv("LLM_API_KEY") or "").strip()
     model = (os.getenv("LLM_MODEL") or "").strip()
@@ -71,7 +81,45 @@ def config():
         "timeout": _int_env("LLM_TIMEOUT", 60),
         "max_retries": max(0, _int_env("LLM_MAX_RETRIES", 1)),
         "temperature": _float_env("LLM_TEMPERATURE", 0.0),
+        "source": "env",
     }
+
+
+def config():
+    """返回 LLM 配置与启用状态。
+
+    取值顺序（见 `llm_settings` 文件头）：
+      1. 元数据库 `llm_settings` 里有行 ⇒ 整行生效（前端「系统设置」保存的）；
+      2. 没有行 ⇒ 环境变量 `LLM_*`（部署期配置）。
+    读库失败一律回落环境变量，绝不因为元数据库抖动把问数链路带崩。
+    """
+    cfg = _env_config()
+    try:
+        import llm_settings as _settings  # 延迟导入：避免模块级循环依赖
+
+        eff = _settings.effective()
+    except Exception:  # noqa: BLE001  配置层任何异常都不应影响可用性
+        return cfg
+
+    if eff.get("source") != "db":
+        return cfg
+
+    cfg.update(
+        {
+            "configured": bool(eff.get("configured")),
+            "enabled": bool(eff.get("enabled")),
+            "base_url": eff.get("base_url") or "",
+            "api_key": eff.get("api_key") or "",
+            "model": eff.get("model") or "",
+            "timeout": eff.get("timeout") or cfg["timeout"],
+            "max_repair": eff.get("max_repair"),
+            "temperature": eff.get("temperature")
+            if eff.get("temperature") is not None
+            else cfg["temperature"],
+            "source": "db",
+        }
+    )
+    return cfg
 
 
 def is_enabled():
@@ -89,26 +137,37 @@ def completions_url(base_url):
     return u + "/chat/completions"
 
 
-def chat(messages, *, json_mode=False, timeout=None, max_retries=None, temperature=None):
+def chat(messages, *, json_mode=False, timeout=None, max_retries=None, temperature=None, cfg=None):
     """调用 chat/completions。
 
     返回（**永不抛异常**）：
       · 成功：`{"ok": True, "content": str, "model": str, "latency_ms": int}`
       · 失败：`{"ok": False, "error": str, "disabled": bool?, "status": int?}`
     4xx（鉴权/参数错误）不重试；5xx / 网络错误按 `max_retries` 重试。
+
+    `cfg` 入参：传一份临时配置即可「按这份配置发一次请求」，不改动全局状态。
+    这是「测试连接」必须的能力——用户在界面上填了新密钥想先试通再保存，
+    不能为了试一次就把进程里的生效配置改掉（并发场景下等于给线上换了个模型）。
     """
-    cfg = config()
-    if not cfg["enabled"]:
+    if cfg is None:
+        cfg = config()
+        ready = bool(cfg.get("enabled"))
+    else:
+        # 显式传入的临时配置：只看三项是否配齐（它代表「用户想试这一套」，
+        # 不该被库里的开关状态挡住，否则「改了密钥想先测一下」永远测不通）。
+        ready = bool(cfg.get("base_url") and cfg.get("api_key") and cfg.get("model"))
+    if not ready:
         return {
             "ok": False,
             "disabled": True,
-            "error": "LLM 未启用（缺 LLM_BASE_URL/LLM_API_KEY/LLM_MODEL 或被 LLM_ENABLED=0 关闭）",
+            "error": "LLM 未启用（配置不完整，或 LLM_ENABLED=0 / 界面开关已关闭）",
         }
 
     url = completions_url(cfg["base_url"])
-    to = cfg["timeout"] if timeout is None else timeout
-    retries = cfg["max_retries"] if max_retries is None else max(0, max_retries)
-    temp = cfg["temperature"] if temperature is None else temperature
+    # 用 get 兜底：`cfg` 可能是「测试连接」传进来的临时配置，字段不保证齐全。
+    to = cfg.get("timeout", 60) if timeout is None else timeout
+    retries = max(0, cfg.get("max_retries", 0)) if max_retries is None else max(0, max_retries)
+    temp = cfg.get("temperature", 0.0) if temperature is None else temperature
 
     payload = {
         "model": cfg["model"],
