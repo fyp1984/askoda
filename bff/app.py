@@ -20,12 +20,13 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from config import BFF_PORT, SERVE_STATIC, STATIC_DIR
 from mcp_client import McpError, get_client
+import attachment_proxy
 import llm_view
 from sanitize import redact_mcp_tool, sanitize
 
@@ -714,8 +715,111 @@ async def citations(
 
 
 # --------------------------------------------------------------------------
-# 14. GET /api/v1/demand/{id}/replay —— ★审计回放（技术人员视角的完整判断链）
+# 13b. 附件下载（T09 · 走 BFF 代理，不把预签名链接交给浏览器）
 # --------------------------------------------------------------------------
+# 为什么必须有这一层（实测结论，不是设计洁癖）
+# ------------------------------------------
+# `attachment_url` 返回的预签名链接，host 是对象存储的**内网地址**
+# （compose 内的服务名+容器端口，或宿主机回环端口）。浏览器点开的表现：
+#   · 容器服务名解析不了 ⇒ ERR_NAME_NOT_RESOLVED；
+#   · 换成对外地址也不行 —— Host 参与签名 ⇒ 403 SignatureDoesNotMatch；
+#   · 端口没对外暴露时连不上。
+# ⇒ 浏览器只跟同源的 BFF 说话，字节流由 BFF 在服务端取回再转发。
+#   BFF 每次现取签名，所以「链接过期」这类问题也一并消失。
+#
+# 安全边界（规则实现见 bff/attachment_proxy.py，那里有离线判据）：
+#   ① 对象键白名单式校验（拒协议 / 拒 `..` / 拒反斜线）⇒ 不会变成任意 URL 抓取器；
+#   ② 地址只认网关给的签名 URL，BFF 不自己拼对象存储地址、不持有第二套密钥；
+#   ③ 下载文件名走 RFC 5987，中文不乱码。
+@app.get(f"{API}/demand/{{demand_id}}/attachments", tags=["附件"])
+async def attachments_of_demand(demand_id: str) -> Any:
+    """该需求单下的附件清单，每项附一个**同源**下载地址。"""
+    data = await call("attachment_list", {"demand_id": demand_id})
+    reason = _tool_rejected(data)
+    if reason:
+        raise ApiError("ATTACHMENT_LIST_FAILED", reason,
+                       hint="附件服务可能未就绪；不影响需求本身的分析与出数。")
+    items = []
+    for obj in (data.get("objects") or []) if isinstance(data, dict) else []:
+        key = str((obj or {}).get("object_key") or "")
+        items.append(
+            {
+                "object_key": key,
+                "filename": attachment_proxy.filename_of(key),
+                "size": (obj or {}).get("size"),
+                "last_modified": (obj or {}).get("last_modified"),
+                "download_url": attachment_proxy.download_url(API, key),
+            }
+        )
+    return {"ok": True, "demand_id": demand_id, "total": len(items), "items": items}
+
+
+@app.get(f"{API}/attachments/{{object_key:path}}", tags=["附件"])
+async def download_attachment(object_key: str) -> Any:
+    """代理下载：由 BFF 取回字节流后原样转发给浏览器。"""
+    key = attachment_proxy.safe_object_key(object_key)
+    if not key:
+        raise ApiError("ATTACHMENT_KEY_INVALID", "附件标识不合法",
+                       hint="附件标识形如「需求单号/文件名」，不应包含协议、路径回退等成分。")
+    signed = await call("attachment_url", {"object_key": key, "expires_seconds": 300})
+    reason = _tool_rejected(signed)
+    if reason or not (signed or {}).get("url"):
+        raise ApiError("ATTACHMENT_URL_FAILED", reason or "未取到下载地址",
+                       hint="对象可能已被删除，或附件服务未就绪。")
+    url = str(signed["url"])
+    try:
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            length = resp.headers.get("Content-Length")
+            if length and int(length) > attachment_proxy.SIZE_MAX:
+                raise ApiError(
+                    "ATTACHMENT_TOO_LARGE",
+                    "附件过大（%s 字节），超过代理下载上限" % length,
+                    hint="请在部署机上直接从对象存储取回该文件。",
+                )
+            body = resp.read(attachment_proxy.SIZE_MAX + 1)
+    except ApiError:
+        raise
+    except urllib.error.HTTPError as exc:
+        # 对象存储说「没有这个对象」⇒ 语义上是 404，不该报成服务故障：
+        # 用户看到「文件不存在」会去核对附件，看到「取回失败」只会来投诉系统。
+        if exc.code == 404:
+            raise ApiError(
+                "ATTACHMENT_NOT_FOUND",
+                "附件不存在或已被删除",
+                hint="可能是上传未完成，或该附件已被清理；请重新上传。",
+                status=404,
+            )
+        log.warning("附件代理下载失败 key=%s: HTTP %s", key, exc.code)
+        raise ApiError(
+            "ATTACHMENT_FETCH_FAILED",
+            "取回附件失败（对象存储返回 HTTP %s）" % exc.code,
+            hint="对象存储可能不可达或签名已失效；请稍后重试。",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("附件代理下载失败 key=%s: %s", key, exc)
+        raise ApiError("ATTACHMENT_FETCH_FAILED", "%s: %s" % (type(exc).__name__, str(exc)[:160]),
+                       hint="服务端取回附件失败；多为对象存储不可达或签名已失效。")
+    if len(body) > attachment_proxy.SIZE_MAX:
+        raise ApiError("ATTACHMENT_TOO_LARGE", "附件超过代理下载上限",
+                       hint="请在部署机上直接从对象存储取回该文件。")
+    name = attachment_proxy.filename_of(key)
+    return Response(
+        content=body,
+        media_type=attachment_proxy.guess_media_type(name),
+        headers={
+            "Content-Disposition": attachment_proxy.content_disposition(name),
+            # 附件是敏感业务材料：禁止中间缓存，也禁止被当成页面执行
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+
 # 为什么单独开一个接口、而不是塞进 e2e-status：
 # e2e-status 是「当前态」聚合（每块只取最新一次），审计回放是「历史态」查询——
 # 要能按版本号精确复原某一次的输入/门禁/结论。两者语义与生命周期都不同，

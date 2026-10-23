@@ -52,15 +52,34 @@ def _pack_safe(demand_id, dataset):
 
 def _requirement_safe(demand_id):
     """get requirement；失败返回 None（供 fallback nl 拼凑使用）。"""
+    req, _why = _requirement_for_gate(demand_id)
+    return req
+
+
+def _requirement_for_gate(demand_id):
+    """给门禁用：返回 (需求对象 or None, 取不到的原因)。
+
+    为什么要和 `_requirement_safe` 分开：那个函数服务的是 planner 的 nl 兜底，
+    只关心「有没有」；而门禁的 detail 要回答「为什么没有」。丢了原因，L-REQ 的
+    跳过说明就会退化成一句放之四海皆准的废话（历史上正是「调用方未传 demand_id」），
+    让人往「接线断了」的方向查——真实原因往往只是「这条需求还没合成结构化需求」，
+    或「查库失败」。**诊断文案指错方向，比不写更贵。**
+    """
+    if not demand_id:
+        return None, "调用方未传 demand_id"
     try:
         req = requirement_mod.get(demand_id)
-    except Exception:
-        return None
-    if isinstance(req, dict) and req.get("ok") is False:
-        return None
+    except Exception as e:  # noqa: BLE001
+        return None, "取结构化需求抛异常 %s: %s" % (type(e).__name__, str(e)[:160])
     if not isinstance(req, dict):
-        return None
-    return req
+        return None, "结构化需求返回非对象（%s）" % type(req).__name__
+    if req.get("ok") is False:
+        return None, str(
+            req.get("error")
+            or "尚未合成结构化需求（先跑 requirement_structured）"
+        )
+    return req, ""
+
 
 
 def _demand_title_desc(demand_id):
@@ -84,6 +103,84 @@ def _demand_title_desc(demand_id):
 # ---------------------------------------------------------------------------
 # 第一段：plan · 出计划草稿（不含 SQL 正文）
 # ---------------------------------------------------------------------------
+def _record_sqlgen_citations(demand_id, chosen_table="", time_field="",
+                             granularity="", models=None, notes_prefix="SQL_PLAN"):
+    """把「SQL 生成期实际做了哪些取证检索」落进 `knowledge_citations`。
+
+    🔴 为什么必须抽成独立函数（2026-10-22 实测发现）
+    ------------------------------------------------
+    这段逻辑原先只写在 `plan()` 里。但**`generate()` 从不调 `plan()`**——两段式里
+    plan 是独立工具 `sql_plan`，而主链路（前端 / BFF → `sql_generate`）直接进
+    generate ⇒ `dataset_id='sqlgen_plan_stage'` 的行**在主链路上一条都不会新增**。
+    症状极隐蔽：引用表里有历史数据、`knowledge_citation_list` 也查得到，
+    但永远查不到「**这段 SQL 是按哪份口径文档写的**」——而这恰好是业务方核对
+    数据来源时最需要的那一条。实测两条新需求跑完整链路后，该 stage 新增 0 行。
+
+    ⚠️ 两条路径共用同一个 `dataset_id='sqlgen_plan_stage'`（不新造 stage 名）：
+       它表达的是「SQL 生成期的取证」，不是「plan() 这个函数被调用过」。
+       新造一个 stage 只会把同一件事拆成两处，让下游过滤逻辑分叉。
+
+    ⚠️ 幂等键（fingerprint）沿用「本次结论 + 命中引用集合」：同一条需求重跑
+       同一套结论不会重复堆行，结论变了才留新行。
+
+    返回 `{"written": n 或 None, "skipped": 原因, "error": 错误}`；**绝不抛异常**
+    ——引用留痕失败不能让生成链路崩。
+    """
+    out = {"written": None, "skipped": None, "error": ""}
+    if not demand_id:
+        out["skipped"] = "无 demand_id"
+        return out
+    _rq_title, _rq_desc = _demand_title_desc(demand_id)
+    if not (chosen_table or str(_rq_title or "").strip() or str(_rq_desc or "").strip()):
+        out["skipped"] = "无选表也无需求标题/描述，检索词无从构造"
+        return out
+    try:
+        import knowledge as _k_sg  # noqa: E402  惰性导入：模块缺失不影响生成链路
+        if not (hasattr(_k_sg, "search") and hasattr(_k_sg, "record_citations_once")):
+            out["skipped"] = "knowledge 模块无检索/留痕接口"
+            return out
+        q_sg = "%s 选表=%s 时间=%s 颗粒度=%s 需求=%s" % (
+            notes_prefix,
+            chosen_table or "",
+            time_field or "",
+            granularity or "",
+            (str(_rq_title) + " " + str(_rq_desc))[:100].strip() or "",
+        )
+        ks_sg = _k_sg.search(q_sg[:200], top_k=4)
+        cits_sg = ks_sg.get("citations") if isinstance(ks_sg, dict) else []
+        if not cits_sg:
+            # 检索没命中不是错误：知识库里确实没有可引用的内容。
+            out["skipped"] = "本次检索无命中（知识库无相关文档）"
+            return out
+        _fp_ids = "|".join(
+            sorted(
+                str(c.get("chunk_id") or c.get("document_id") or idx)
+                for idx, c in enumerate(cits_sg)
+            )
+        )
+        _fp = "ct=%s;tf=%s;gr=%s;mods=%s;cits=%s" % (
+            chosen_table or "", time_field or "", granularity or "",
+            ",".join(models or []) or "", _fp_ids,
+        )
+        rc_res = _k_sg.record_citations_once(
+            demand_id,
+            q_sg[:140],
+            cits_sg,
+            stage="sqlgen_plan_stage",
+            actor="sqlgen_plan",
+            fingerprint=_fp,
+            round_no=None,
+            sql_run_id=None,
+            dataset_id="sqlgen_plan_stage",
+        )
+        if isinstance(rc_res, dict):
+            out["written"] = rc_res.get("inserted", 0)
+            out["skipped"] = rc_res.get("skipped")
+    except Exception as e:  # noqa: BLE001
+        out["error"] = "%s: %s" % (type(e).__name__, str(e)[:160])
+    return out
+
+
 def plan(demand_id, dataset="B"):
     """出计划草稿（§4.7 · 一段式）：选表/选关联路径/选时间字段。
 
@@ -428,48 +525,19 @@ def plan(demand_id, dataset="B"):
     }
 
     # P-E · SQL 生成阶段取证检索落 knowledge_citations（覆盖"SQL 这一时期的实际取证动作"）
-    # 与 analysis 阶段同契约：AUTO_INTERNAL 开头作审计标记，不伪装用户可见引用
-    _rq_title, _rq_desc = _demand_title_desc(demand_id)
-    if demand_id and (chosen_table or str(_rq_title or "").strip() or str(_rq_desc or "").strip()):
-        try:
-            import knowledge as _k_sg  # noqa: E402
-            if hasattr(_k_sg, "search") and hasattr(_k_sg, "record_citations_once"):
-                q_sg = "SQL_PLAN 选表=%s 时间=%s 颗粒度=%s 需求=%s" % (
-                    chosen_table or "",
-                    time_field or "",
-                    granularity or "",
-                    (str(_rq_title) + " " + str(_rq_desc))[:100].strip() or "",
-                )
-                ks_sg = _k_sg.search(q_sg[:200], top_k=4)
-                cits_sg = ks_sg.get("citations") if isinstance(ks_sg, dict) else []
-                if cits_sg:
-                    # P1-15 · 幂等键：本次 plan 的关键结论 + 命中引用 id 集合
-                    _fp_ids = "|".join(
-                        sorted(
-                            str(c.get("chunk_id") or c.get("document_id") or idx)
-                            for idx, c in enumerate(cits_sg)
-                        )
-                    )
-                    _fp_sg = "ct=%s;tf=%s;gr=%s;mods=%s;cits=%s" % (
-                        chosen_table or "", time_field or "", granularity or "",
-                        ",".join(time_field_scope_models or []) or "", _fp_ids,
-                    )
-                    rc_res = _k_sg.record_citations_once(
-                        demand_id,
-                        q_sg[:140],
-                        cits_sg,
-                        stage="sqlgen_plan_stage",
-                        actor="sqlgen_plan",
-                        fingerprint=_fp_sg,
-                        round_no=None,
-                        sql_run_id=None,
-                        dataset_id="sqlgen_plan_stage",
-                    )
-                    if isinstance(rc_res, dict):
-                        out["_sql_plan_citations_written"] = rc_res.get("inserted", 0)
-                        out["_sql_plan_citations_skipped"] = rc_res.get("skipped")
-        except Exception:  # noqa: BLE001
-            out["_sql_plan_citations_write_error"] = True
+    _rc = _record_sqlgen_citations(
+        demand_id,
+        chosen_table=chosen_table,
+        time_field=time_field,
+        granularity=granularity,
+        models=time_field_scope_models,
+        notes_prefix="SQL_PLAN",
+    )
+    if _rc.get("written") is not None:
+        out["_sql_plan_citations_written"] = _rc.get("written")
+        out["_sql_plan_citations_skipped"] = _rc.get("skipped")
+    if _rc.get("error"):
+        out["_sql_plan_citations_write_error"] = True
 
     return out
 
@@ -578,6 +646,8 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
     sql_draft = None
     generator_label = None
     candidate_diff = None
+    # 走 LLM 旁路时 `planned` 不会被赋值；统一先给个空壳，避免后面按需读取时报 NameError
+    planned = {}
     if is_multi:
         # M6-2 F3 分支：多条候选先判定差异再决定是否下发
         generator_label = "client-agent"
@@ -714,6 +784,39 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
         if isinstance(sql_plan, dict):
             field_mapping = list(sql_plan.get("field_mapping") or [])
 
+    # ── SQL 生成期的取证留痕（P-E）──────────────────────────────────
+    # ⚠️ 必须在 gates.review 之前：引用表达的是"这段 SQL 是照着哪些文档挑表/定口径
+    #    的"，属于生成动作的一部分；放到 review 之后就变成"审完才去补票"。
+    # 调用计划里已经给出的事实（sql_plan 入参）优先；没有就用确定性 planner 的
+    # objects 第一个当"选中的表"——够用即可，这里只求能检索到相关文档。
+    _cit_table = ""
+    _cit_tf = ""
+    _cit_gr = ""
+    _cit_models = []
+    if isinstance(sql_plan, dict):
+        _cit_table = str(sql_plan.get("chosen_table") or "")
+        _cit_tf = str(sql_plan.get("time_field") or "")
+        _cit_gr = str(sql_plan.get("granularity") or "")
+        _cit_models = list(sql_plan.get("time_field_scope_models") or [])
+    if not _cit_table:
+        _objs = (planned.get("objects") or []) if isinstance(planned, dict) else []
+        if _objs and isinstance(_objs[0], str):
+            _cit_table = _objs[0]
+    _cit_rc = _record_sqlgen_citations(
+        demand_id,
+        chosen_table=_cit_table,
+        time_field=_cit_tf,
+        granularity=_cit_gr,
+        models=_cit_models,
+        notes_prefix="SQL_GENERATE",
+    )
+    if _cit_rc.get("written"):
+        generation_notes.append(
+            "取证留痕：本次检索命中 %d 条引用，已落 knowledge_citations" % int(_cit_rc["written"])
+        )
+    elif _cit_rc.get("error"):
+        generation_notes.append("取证留痕失败（不影响生成）：%s" % _cit_rc["error"])
+
     # 立即 gates.review（L5 没有 exec_result → skipped，属预期）
     #
     # ⚠️ REQ-COVERAGE 接线（2026-10-20）：必须把结构化需求喂给 L-REQ。
@@ -726,8 +829,13 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
     #   取不到就降级为 None（→ L-REQ skipped、不参与总状态），
     #   **绝不让一次查库失败把整条生成链路搞崩**。
     try:
+        _req_gate, _req_why = _requirement_for_gate(demand_id)
+        if _req_gate is None:
+            # 不把 None 递进去（那样门禁只能说"调用方没传"），而是让门禁
+            # 带着**真原因**走 skipped 分支 → detail 里能直接看到该改什么。
+            _req_gate = {"ok": False, "error": _req_why or "结构化需求不可用"}
         review = gates_mod.review(sql_draft or "", dataset=dataset,
-                                  requirement=_requirement_safe(demand_id))
+                                  requirement=_req_gate)
     except Exception as e:  # noqa: BLE001
         review = {
             "status": "不通过",

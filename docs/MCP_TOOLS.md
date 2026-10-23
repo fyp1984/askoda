@@ -8,6 +8,19 @@
 下表与之逐条一致（自动核验：`python3 tools/mcp_acceptance_check.py`）。
 返回字段的完整承诺与边界条件见项目文档工作空间的《MCP 工具契约与注册说明》。
 
+### 返回约定（读之前先看这条，否则会误判失败）
+
+| 情形 | 返回形态 | 怎么判 |
+|---|---|---|
+| 成功 | **资源对象本身**（如需求单、确认记录），**不强制带 `ok`** | 看有没有 `ok:false`；不要用 `ok is True` 判成功 |
+| 业务拒绝（可纠正） | `{ok:false, error, ...}`，可能还带 `hint` / `guide` | `ok is False` |
+| 异常 | `{ok:false, error:"<类名>: <原因>"}` | 同上 |
+
+⚠️ 这个「成功不带 ok」是既有契约，不是遗漏：`demand_create` / `demand_set_status`
+这类工具直接回资源对象，BFF 也按 `ok is false` 判拒绝。
+**用 `if resp.get("ok")` 判成功的客户端会把成功当失败**——已登记在
+`docs/OPEN_ITEMS.md` 第 17 条，若要做成对外 SDK，届时统一口径。
+
 ---
 
 ## 分组速查
@@ -117,7 +130,7 @@
 | ----------------- | ----------------------------------------------- | --------------------------------------------------------- | ------ |
 | `attachment_put`  | ★`filename` ★`content_base64`, `demand_id=None` | `{ok, attachment}`；文本类（csv/txt/md/json）上传即敏感扫描，命中给 `risk` | 随单附件   |
 | `attachment_list` | `demand_id=None`                                | `{ok, prefix, objects[]}`                                 | 列附件    |
-| `attachment_url`  | ★`object_key`, `expires_seconds=3600`           | `{ok, url}` 临时下载链接                                        | 前端直连下载 |
+| `attachment_url`  | ★`object_key`, `expires_seconds=3600`           | `{ok, url}` 临时下载链接；**url 的 host 是对象存储内网地址** | **仅限服务端**使用（浏览器请走 BFF 代理） |
 
 #### 域 7 · 语义分析与确认闭环（7）
 

@@ -176,6 +176,32 @@ def _t_between_empty():
     assert sg._extract_between(None, "[", "]") == ""
 
 
+@case("规划器粒度：需求写了「按月」⇒ SQL 必须按月分组（不许静默丢粒度）")
+def _t_planner_month_granularity():
+    """2026-10-23 实测缺陷：`各门店销售额` 意图原先只看「各门店」，
+    需求里的「按月」被直接丢掉 ⇒ SQL 少了月度维度。REQ-COVERAGE 上线后这类 SQL
+    会被正确判红，但**产品不能只会拦**——同一句话说了按月，就该按月出数。
+
+    这里直接调 plan_b（不经 registry），所以用一个只提供 models 的轻量替身。
+    """
+    import planner as pl
+
+    class _DS:
+        key = "B"
+        models = {"dwd_order_di": {}, "dim_store": {}}
+
+    monthly = pl.plan_b(_DS(), "各门店按月的销售额")
+    assert monthly.get("blocked") is not True, monthly.get("reason")
+    sql_m = monthly.get("sql") or ""
+    assert "date_trunc('month'" in sql_m, "按月需求却没用月度表达式：%s" % sql_m
+    assert "GROUP BY" in sql_m and "月份" in sql_m, "月度维度没进 SELECT/GROUP BY：%s" % sql_m
+
+    plain = pl.plan_b(_DS(), "各门店销售额")
+    assert plain.get("blocked") is not True, plain.get("reason")
+    sql_p = plain.get("sql") or ""
+    assert "date_trunc" not in sql_p, "没要求按月却加了月度维度（过度拟合）：%s" % sql_p
+
+
 def main():
     failed = []
     for name, fn in CASES:

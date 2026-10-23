@@ -72,9 +72,20 @@ cd web && npm run dev        # 监听 18000，/api 代理到 18081
 | GET | `/api/v1/settings/llm` | llm_config_get（**只回掩码密钥**） |
 | POST | `/api/v1/settings/llm` | llm_config_set（写库即生效，无需重建镜像） |
 | POST | `/api/v1/settings/llm/test` | llm_config_test（先测后存，不改动生效配置） |
+| GET | `/api/v1/demand/{id}/attachments` | attachment_list（每项附**同源**下载地址） |
+| GET | `/api/v1/attachments/{object_key}` | **代理下载**：BFF 取回字节流再转发（不暴露对象存储地址） |
 
 统一错误体：`{code, message, hint}`。`hint` 必填，写「下一步该干什么」——
 任何硬门禁拒绝都要说明「为什么拒绝 + 去哪里治理」，不允许只报错不指路。
+
+**附件为什么由 BFF 代理而不直给预签名链接**（T09，实测结论）：
+`attachment_url` 给的是对象存储**内网地址**（`askoda-minio:9000` /
+`host.docker.internal:19000`）。浏览器打开它会 `ERR_NAME_NOT_RESOLVED`；
+把 host 换成对外地址又会因 Host 参与签名而 `403 SignatureDoesNotMatch`。
+⇒ 浏览器只跟同源 BFF 说话，BFF 每次现取签名再转发字节流。
+对象键校验规则在 `bff/attachment_proxy.py`（拒绝协议 / `..` / 反斜线），
+对应判据 `tools/bff_attachment_selftest.py`——专门测**拒绝面**，
+因为这类洞恰恰不会被「能不能下下来」的功能测试发现。
 
 ## 4. 契约生成前端类型（禁止手写接口类型）
 

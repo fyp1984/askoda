@@ -573,6 +573,27 @@ def plan_b(dataset, nl):
                 _objects(dataset, ["dws_store_daily_agg", "dim_store"]),
             )
         if "门店" in t and "各" in t:
+            # ⚠️ 粒度优先（2026-10-23 实测补）：原实现只认「各门店」，不看需求里的
+            #   「按月 / 月度 / 每月」⇒ 需求写"按月"，SQL 却只按门店 GROUP BY，
+            #   月度要素直接丢失。这类 SQL 以前能过（因为没人比对需求），
+            #   REQ-COVERAGE 上线后会被正确判红——**拦是对的，但产品不能只会拦**：
+            #   同一句话里既然说了"按月"，就该按月出数。
+            #   判据：只要出现按月/月度/每月/分月（或解析出具体年月），就走月度变体。
+            _by_month = bool(_months_in(t)) or any(
+                k in t for k in ("按月", "月度", "每月", "分月", "各月")
+            )
+            if _by_month:
+                return _ok(
+                    "B",
+                    "销售额·门店月",
+                    "SELECT s.store_name, date_trunc('month', o.order_date) AS 月份, "
+                    "SUM(o.pay_amount) AS 销售额 "
+                    "FROM dwd_order_di o JOIN dim_store s ON o.store_id = s.store_id "
+                    "WHERE o.order_status = '已完成' "
+                    "GROUP BY s.store_name, date_trunc('month', o.order_date) "
+                    "ORDER BY 月份, s.store_name",
+                    _objects(dataset, ["dwd_order_di", "dim_store"]),
+                )
             return _ok(
                 "B",
                 "销售额·门店",

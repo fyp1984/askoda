@@ -9,7 +9,7 @@
 > git 提交（`git checkout <commit> -- <file>`）、DB 快照 SQL、或容器镜像 tag。
 > 「本地留个备份文件」**不算回滚点**（覆盖 = 覆盖，不是回滚）。
 
-最后更新：2026-10-22（大模型配置入前端 · M8 系统设置批次）
+最后更新：2026-10-23（T04/T05/T06/T07/T09 闭合 + 粒度与别名两处规则缺陷修复）
 
 ---
 
@@ -48,6 +48,38 @@
 
 ## 五、已闭合（本批内完成，列此备查）
 
+- **T04 MCP 直调超时**：实测直调 `sql_execute_readonly` 0.26s 返回（历史「60s」是
+  **调用方**的 MCP 客户端默认超时，不是网关阻塞）。已加两处回归判据：
+  `tools/e2e_verify.py` 的「只读执行 < 10s」、`tools/gate_all.py` 探活的
+  「>30s 判红」。⇒ **超时现象不会再以「网络慢」的名义被忽略**。
+- **T05 确认问答闭环**：实测 `待分析 → 待业务确认 →（答复）待补充修改 →（重跑分析）
+  待审核通过` 全链路走通；答复回填进槽位（`granularity` 变 `confirmed`、
+  confidence=1.0、来源指向 `Q-GRAIN-1 v2`）。
+- **T06 多轮回退留痕**：`demand_events` 逐条记 `from/to/note/actor`，无覆盖；
+  非法状态在网关侧即被拒（列全部合法值）。答复版本也不覆盖历史（v1 原样保留，
+  v2 `supersedes` 指向 v1）。
+- **T07 引用溯源返 0**：复核结论是**没返 0**（`knowledge_citation_list` 可查）。
+  但查出真问题：`sqlgen_plan_stage` 类引用**在生成路径上一条都不写**——
+  因为那段逻辑只写在 `plan()` 里，而 `generate()` 从不调 `plan()`。
+  ⇒ 已抽成 `_record_sqlgen_citations()` 供两条路径共用；实测生成后新增 4 条，
+  重复生成不堆行（幂等键）；新增判据 `tools/sqlgen_citations_selftest.py` 7/7。
+- **T09 附件下载走 BFF 代理**：预签名 host 实测是 `host.docker.internal:19000`
+  这类浏览器不可达地址 ⇒ 新增 `GET /api/v1/attachments/{object_key}` 代理下载
+  （实测 51 字节原样返回、`Content-Type` 与 RFC 5987 中文文件名正确、
+  `Cache-Control: no-store`）；对象键校验拒绝协议 / `..` / 反斜线；
+  新增判据 `tools/bff_attachment_selftest.py` 9/9（专测**拒绝面**）。
+- **规划器丢粒度**：需求写「按月」时 `销售额·门店` 意图只按门店分组，月度维度被静默丢掉。
+  已补月度变体（`date_trunc('month', order_date)` 进 SELECT/GROUP BY/ORDER BY），
+  判据进 `tools/sqlgen_selftest.py`。
+- **规则误报别名**：`ORDER BY 月份`（别名）被判成「非标准时间列」。
+  已改为**把别名展开成背后的真实列再判**——既不误报，也不放过
+  `SELECT dw_insert_time AS 月份` 这种真错；判据进 `tools/rules_selftest.py`。
+- **分析返回的「待确认问题」没有已答复标记**：答复后重跑分析，问题列表原样再列一遍，
+  与「状态已推进到待审核」自相矛盾（界面靠 confirmations 过滤看不出来，
+  **直调 MCP 的 Agent 会重复提问**）。已补 `answered` / `question_status` /
+  `answer_version`，并另给 `open_questions`。
+- **L-REQ 跳过原因指错方向**：原写「调用方未传 demand_id」，而真实原因往往是
+  「这条需求还没合成结构化需求」。已改为带出 `requirement.get` 的真实原因。
 - 门禁四层全绿（G0–G3 全部 PASS）——**项数以 `tools/gate_count_check.py` 实测为准**，
   当前值见 README「项目状态」段。⚠️ 此处**刻意不写具体数字**：历史上这一行写死过
   「95/88」，实测为 90/83（G0/G1 随 `*_selftest.py` 增删而漂移），
@@ -55,14 +87,25 @@
 - `L-REQ` 已纳入 G3 必跑层（`tools/e2e_verify.py` 的 `REQUIRED_LAYERS_SQL`）
 - 两路一致性断言（`tools/semantics_selftest.py` 的 J-7/J-8，166 项断言）
 - 阈值边界断言（`tools/reqcov_selftest.py` ③b/③b另一侧/④b）
-- 接线自证（`tools/reqcov_wiring_selftest.py`，负向验证 4/4 全红）
+- 接线自证（`tools/reqcov_wiring_selftest.py`，负向验证 4/4 全红 + 原因文案用例）
 - R3 判据 AST 化（`tools/redline_guard.py`）
 - 沙箱垫片：`tools/_pyshim/sitecustomize.py` + `tools/run_selftest.sh` + `tools/gate_all.py` 的 `_child_env()` 注入
   （垫片的「逻辑删除」**只在探测到本机禁删时启用**，正常机器上完全不碰删除语义）
 
 ---
 
-## 六、大模型接入（M8 · 系统设置）
+## 六、本批新发现（尚未处理，按触发条件登记）
+
+| # | 待办 | 触发条件 | 依赖 | 阻塞谁 |
+|---|---|---|---|---|
+| 16 | **模糊需求的「主体」槽位取不到**：实测「看看会员复购的情况」这类需求，`subject` 候选为空、`fields` 因无主体而连带为空 ⇒ 后续生成只能靠标题关键词硬猜。当前靠 planner 意图库兜底，不算错，但分析层的价值没发挥出来 | 与 #2（matcher 精度升级）同批 | 需要「业务名 → 候选主体表」的映射口径（词表 161 条对「复购情况」零命中，见 #4） | 分析质量、T03 精度基线 |
+| 17 | **接口契约不一致**：多数工具成功时返回资源对象本身（**没有 `ok` 字段**，如 `demand_set_status` / `demand_create`），拒绝时返回 `{ok:false,error}`。BFF 侧只判 `ok is False` 所以功能正常，但按 `ok is True` 判断的消费方会误判失败 | 对外发布接口文档前统一一次 | 需定口径：是「统一加 ok」还是「文档写明成功不带 ok」。倾向后者（改动小、不破坏既有消费方） | Agent / 第三方接入 |
+| 18 | **本机 `.env` 缺宿主直连 DSN**（已临时补上，`.env` 不入库）：直接跑 `tools/*_verify.py` 会报「ASSISTANT_DB_DSN 未配置」。门禁 `gate_all.py` 已给兜底，故**只有手工直跑会踩** | 换机 / 交接时 | `.env.example` 已有示例值 | 手工验证的人 |
+
+
+---
+
+## 七、大模型接入（M8 · 系统设置）
 
 | # | 待办 | 触发条件 | 依赖 | 阻塞谁 |
 |---|---|---|---|---|

@@ -1111,10 +1111,44 @@ def _ev_time_field_suspect(ast_stmt, ctx):
     if not time_cols:
         return out
     # 收集 WHERE/HAVING/GROUP BY/ORDER BY 里的 Column
+    #
+    # ⚠️ 别名必须先展开（2026-10-23 实测误报）：
+    #   `SELECT date_trunc('month', o.order_date) AS 月份 … ORDER BY 月份`
+    #   会被判成「用了非标准时间列 月份」——但「月份」根本不是物理列，是别名，
+    #   ORDER BY 里按别名排序是标准写法。这类误报会让正确 SQL 拿一个警告，
+    #   而「警告多了就没人看警告」比不报更糟。
+    #   ⇒ 处理方式是**展开而不是忽略**：拿别名背后的表达式继续判。
+    #     这样 `SELECT o.dw_insert_time AS 月份 … ORDER BY 月份` 仍然会被抓出来
+    #     （真正的问题列是 dw_insert_time），检测力一点没丢。
+    _aliases = {}
+    try:
+        for _sel in ast_stmt.find_all(exp.Select):
+            for _proj in _sel.expressions:
+                if isinstance(_proj, exp.Alias):
+                    _aliases[(_proj.alias or "").lower()] = _proj.this
+    except Exception:  # noqa: BLE001  解析异常不阻断规则
+        _aliases = {}
+
     target_cols = []
     for clause in list(ast_stmt.find_all(exp.Where)) + list(ast_stmt.find_all(exp.Having)) \
             + list(ast_stmt.find_all(exp.Group)) + list(ast_stmt.find_all(exp.Ordered)):
         for col in clause.find_all(exp.Column):
+            _tbl_tok = col.args.get("table")
+            _tbl = (
+                (_tbl_tok.name if isinstance(_tbl_tok, exp.Identifier) else str(_tbl_tok)) or ""
+                if _tbl_tok is not None
+                else ""
+            )
+            _name = ""
+            if col.this is not None:
+                _name = (col.this.name if isinstance(col.this, exp.Identifier) else str(col.this)) or ""
+            if not _tbl and _name and _name.lower() in _aliases:
+                _expr = _aliases[_name.lower()]
+                _inner = list(_expr.find_all(exp.Column))
+                if _inner:
+                    target_cols.extend(_inner)
+                # 别名背后没有列（纯常量/字面量）⇒ 无物理列可判，跳过
+                continue
             target_cols.append(col)
     import re as _re
     time_like = _re.compile(

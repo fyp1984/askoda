@@ -205,6 +205,7 @@ def get_round(demand_id, round_no=None, dataset=None):
             r["risks"] = db.dumps(_risks_now)
         except Exception:  # noqa: BLE001
             pass
+    _qs_state = _questions_with_state(r["demand_id"], r["questions"])
     return {
         "demand_id": r["demand_id"],
         "round_no": r["round_no"],
@@ -216,7 +217,8 @@ def get_round(demand_id, round_no=None, dataset=None):
         "slots": r["slots"],
         "evidence_chain": r["evidence"],
         "rule_check": r["risks"],
-        "questions": r["questions"],
+        "questions": _qs_state,
+        "open_questions": [q for q in _qs_state if isinstance(q, dict) and not q.get("answered")],
     }
 
 
@@ -554,6 +556,48 @@ def _advance_status(demand_id, status, actor, note):
 # ---------------------------------------------------------------------------
 # 对外主入口
 # ---------------------------------------------------------------------------
+def _questions_with_state(demand_id, questions):
+    """给本轮问题补上「现在答没答」——本轮落库的原始问题里没有这个信息。
+
+    为什么必须补（2026-10-22 实测）：答复后重跑分析，本轮 `questions` 里仍原样
+    列着那个问题、**没有任何已答复标记**，而单据状态已经推进到「待审核通过」。
+    同一份返回里「状态说不用再问了」和「问题列表说还有一条待确认」互相打架：
+      · 界面侧靠 e2e-status 的 confirmations 过滤，看不出问题；
+      · **Agent / 直调 MCP 的消费方没有这条过滤**，会把已答复的问题再问一遍。
+    ⇒ 直接把状态补进问题对象，并另给 `open_questions`，让每个消费方都能一次看对。
+
+    取不到确认记录时（如 `persist=False` 的试跑）按「待答复」处理，不谎称已答。
+    """
+    try:
+        cur = {
+            c.get("question_id"): c
+            for c in (list_confirmations(demand_id).get("items") or [])
+        }
+    except Exception:  # noqa: BLE001  查库失败不能影响分析结果返回
+        cur = {}
+    out = []
+    for q in questions or []:
+        if not isinstance(q, dict):
+            out.append(q)
+            continue
+        item = dict(q)
+        c = cur.get(item.get("question_id"))
+        if c is None:
+            item["answered"] = False
+            item["question_status"] = "待答复"
+            item["answer_version"] = None
+            item["answered_at"] = None
+            item["answer_text"] = None
+        else:
+            item["answered"] = bool(c.get("answered"))
+            item["question_status"] = "已答复" if c.get("answered") else "待答复"
+            item["answer_version"] = c.get("version")
+            item["answered_at"] = c.get("answered_at")
+            item["answer_text"] = c.get("answer")
+        out.append(item)
+    return out
+
+
 def first_round(demand_id, dataset="B", actor="analyst", persist=True):
     """跑第一轮语义分析：取证 → 分析 → 落库轮次 → 生成确认问题 → 状态流转。"""
     d, bundle, result = build(demand_id, dataset)
@@ -588,6 +632,7 @@ def first_round(demand_id, dataset="B", actor="analyst", persist=True):
         _advance_status(demand_id, target, actor,
                         "生成 %d 个待确认问题" % openq if openq else "无需业务确认，待审核")
 
+    _qs_state = _questions_with_state(demand_id, result.get("questions"))
     return {
         "ok": True,
         "demand_id": demand_id,
@@ -597,7 +642,8 @@ def first_round(demand_id, dataset="B", actor="analyst", persist=True):
         "slots": result["slots"],
         "slot_labels": result["slot_labels"],
         "rule_check": result["rule_check"],
-        "questions": result["questions"],
+        "questions": _qs_state,
+        "open_questions": [q for q in _qs_state if isinstance(q, dict) and not q.get("answered")],
         "dropped_questions": result["dropped_questions"],
         "confidence_overall": result["confidence_overall"],
         "confidence_cap": result.get("confidence_cap"),

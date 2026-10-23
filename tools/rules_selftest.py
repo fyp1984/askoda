@@ -350,6 +350,24 @@ def main():
         "TIME_FIELD_SUSPECT",
         ctx=CTX_B,
     )
+    # 10b. 别名不算「非标准时间列」（2026-10-23 实测误报）
+    #      现象：`date_trunc('month', order_date) AS 月份 … ORDER BY 月份`
+    #      被判成「用了非标准时间列 月份」，正确 SQL 白拿一个警告。
+    #      要求：按别名排序不报；但别名背后若真是装载列，仍然要报——
+    #      只判「别名」不判「别名背后的列」等于把检测力丢了。
+    all_ok &= assert_neg(
+        "ORDER BY 别名（date_trunc AS 月份）不该报",
+        "SELECT date_trunc('month', o.order_date) AS 月份, SUM(o.pay_amount) AS 销售额 "
+        "FROM dwd_order_di o GROUP BY 月份 ORDER BY 月份",
+        "TIME_FIELD_SUSPECT",
+        ctx=CTX_B,
+    )
+    all_ok &= assert_pos(
+        "别名背后是装载列（dw_insert_time AS 月份）仍要报",
+        "SELECT o.dw_insert_time AS 月份 FROM dwd_order_di o ORDER BY 月份",
+        "TIME_FIELD_SUSPECT",
+        ctx=CTX_B,
+    )
     # ----------------------------------------------------------------
     # 11. R7 ENUM_VALUE_INVALID — 枚举值校验（新增）
     # ----------------------------------------------------------------

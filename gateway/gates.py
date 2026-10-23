@@ -405,7 +405,8 @@ def _requirement_check(requirement, sql=None):
     # -- 需求不可用 → skipped（与「需求不合格」严格区分） --
     if requirement is None:
         return _skipped(
-            "跳过原因：未提供结构化需求（调用方未传 demand_id），本层不参与总状态。")
+            "跳过原因：未提供结构化需求（调用方没传 demand_id，或需求侧尚未合成），"
+            "本层不参与总状态。")
     if not isinstance(requirement, dict):
         return _skipped(
             "跳过原因：结构化需求类型异常（%s），本层不参与总状态。"
@@ -413,9 +414,14 @@ def _requirement_check(requirement, sql=None):
     if requirement.get("ok") is False:
         # requirement.get 查不到时返回的就是 {"ok": False, "error": ...}。
         # 这是「取不到」，不是「不合格」——skipped 并把原因写进 detail。
+        #
+        # ⚠️ 这里是排障的第一现场，措辞必须指向真原因。历史上这句写的是
+        #   「调用方未传 demand_id」，实测把人带到「接线是不是断了」的错方向
+        #   （真实原因是这条需求还没合成结构化需求）。文案指错方向比不写更贵。
         return _skipped(
-            "跳过原因：结构化需求不可用（%s），本层不参与总状态。"
-            % str(requirement.get("error") or requirement.get("reason") or "")[:160])
+            "跳过原因：结构化需求不可用——%s；本层不参与总状态。"
+            % str(requirement.get("error") or requirement.get("reason") or "原因未知")[:200])
+
     if sql is None or str(sql).strip() == "":
         # 无 SQL 可比对 ⇒ 判不了覆盖。这不是「覆盖通过」。
         return _skipped(
