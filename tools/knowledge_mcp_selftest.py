@@ -23,6 +23,39 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gateway"))
 
+# 从仓库 .env 补齐配置（docstring 承诺「用 .env / 环境变量配置」，此前并未真正读取）。
+#
+# 为什么必须补：`gate_all.py` 用干净的进程环境跑子进程，不会带 shell 里 export 的变量。
+# 于是同一份代码「我手工跑是绿的、门禁跑是红的」——实测就是这样：
+# 容器与 .env 里配的是 mcp-weknora，门禁却读到默认值 ragflow，直接判红。
+# 判定必须测**项目的真实配置**，而不是测「当前 shell 恰好 export 了什么」。
+# 只 setdefault，不覆盖已有环境变量；只读取，不打印任何值（.env 里有凭据）。
+def _load_dotenv(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except OSError:
+        pass
+
+
+_load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+
+# .env 里的 `KNOWLEDGE_MCP_URL` 是为**容器内**写的（host.docker.internal = 宿主机）。
+# 在宿主上直接跑就会 name-not-known —— 实测报错 `[Errno 8] nodename nor servname`。
+# 同一个底座在宿主上就是 127.0.0.1:<宿主端口>，故非容器环境自动改写；
+# 容器内（存在 /.dockerenv）保持原样。只改主机名，不动端口与 path。
+if not os.path.exists("/.dockerenv") and os.getenv("KNOWLEDGE_MCP_URL"):
+    os.environ["KNOWLEDGE_MCP_URL"] = os.getenv("KNOWLEDGE_MCP_URL").replace(
+        "host.docker.internal", "127.0.0.1")
+
 BACKEND = os.getenv("KNOWLEDGE_BACKEND", "ragflow").strip().lower()
 if not BACKEND.startswith("mcp"):
     print("KNOWLEDGE_BACKEND=%s 不是 MCP 后端；本自证只测 mcp-*。"

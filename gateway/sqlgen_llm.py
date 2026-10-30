@@ -123,45 +123,93 @@ SYSTEM_PROMPT = (
     "5) 只输出一个 JSON 对象，不要输出多余文字，格式：\n"
     '{"sql": "<SQL 或空串>", "explanation": "<一句话说明怎么满足需求>", '
     '"objects": [{"type":"model|column","name":"<引用到的对象>"}], '
-    '"confidence": <0~1 的数字>}'
+    '"confidence": <0~1 的数字>}\n'
+    "6) **口径已给定时不得自行发明**：若给了「业务已确认口径」「颗粒度」「时间口径」，\n"
+    "   必须照此取数；不得另行定义指标（例如把「新增会员」改写成「此前无记录的会员」这类\n"
+    "   自创口径），也不得凭空追加未要求的过滤条件（如会员状态、活跃度）；\n"
+    "7) **标识符只用 ASCII**：表别名、列别名一律用小写字母/数字/下划线（如 store_name、\n"
+    "   new_member_cnt），禁止把中文当别名或标识符——中文只出现在 explanation 里；\n"
+    "   关键字与标识符之间必须有空格（`ORDER BY cnt DESC` 而不是 `ORDER BYcnt`），\n"
+    "   否则 SQL 无法解析。"
 )
 
 
 def _structured_hint(structured):
-    """把结构化需求（六槽位）压成几行提示，帮助模型对齐要素。"""
+    """把结构化需求（六槽位 + 业务确认）压成几行提示，帮助模型对齐要素。
+
+    键名对齐（踩坑记录）：`requirement.py` 实际产出的字段是
+    `subject / granularity / time_semantics / data_scope / output_fields / residual_risks`，
+    而本函数早期按 `granularity_definition / time_scope / scope_conditions / risk_points`
+    去取——两边对不上，于是**六个槽位里有四个被静默丢掉**，其中恰是最关键的两个
+    （颗粒度、时间口径）。实测后果：模型拿不到「按会员注册日期、按门店汇总」这类
+    已确认口径，只能自行发明「新增会员」的定义（曾生成
+    `NOT EXISTS(ads_member_repurchase_di ...)` 这种看似成立、实则答非所问的 SQL）。
+
+    因此这里**同时认两套键名**（历史键保留，避免其他调用方/测试用例失效），
+    并补上 `confirmed_facts`（业务确认原文，优先级最高）与 `aggregation_rules`。
+    """
     if not isinstance(structured, dict):
         return ""
     parts = []
+    seen_labels = set()
 
     def _val(x):
         if isinstance(x, dict):
             return x.get("value")
         return x
 
+    def _clean(v):
+        s = str(_val(v) if not isinstance(v, list) else v).strip()
+        return "" if ("无候选结论" in s or s in ("None", "null")) else s
+
     def _add(label, v):
-        v = _val(v)
-        if v is None:
+        if label in seen_labels:
             return
-        s = str(v).strip()
-        if s and "无候选结论" not in s:
+        s = _clean(v)
+        if s:
+            seen_labels.add(label)
             parts.append("· %s：%s" % (label, s))
 
+    # 顺序即优先级：先给主体/颗粒度/时间/范围（决定 SQL 骨架），再给字段与风险。
+    # 同一 label 的两个键名按先后命中，第一个非空者生效，避免重复刷屏。
     for key, label in (
         ("subject", "分析主体"),
+        ("granularity", "颗粒度"),
         ("granularity_definition", "颗粒度"),
+        ("time_semantics", "时间口径"),
         ("time_scope", "时间口径"),
+        ("data_scope", "范围条件"),
         ("scope_conditions", "范围条件"),
         ("output_fields", "输出字段"),
+        ("aggregation_rules", "聚合规则"),
+        ("residual_risks", "风险点"),
         ("risk_points", "风险点"),
     ):
         v = structured.get(key)
         if isinstance(v, list):
-            vals = [_val(x) for x in v]
-            vals = [str(x).strip() for x in vals if x and str(x).strip() and "无候选结论" not in str(x)]
-            if vals:
+            vals = [_clean(x) for x in v]
+            vals = [x for x in vals if x]
+            if vals and label not in seen_labels:
+                seen_labels.add(label)
                 parts.append("· %s：%s" % (label, "；".join(vals)))
         else:
             _add(label, v)
+
+    # 业务确认是「已被人拍过板」的口径，比需求原文更硬：单列一段，明确要求必须满足。
+    facts = structured.get("confirmed_facts")
+    if isinstance(facts, list):
+        lines = []
+        for f in facts[:8]:
+            if not isinstance(f, dict):
+                continue
+            q = str(f.get("question") or "").strip()
+            a = str(f.get("answer") or "").strip()
+            if not a or "无候选结论" in a:
+                continue
+            lines.append("- %s → %s" % (q, a) if q else "- %s" % a)
+        if lines:
+            parts.append("· 业务已确认口径（**必须逐条满足**）：\n" + "\n".join(lines))
+
     if not parts:
         return ""
     return "已结构化的需求要素（应逐项满足）：\n" + "\n".join(parts)
@@ -221,6 +269,56 @@ def _strip_fences(text):
     if m:
         return m.group(1).strip()
     return t
+
+
+def _normalize_identifier_spacing(sql):
+    """在「关键词/标识符」与中文之间补空格，**只动空白，不动任何字面量与引号内容**。
+
+    为什么需要：本地小模型（实测 deepseek-r1:7b）会写出
+    `... GROUP BY member_name ORDER BY新增会员数 DESC` 这种关键词与中文别名粘连的 SQL，
+    sqlglot 直接 `Invalid expression / Unexpected token` 判语法错——于是一个本可用的
+    候选被误判成「模型不可用」，掩盖了真正的语义问题。
+
+    只处理引号外的边界：
+      · 前一个字符是 ASCII 字母/数字/下划线/右括号，当前是中文 ⇒ 插空格；
+      · 前一个是中文，当前是 ASCII 字母/数字/下划线 ⇒ 插空格。
+    单引号字符串（含 '' 转义）与双引号标识符内部原样保留——`'2026年1月'` 不会被拆开。
+    """
+    s = sql or ""
+    out = []
+    quote = ""  # ""（无） | "'" | '"'
+    prev = ""
+    for ch in s:
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                quote = ""
+            prev = ch
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            prev = ch
+            continue
+        is_ascii_word = ch.isascii() and (ch.isalnum() or ch in "_")
+        is_cjk = "\u4e00" <= ch <= "\u9fff"
+        prev_ascii = prev.isascii() and (prev.isalnum() or prev in "_") or prev == ")"
+        prev_cjk = "\u4e00" <= prev <= "\u9fff"
+        if (is_cjk and prev_ascii) or (is_ascii_word and prev_cjk):
+            if out and out[-1] != " ":
+                out.append(" ")
+        out.append(ch)
+        prev = ch
+    text = "".join(out)
+    # ASCII 与 ASCII 粘连（`ORDER BYcnt`）无法靠字符类别判断，只对已知多词关键字补一次。
+    # 只补空格，不改任何标识符本身。
+    text = re.sub(
+        r"\b(ORDER\s+BY|GROUP\s+BY|UNION\s+ALL|PARTITION\s+BY)(?=[A-Za-z_0-9])",
+        lambda m: m.group(1) + " ",
+        text,
+        flags=re.I,
+    )
+    return text
 
 
 def parse_generation_response(text):
@@ -363,6 +461,10 @@ def generate_sql(demand_id=None, dataset="B", nl="", structured=None, knowledge=
             break
         parsed = parse_generation_response(resp.get("content") or "")
         sql = parsed.get("sql") or ""
+        # 只对「模型产出的 SQL」做标识符间距规范化；确定性规划器的 SQL 不经过这里，
+        # 门禁判据也不受影响（规范化只加空白，不改标识符、不改字面量）。
+        if sql:
+            sql = _normalize_identifier_spacing(sql)
         ok, issues, review = validate_sql(sql, ds, structured)
         attempts.append({
             "round": i + 1,

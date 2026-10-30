@@ -348,6 +348,38 @@ def _months_in(t):
     return ["%s-%02d-01" % (y, int(m)) for y, m in ms]
 
 
+def _date_range_in(t):
+    """解析**显式日期区间**：「2021-01-01 至 2024-12-31」（也认 / 与 . 分隔、~ 与 — 连接）。
+
+    为什么必须单独解析（2026-10-30 实测 DR-20261030-2RMN）
+    -----------------------------------------------------
+    `_months_in` 只认「YYYY 年 M 月」⇒ 需求写「统计 2021-01-01 至 2024-12-31 期间…」
+    时它一个都匹配不到，`since` 为空 ⇒ WHERE 整段消失 ⇒ **全量统计**照常返回且门禁全绿。
+    少一个条件比报错难发现得多：数字看着像真的，其实口径已经变了。
+
+    返回 ``(start, until_exclusive)``：上限取**次日**并用开区间，
+    避免「<= 2024-12-31 00:00:00」漏掉当天最后时刻的数据（日期列带时间时的经典坑）。
+    解析不出返回 ``(None, None)``。
+    """
+    s = (t or "").replace("／", "/").replace("．", ".")
+    m = re.search(
+        r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\s*(?:至|到|~|—|－|\s-\s)\s*"
+        r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})",
+        s,
+    )
+    if not m:
+        return None, None
+    y1, mo1, d1, y2, mo2, d2 = m.groups()
+    try:
+        from datetime import date, timedelta
+
+        start = date(int(y1), int(mo1), int(d1))
+        end = date(int(y2), int(mo2), int(d2))
+        return start.isoformat(), (end + timedelta(days=1)).isoformat()
+    except ValueError:
+        return None, None
+
+
 def _topn(t):
     """解析「前N名 / 前三名 / top5 / 前 10」→ N；解析不出返回 None。
 
@@ -744,10 +776,14 @@ def plan_b(dataset, nl):
     if any(k in t for k in ("新注册", "新增会员", "新增的会员", "注册会员", "新会员")) or (
         "注册" in t and "会员" in t
     ):
-        since = m1
+        d_start, d_until = _date_range_in(t)
+        since = d_start or m1
         where_sql = "WHERE m.register_date >= '%s'" % since if since else ""
+        if d_until:
+            where_sql += " AND m.register_date < '%s'" % d_until
         _member_rule = [
-            "口径：新注册会员 = dim_member 中 register_date 落在统计起点之后的会员",
+            "口径：新注册会员 = dim_member 中 register_date 落在统计区间内的会员",
+            "区间上限按「次日开区间」处理，不丢最后一天",
             "敏感字段（会员手机号 / 身份证）未建模，SQL 不引用",
         ]
         if "各门店" in t or "按门店" in t:
