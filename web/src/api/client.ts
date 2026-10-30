@@ -125,8 +125,15 @@ export const api = {
 
   // ---- M8 菜单② 知识储备 ----
   knowledgeHealth: () => request<Record<string, any>>('/knowledge/health'),
-  knowledgeDocuments: (limit = 50) => request<Record<string, any>>(`/knowledge/documents?limit=${limit}`),
-  knowledgeSearch: (body: { question: string; top_k?: number; threshold?: number; vector_weight?: number; demand_id?: string }) =>
+  // 多知识库选库入口：列出底座上全部可见知识库（kb_id 逻辑隔离用）
+  knowledgeKbs: () => request<Record<string, any>>('/knowledge/kbs'),
+  knowledgeDocuments: (limit = 50, kbId = '') => {
+    const q = new URLSearchParams()
+    q.set('limit', String(limit))
+    if (kbId) q.set('kb_id', kbId)
+    return request<Record<string, any>>(`/knowledge/documents?${q.toString()}`)
+  },
+  knowledgeSearch: (body: { question: string; top_k?: number; threshold?: number; vector_weight?: number; demand_id?: string; kb_id?: string }) =>
     post<KnowledgeSearchResp>('/knowledge/search', body),
   knowledgeCitations: (args: { demand_id?: string; include_retired?: boolean; limit?: number } = {}) => {
     const q = new URLSearchParams()
@@ -136,7 +143,7 @@ export const api = {
     return request<Record<string, any>>(`/knowledge/citations?${q.toString()}`)
   },
   // 知识准入：上传走 base64 JSON 而非 multipart——BFF 侧不引python-multipart（红线五）
-  knowledgeUpload: (body: { filename: string; content_base64: string; content_type?: string; actor?: string }) =>
+  knowledgeUpload: (body: { filename: string; content_base64: string; content_type?: string; actor?: string; kb_id?: string }) =>
     post<Record<string, any>>('/knowledge/upload', body),
   knowledgeStatus: (documentId = '', limit = 50) => {
     const q = new URLSearchParams()

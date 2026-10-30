@@ -306,6 +306,45 @@ def health():
         }
 
 
+def list_kbs():
+    """列出 MCP 端点作用域内**全部**可见知识库（不过滤，供客户端选库）。
+
+    与 health 的差异：health 只报默认作用域（KNOWLEDGE_KB_IDS）命中那个库；
+    本函数把 token 可见的库全部列出并标注 is_default，客户端据此做
+    「指定知识库 ID」的逻辑隔离与引用授权选择。
+    """
+    t0 = time.time()
+    try:
+        data = _CLIENT.call_json(_tool("list_knowledge_bases"), {})
+        kbs = data.get("knowledge_bases") or []
+        rows = [
+            {
+                "id": kb.get("id"),
+                "name": kb.get("name"),
+                "is_default": (kb.get("id") in KB_IDS) if KB_IDS else False,
+                "description": kb.get("description") or "",
+            }
+            for kb in kbs
+            if kb.get("id")
+        ]
+        return {
+            "ok": True,
+            "base": BASE_NAME,
+            "endpoint": MCP_URL,
+            "ms": int((time.time() - t0) * 1000),
+            "total": len(rows),
+            "kbs": rows,
+        }
+    except KnowledgeError as e:
+        return {"ok": False, "base": BASE_NAME, "error": str(e)[:200]}
+    except Exception as e:
+        return {
+            "ok": False,
+            "base": BASE_NAME,
+            "error": "%s: %s" % (type(e).__name__, str(e)[:200]),
+        }
+
+
 def _parse_search_xml(text: str) -> list:
     """解析 search_knowledge 的 XML 结果为 chunk 字典列表。
 
@@ -444,9 +483,13 @@ def search(
     }
 
 
-def list_documents(limit=50):
-    """列出知识库文档（MCP 版：title/file_name/parse_status 映射到 run/progress 语义）。"""
-    ids = _resolve_kb_ids()
+def list_documents(limit=50, dataset_ids=None):
+    """列出知识库文档（MCP 版：title/file_name/parse_status 映射到 run/progress 语义）。
+
+    `dataset_ids`（2026-10-30 追加，末尾追加不改既有位置）：客户端指定知识库
+    ID 时按传入库列出；为空回落 KNOWLEDGE_KB_IDS 默认作用域。
+    """
+    ids = _resolve_kb_ids(dataset_ids)
     if len(ids) > 1:
         # 多库场景下逐库列出；前端消费形状不变（dataset_id 取首个，total 为合计）
         rows, total = [], 0

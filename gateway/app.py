@@ -393,6 +393,26 @@ def demand_set_status(
 # M2 · 知识检索（RAGFlow 引用式召回）
 # ---------------------------------------------------------------------------
 @mcp.tool
+def knowledge_list_kbs() -> dict:
+    """列出知识底座上**全部可见知识库**（客户端选库入口）。
+
+    WeKnora 底座上有多个知识库时，客户端据此选择要操作的目标库 ID，
+    再把该 ID 传给 knowledge_search / knowledge_documents / knowledge_upload
+    的 `kb_id` 参数，实现业务域之间的逻辑隔离与引用授权。
+
+    返回的 `is_default` 标注了服务端 KNOWLEDGE_KB_IDS 配置的默认库；
+    `kb_id` 传空串时一律回落默认库，已有调用方零改动。
+    """
+    fn = getattr(knowledge, "list_kbs", None)
+    if fn is None:
+        return {"ok": False, "error": "当前知识后端未实现 list_kbs"}
+    try:
+        return fn()
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@mcp.tool
 def knowledge_search(
     question: str,
     top_k: int = 5,
@@ -400,6 +420,7 @@ def knowledge_search(
     vector_weight: float = 0.7,
     demand_id: str = "",
     round_no: int = 0,
+    kb_id: str = "",
 ) -> dict:
     """检索知识库（制度 / 口径 / 表样），返回**带来源的引用**。
 
@@ -408,11 +429,17 @@ def knowledge_search(
 
     参数说明（默认值经实测校准）：
     - `threshold` 相似度下限，**必须 >0**（传 0 会被服务端按 falsy 回退成 0.2）；
-    - `vector_weight` 向量权重，默认 0.7；官方默认 0.3 偏重关键词，中文长问句易漏召回。
+    - `vector_weight` 向量权重，默认 0.7；官方默认 0.3 偏重关键词，中文长问句易漏召回；
+    - `kb_id`（2026-10-30 末尾追加）指定知识库 ID（见 knowledge_list_kbs），
+      多库场景下实现业务域逻辑隔离；为空回落服务端默认配置。
     """
     try:
         out = knowledge.search(
-            question, top_k=top_k, threshold=threshold, vector_weight=vector_weight
+            question,
+            dataset_ids=[kb_id] if kb_id else None,
+            top_k=top_k,
+            threshold=threshold,
+            vector_weight=vector_weight,
         )
     except Exception as e:
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
@@ -438,10 +465,15 @@ def knowledge_health() -> dict:
 
 
 @mcp.tool
-def knowledge_documents(limit: int = 50) -> dict:
-    """列出知识库当前已入库文档（名称 / 解析状态 / 分块数）。"""
+def knowledge_documents(limit: int = 50, kb_id: str = "") -> dict:
+    """列出知识库当前已入库文档（名称 / 解析状态 / 分块数）。
+
+    `kb_id`（2026-10-30 末尾追加）指定知识库 ID；为空回落默认作用域。
+    """
     try:
-        return knowledge.list_documents(limit=limit)
+        return knowledge.list_documents(
+            limit=limit, dataset_ids=[kb_id] if kb_id else None
+        )
     except Exception as e:
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
@@ -452,6 +484,7 @@ def knowledge_upload(
     content_base64: str,
     content_type: str = "",
     actor: str = "",
+    kb_id: str = "",
 ) -> dict:
     """上传一份文档到知识库并触发解析（知识准入）。
 
@@ -466,6 +499,7 @@ def knowledge_upload(
                    走 base64 才能原样传pdf/docx）。
     content_type   MIME，可留空。
     actor          操作人，仅用于留痕。
+    kb_id          （2026-10-30 末尾追加）目标知识库 ID；为空入库默认库。
 
     准入范围：只放行文档类扩展名（md/txt/pdf/docx/xlsx/csv/html 等），
     单文件上限默认 32MB（`KNOWLEDGE_MAX_UPLOAD_MB`可调）。
@@ -485,7 +519,7 @@ def knowledge_upload(
                 "error": "content_base64 解码失败：%s: %s" % (type(e).__name__, str(e)[:160]),
             }
         result = knowledge.upload_document(
-            filename, raw, content_type=content_type, dataset_id=""
+            filename, raw, content_type=content_type, dataset_id=kb_id
         )
         if result.get("ok") and actor:
             _record_knowledge_event(actor, "knowledge_upload", filename[:200], result)

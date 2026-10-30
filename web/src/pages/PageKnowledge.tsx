@@ -69,11 +69,49 @@ function runView(run: unknown, progress: unknown) {
   return { label: r || '未知', cls: 'chip chip-muted' }
 }
 
+/** 选库记忆的 localStorage 键。多库场景下客户端指定知识库 ID 做逻辑隔离。 */
+const KB_STORAGE_KEY = 'askoda.kb_id'
+
 export default function PageKnowledge({ demandId }: { demandId: string | null }) {
   const [health, setHealth] = useState<Record<string, any> | null>(null)
   const [docs, setDocs] = useState<Record<string, any> | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<unknown>(null)
+
+  // ---- 目标知识库选择（2026-10-30 · 多库逻辑隔离）----
+  // kbId 为空 = 服务端默认库（KNOWLEDGE_KB_IDS）；选中后检索/资产/上传都只针对该库。
+  const [kbs, setKbs] = useState<any[]>([])
+  const [kbErr, setKbErr] = useState('')
+  const [kbId, setKbId] = useState<string>(() => {
+    try {
+      return localStorage.getItem(KB_STORAGE_KEY) || ''
+    } catch {
+      return ''
+    }
+  })
+
+  const loadKbs = useCallback(async () => {
+    try {
+      const r: any = await api.knowledgeKbs()
+      if (r?.ok === false) setKbErr(String(r.error || '知识库列表获取失败'))
+      else {
+        setKbErr('')
+        setKbs(Array.isArray(r?.kbs) ? r.kbs : [])
+      }
+    } catch (e: any) {
+      setKbErr(String(e?.message || e))
+    }
+  }, [])
+
+  const pickKb = (id: string) => {
+    setKbId(id)
+    try {
+      if (id) localStorage.setItem(KB_STORAGE_KEY, id)
+      else localStorage.removeItem(KB_STORAGE_KEY)
+    } catch {
+      /* localStorage 不可用（隐私模式）时不记忆，仅本次会话生效 */
+    }
+  }
 
   const [q, setQ] = useState('')
   const [search, setSearch] = useState<Record<string, any> | null>(null)
@@ -100,7 +138,7 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
     setLoading(true)
     setError(null)
     try {
-      const [h, d] = await Promise.all([api.knowledgeHealth(), api.knowledgeDocuments(50)])
+      const [h, d] = await Promise.all([api.knowledgeHealth(), api.knowledgeDocuments(50, kbId)])
       setHealth(h)
       setDocs(d)
     } catch (e) {
@@ -108,11 +146,15 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [kbId])
 
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    loadKbs()
+  }, [loadKbs])
 
   /** 轮询解析进度：有RUNNING/UNSTART 就继续查，全部 DONE 后停。 */
   const pollOnce = useCallback(async () => {
@@ -172,6 +214,7 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
         content_base64: b64,
         content_type: file.type || '',
         actor: 'web-ui',
+        kb_id: kbId || undefined,
       })
       if (r?.ok === false) {
         // 重名：库里已有同一份口径，后端会拦下（否则 RAGFlow 静默改名成
@@ -232,7 +275,7 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
     setSearchBusy(true)
     setError(null)
     try {
-      const r = await api.knowledgeSearch({ question: q.trim(), top_k: 5 })
+      const r = await api.knowledgeSearch({ question: q.trim(), top_k: 5, kb_id: kbId || undefined })
       setSearch(r)
     } catch (e) {
       setError(e)
@@ -282,6 +325,31 @@ export default function PageKnowledge({ demandId }: { demandId: string | null })
             <code>{health?.document_count ?? items.length ?? '-'}</code>
           </div>
         </div>
+        {kbErr ? <div className="errbox"><div className="errbox-title"><RichText text={kbErr} /></div></div> : null}
+        <div className="trace" style={{ alignItems: 'center' }}>
+          <div>
+            <span className="trace-k">目标知识库</span>
+            <select
+              className="textinput"
+              style={{ width: 'auto', minWidth: 240, display: 'inline-block', marginLeft: 8 }}
+              value={kbId}
+              onChange={(e) => pickKb(e.target.value)}
+            >
+              <option value="">默认（服务端配置 KNOWLEDGE_KB_IDS）</option>
+              {kbs.map((k: any) => (
+                <option key={k.id} value={k.id}>
+                  {k.name || k.id}
+                  {k.is_default ? ' · 默认' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <p className="muted">
+          底座上有多个知识库时，在这里指定目标库 ID（逻辑隔离；选择会记住）。
+          下方「知识库资产 / 知识检索 / 知识收集」均只针对所选库操作；
+          留空即用服务端默认配置的库。
+        </p>
         {health ? (
           <details className="fold">
             <summary>健康详情原文（排障用）</summary>

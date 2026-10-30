@@ -976,6 +976,7 @@ class KnowledgeSearchIn(BaseModel):
     threshold: float = Field(default=0.1, description="相似度下限，必须 >0（传 0 会被服务端回退成 0.2）")
     vector_weight: float = Field(default=0.7)
     demand_id: str = Field(default="", description="留痕用；为空则只检索不登记引用")
+    kb_id: str = Field(default="", description="指定知识库 ID（见 /knowledge/kbs）；为空用服务端默认库")
 
 
 @app.get(f"{API}/knowledge/health", tags=["知识储备"])
@@ -984,10 +985,20 @@ async def knowledge_health() -> Any:
     return sanitize(await call("knowledge_health", {}))
 
 
+@app.get(f"{API}/knowledge/kbs", tags=["知识储备"])
+async def knowledge_kbs() -> Any:
+    """列出知识底座上全部可见知识库（客户端选库入口，多库逻辑隔离用）。
+
+    前端把选中的 `kb.id` 作为 `kb_id` 传给检索 / 资产 / 上传接口；
+    不选（空串）即用服务端 KNOWLEDGE_KB_IDS 配置的默认库。
+    """
+    return sanitize(await call("knowledge_list_kbs", {}))
+
+
 @app.get(f"{API}/knowledge/documents", tags=["知识储备"])
-async def knowledge_documents(limit: int = 50) -> Any:
-    """知识库资产：已入库文档（名称 / 解析状态 / 分块数）。"""
-    return sanitize(await call("knowledge_documents", {"limit": limit}))
+async def knowledge_documents(limit: int = 50, kb_id: str = "") -> Any:
+    """知识库资产：已入库文档（名称 / 解析状态 / 分块数）。kb_id 指定目标库。"""
+    return sanitize(await call("knowledge_documents", {"limit": limit, "kb_id": kb_id}))
 
 
 @app.post(f"{API}/knowledge/search", tags=["知识储备"])
@@ -1002,6 +1013,7 @@ async def knowledge_search(body: KnowledgeSearchIn) -> Any:
                 "threshold": body.threshold,
                 "vector_weight": body.vector_weight,
                 "demand_id": body.demand_id,
+                "kb_id": body.kb_id,
             },
         )
     )
@@ -1034,6 +1046,7 @@ class KnowledgeUploadIn(BaseModel):
     content_base64: str = Field(min_length=1, description="文件内容 base64")
     content_type: str = Field(default="", description="MIME，可留空")
     actor: str = Field(default="")
+    kb_id: str = Field(default="", description="目标知识库 ID；为空入库默认库")
 
 
 class KnowledgeDeleteIn(BaseModel):
@@ -1056,6 +1069,7 @@ async def knowledge_upload(body: KnowledgeUploadIn) -> Any:
                 "content_base64": body.content_base64,
                 "content_type": body.content_type,
                 "actor": body.actor,
+                "kb_id": body.kb_id,
             },
         )
     except McpError as exc:
