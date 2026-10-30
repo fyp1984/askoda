@@ -22,11 +22,9 @@ export default function GapFiller({
   dataset: string
   onRetried: () => void | Promise<void>
 }) {
-  const [assets, setAssets] = useState<{ tables: string[]; knowledge: string[] } | null>(null)
+  const [assets, setAssets] = useState<{ tables: string[] } | null>(null)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'what' | 'gap' | 'how'>('gap')
-  const [uploading, setUploading] = useState(false)
-  const [uploadMsg, setUploadMsg] = useState('')
   const [realigning, setRealigning] = useState(false)
   const [realignMsg, setRealignMsg] = useState('')
 
@@ -40,21 +38,14 @@ export default function GapFiller({
     let alive = true
     ;(async () => {
       setLoading(true)
-      const [mdl, docs] = await Promise.all([
-        api.semanticMdl({ dataset }).catch(() => null),
-        api.knowledgeDocuments(100).catch(() => null),
-      ])
+      const mdl = await api.semanticMdl({ dataset }).catch(() => null)
       if (!alive) return
       const tables: string[] = []
       const md = (mdl as any)?.tables || []
       for (const t of md) {
         if (t?.table_name) tables.push(`${t.table_name}（${(t.columns || []).length} 字段）`)
       }
-      const knowledge: string[] = ((docs as any)?.documents || []).map((d: any) => {
-        const nm = d.name || d.document_name || '未命名'
-        return `${nm}${d.chunk_count ? `（${d.chunk_count} 块）` : ''}`
-      })
-      setAssets({ tables, knowledge })
+      setAssets({ tables })
       setLoading(false)
     })()
     return () => {
@@ -62,41 +53,14 @@ export default function GapFiller({
     }
   }, [dataset])
 
-  // 知识文档补写：直接把界面输入送进知识库，避免「知道要补却无处可补」
-  const onUpload = async (file: File) => {
-    setUploading(true)
-    setUploadMsg('上传中…')
-    try {
-      const b64 = await new Promise<string>((resolve, reject) => {
-        const fr = new FileReader()
-        fr.onload = () => {
-          const s = String(fr.result || '')
-          resolve(s.includes(',') ? s.split(',')[1] : s)
-        }
-        fr.onerror = () => reject(new Error('读取文件失败'))
-        fr.readAsDataURL(file)
-      })
-      const r = await api.knowledgeUpload({
-        filename: file.name,
-        content_base64: b64,
-        content_type: 'text/markdown',
-        actor: '业务/技术补全',
-      })
-      setUploadMsg(
-        `✅ 已上传《${r?.name || file.name}》，入库通常很快；完成后点「重新对齐」验证。`,
-      )
-    } catch (e: any) {
-      setUploadMsg(`❌ 上传失败：${e?.message || e}`)
-    } finally {
-      setUploading(false)
-    }
-  }
+  // 知识补全指引（CR009）：客户端不设知识上传/检索入口，知识收集与治理全部在
+  // WeKnora 知识库平台完成后，回这里「重新对齐」——分析链路经网关 MCP 重新读取知识。
 
-  // 重新对齐：先重跑分析摄入新知识，再重新生成。此前静默回调、无任何反馈，
+  // 重新对齐：先重跑分析读取最新知识，再重新生成。此前静默回调、无任何反馈，
   // 用户感知「点了没反应」（2026-10-22 修复）。
   const handleRetry = async () => {
     setRealigning(true)
-    setRealignMsg('正在重新分析并摄入新知识…')
+    setRealignMsg('正在重新分析并读取最新知识…')
     try {
       await onRetried()
       setRealignMsg('✅ 已重新对齐并重新生成，请查看上方 SQL 与门禁结果')
@@ -135,33 +99,19 @@ export default function GapFiller({
       {tab === 'what' ? (
         <div className="gapbody">
           {loading ? (
-            <Loading tip="正在读取语义层与知识库现状…" />
+            <Loading tip="正在读取语义层现状…" />
           ) : (
-            <div className="two-col">
-              <div className="colcard">
-                <div className="colhead">可见数据表（{assets?.tables.length || 0}）</div>
-                <ul className="asslist">
-                  {(assets?.tables || []).map((t) => (
-                    <li key={t}>{t}</li>
-                  ))}
-                  {(!assets?.tables || !assets.tables.length) && <li className="muted">读取失败</li>}
-                </ul>
-                <p className="tip">
-                  口径只能建立在这些表之上。若所需数据不在此列，属<b>数据缺失</b>，须先接入数据源。
-                </p>
-              </div>
-              <div className="colcard">
-                <div className="colhead">知识库已有文档（{assets?.knowledge.length || 0}）</div>
-                <ul className="asslist">
-                  {(assets?.knowledge || []).map((k) => (
-                    <li key={k}>{k}</li>
-                  ))}
-                  {(!assets?.knowledge || !assets.knowledge.length) && (
-                    <li className="muted">知识库为空或读取失败</li>
-                  )}
-                </ul>
-                <p className="tip">若所需口径已在此列内，直接引用，无需重写。</p>
-              </div>
+            <div className="colcard">
+              <div className="colhead">可见数据表（{assets?.tables.length || 0}）</div>
+              <ul className="asslist">
+                {(assets?.tables || []).map((t) => (
+                  <li key={t}>{t}</li>
+                ))}
+                {(!assets?.tables || !assets.tables.length) && <li className="muted">读取失败</li>}
+              </ul>
+              <p className="tip">
+                口径只能建立在这些表之上。若所需数据不在此列，属<b>数据缺失</b>，须先接入数据源。
+              </p>
             </div>
           )}
         </div>
@@ -204,20 +154,12 @@ export default function GapFiller({
           </ol>
 
           <div className="upbox">
-            <div className="colhead">直接补写知识（随时可用）</div>
+            <div className="colhead">知识补全（在 WeKnora 知识库平台完成）</div>
             <p className="tip">
-              选中补写好的 Markdown（建议命名《XX-口径补充说明-数据域》），上传进知识库：
+              本系统客户端不提供知识上传入口（CR009）。请到 <b>WeKnora 知识库平台</b>
+              上传或更新对应口径文档（建议命名《XX-口径补充说明-数据域》），平台完成解析上架后，
+              回到这里点「重新对齐」——分析链路会经知识底座 MCP 自动读取最新知识。
             </p>
-            <input
-              type="file"
-              accept=".md,.markdown,.txt"
-              disabled={uploading}
-              onChange={(e) => {
-                const f = e.target.files?.[0]
-                if (f) onUpload(f)
-              }}
-            />
-            {uploadMsg ? <p className="upmsg"><RichText text={uploadMsg} /></p> : null}
           </div>
 
           <div className="donebox">

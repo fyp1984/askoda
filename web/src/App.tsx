@@ -4,7 +4,6 @@ import { RoleProvider, useRole, ROLE_META, ROLES, type Role } from './role'
 import SideNav from './components/SideNav'
 import WizardStepper from './components/WizardStepper'
 import PageMdl from './pages/PageMdl'
-import PageKnowledge from './pages/PageKnowledge'
 import PageDatasource from './pages/PageDatasource'
 import PageDemandList from './pages/PageDemandList'
 import PageSubmit from './pages/PageSubmit'
@@ -16,8 +15,8 @@ import PageSettings from './pages/PageSettings'
 import DemandStatusActions from './components/DemandStatusActions'
 import { Card } from './components/ui'
 
-/** 模块 key（左侧导航）。 */
-type MenuKey = 'demand' | 'mdl' | 'knowledge' | 'datasource' | 'audit' | 'system'
+/** 模块 key（左侧导航）。知识管理入口已按 CR009 剔除——知识收集/治理全部在 WeKnora 平台完成，Askoda 经 MCP 消费。 */
+type MenuKey = 'demand' | 'mdl' | 'datasource' | 'audit' | 'system'
 /** 需求链路内的步骤 key。'list' 是需求列表枢纽页，不计入向导五步。 */
 type StepKey = 'list' | 'submit' | 'analysis' | 'confirm' | 'sql' | 'delivery'
 
@@ -297,7 +296,6 @@ function AppShell() {
           ) : null}
 
           {menu === 'mdl' ? <PageMdl dataset={dataset} onNotify={notify} /> : null}
-          {menu === 'knowledge' ? <PageKnowledge demandId={demandId} /> : null}
           {menu === 'datasource' ? (
             <PageDatasource dataset={dataset} demandId={demandId} onNotify={notify} />
           ) : null}

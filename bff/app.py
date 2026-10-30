@@ -966,138 +966,14 @@ async def semantic_collect(body: CollectIn) -> Any:
 
 
 # --------------------------------------------------------------------------
-# M8 · 菜单② 知识储备
-# PRD §12.7：知识收集 / 知识准入 / 知识库资产。
-# 说明：上传与准入依赖 RAGFlow 独立栈（B4），当前先交付「检索 + 资产 + 引用溯源」。
 # --------------------------------------------------------------------------
-class KnowledgeSearchIn(BaseModel):
-    question: str = Field(min_length=1, description="检索问题")
-    top_k: int = Field(default=5)
-    threshold: float = Field(default=0.1, description="相似度下限，必须 >0（传 0 会被服务端回退成 0.2）")
-    vector_weight: float = Field(default=0.7)
-    demand_id: str = Field(default="", description="留痕用；为空则只检索不登记引用")
-    kb_id: str = Field(default="", description="指定知识库 ID（见 /knowledge/kbs）；为空用服务端默认库")
-
-
-@app.get(f"{API}/knowledge/health", tags=["知识储备"])
-async def knowledge_health() -> Any:
-    """知识库连通性与数据集可见性（含已解析文档数）。"""
-    return sanitize(await call("knowledge_health", {}))
-
-
-@app.get(f"{API}/knowledge/kbs", tags=["知识储备"])
-async def knowledge_kbs() -> Any:
-    """列出知识底座上全部可见知识库（客户端选库入口，多库逻辑隔离用）。
-
-    前端把选中的 `kb.id` 作为 `kb_id` 传给检索 / 资产 / 上传接口；
-    不选（空串）即用服务端 KNOWLEDGE_KB_IDS 配置的默认库。
-    """
-    return sanitize(await call("knowledge_list_kbs", {}))
-
-
-@app.get(f"{API}/knowledge/documents", tags=["知识储备"])
-async def knowledge_documents(limit: int = 50, kb_id: str = "") -> Any:
-    """知识库资产：已入库文档（名称 / 解析状态 / 分块数）。kb_id 指定目标库。"""
-    return sanitize(await call("knowledge_documents", {"limit": limit, "kb_id": kb_id}))
-
-
-@app.post(f"{API}/knowledge/search", tags=["知识储备"])
-async def knowledge_search(body: KnowledgeSearchIn) -> Any:
-    """检索知识库，返回带来源的引用（文档名 / 片段定位 / 相似度）。"""
-    return sanitize(
-        await call(
-            "knowledge_search",
-            {
-                "question": body.question,
-                "top_k": body.top_k,
-                "threshold": body.threshold,
-                "vector_weight": body.vector_weight,
-                "demand_id": body.demand_id,
-                "kb_id": body.kb_id,
-            },
-        )
-    )
-
-
-@app.get(f"{API}/knowledge/citations", tags=["知识储备"])
-async def knowledge_citations(
-    demand_id: str = "", include_retired: bool = False, limit: int = 50
-) -> Any:
-    """知识引用留痕记录（按 demand_id 筛选；为空则返回跨需求最近记录）。"""
-    return sanitize(
-        await call(
-            "knowledge_citation_list",
-            {"demand_id": demand_id, "include_retired": include_retired, "limit": limit},
-        )
-    )
-
-
+# 知识管理客户端接口已按 CR009 整体剔除（2026-10-30）
 # --------------------------------------------------------------------------
-# M8 · 知识准入（上传 / 解析进度 / 撤库）
-#
-# 为什么走 base64 JSON 而不用 multipart 上传
-# ------------------------------------------
-# FastAPI 收 `UploadFile` 需要 `python-multipart`，而本项目红线五「不新增运行时依赖」。
-# 前端用浏览器内置 `FileReader` 读 base64 即可，零新依赖；
-# 网关侧 `knowledge_upload` 本来就收 `content_base64`，两头都不必引库。
+# 产品内核：知识收集、准入、上架、下架等知识库管理操作全部在 WeKnora 知识库平台
+# 完成，Askoda 客户端不设知识上传 / 检索 / 资产 / 撤库入口；分析链路对知识的调取
+# 走网关 MCP（服务端内部消费面），不经客户端 REST。原 /knowledge/* 八条路由与
+# 三个入参模型一并移除；引用溯源保留在 /demand/{id}/citations（④合规审计段留痕）。
 # --------------------------------------------------------------------------
-class KnowledgeUploadIn(BaseModel):
-    filename: str = Field(min_length=1, description="原始文件名，含扩展名")
-    content_base64: str = Field(min_length=1, description="文件内容 base64")
-    content_type: str = Field(default="", description="MIME，可留空")
-    actor: str = Field(default="")
-    kb_id: str = Field(default="", description="目标知识库 ID；为空入库默认库")
-
-
-class KnowledgeDeleteIn(BaseModel):
-    document_id: str = Field(min_length=1)
-    actor: str = Field(default="")
-
-
-@app.post(f"{API}/knowledge/upload", tags=["知识储备"])
-async def knowledge_upload(body: KnowledgeUploadIn) -> Any:
-    """上传文档到知识库并触发解析。
-
-    解析是**异步**的：本调用返回后请轮询 `GET /knowledge/status` 直到
-    `run=DONE`，否则文档还不被检索命中。
-    """
-    try:
-        result = await call(
-            "knowledge_upload",
-            {
-                "filename": body.filename,
-                "content_base64": body.content_base64,
-                "content_type": body.content_type,
-                "actor": body.actor,
-                "kb_id": body.kb_id,
-            },
-        )
-    except McpError as exc:
-        raise ApiError(
-            code="KNOWLEDGE_UPLOAD_FAILED",
-            message=str(exc),
-            hint="请确认知识库 API 可用、文件名带扩展名、文件未超限。",
-        )
-    return sanitize(result)
-
-
-@app.get(f"{API}/knowledge/status", tags=["知识储备"])
-async def knowledge_status(document_id: str = "", limit: int = 50) -> Any:
-    """文档解析进度（前端轮询用）。不传 document_id 返回全部。"""
-    return sanitize(await call("knowledge_document_status", {"document_id": document_id, "limit": limit}))
-
-
-@app.post(f"{API}/knowledge/delete", tags=["知识储备"])
-async def knowledge_delete(body: KnowledgeDeleteIn) -> Any:
-    """从知识库撤库一份文档（只删 RAGFlow 侧，不碰需求单与附件）。"""
-    try:
-        result = await call(
-            "knowledge_delete",
-            {"document_id": body.document_id, "actor": body.actor},
-        )
-    except McpError as exc:
-        raise ApiError(code="KNOWLEDGE_DELETE_FAILED", message=str(exc))
-    return sanitize(result)
 
 
 # --------------------------------------------------------------------------

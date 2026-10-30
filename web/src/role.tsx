@@ -47,19 +47,13 @@ export const NAV_ITEMS: NavItem[] = [
     desc: '从提需求到出数交付的一条龙',
     access: { R1: 'full', R2: 'full', R3: 'readonly', R4: 'readonly' },
   },
-  // 系统里的资产
+  // 系统里的资产。菜单「经验库」（知识储备）已按 CR009 剔除：
+  // 知识收集/治理全部在 WeKnora 平台完成，Askoda 经 MCP 消费，客户端不设知识管理入口。
   {
     key: 'mdl',
     label: '业务说法字典',
     zone: 'assets',
     desc: '业务术语到库表字段的映射',
-    access: { R1: 'readonly', R2: 'readonly', R3: 'full', R4: 'readonly' },
-  },
-  {
-    key: 'knowledge',
-    label: '经验库',
-    zone: 'assets',
-    desc: '沉淀过的口径与判断经验',
     access: { R1: 'readonly', R2: 'readonly', R3: 'full', R4: 'readonly' },
   },
   {
