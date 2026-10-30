@@ -2,6 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { Card, ErrorBox, Loading } from '../components/ui'
 import RichText from '../components/RichText'
+// 缺因是 {code, detail} 对象，原样 String() 会渲染成 [object Object]；
+// 统一走 display 层转成人话（含未知错误码的去码兜底）。
+import { missReasonText } from '../lib/display'
 
 /**
  * 菜单③ · 数据源接入
@@ -189,7 +192,7 @@ export default function PageDatasource({
             {cand?.miss_reason ? (
               <div className="warnbox">
                 <div className="warnbox-title">未命中候选</div>
-                <div className="warnbox-hint"><RichText text={String(cand.miss_reason)} /></div>
+                <div className="warnbox-hint"><RichText text={missReasonText(cand.miss_reason) || '未命中候选'} /></div>
               </div>
             ) : null}
             <pre className="sqlbox small">{JSON.stringify(cand, null, 2)}</pre>

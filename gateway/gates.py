@@ -579,7 +579,14 @@ def _result_assertions(exec_result):
     n = len(data)
 
     if n == 0:
-        signals.append("结果集为空（0 行），请检查过滤条件或时间范围是否过窄")
+        # 「0 行」有两种成因，必须分清楚否则会把人引去做无效调整（2026-10-30
+        # 实测 DR-20261030-GJRN：需求要「2026 年 1 月以来新注册会员」，而会员表
+        # 最新注册日期是 2024-07 —— 0 行是**事实正确**，不是 SQL 写窄了）。
+        signals.append(
+            "结果集为空（0 行）：可能是过滤条件/时间范围过窄，"
+            "也可能该期间业务上确实没有数据。"
+            "建议先去掉时间条件再跑一次，核对整表范围是否本就为空"
+        )
     elif n > 100000:
         signals.append("结果集行数 %d 超过上限 100000，请增加过滤条件或下调颗粒度" % n)
 
@@ -681,7 +688,15 @@ def review(
         ast_stmts = sqlglot.parse(sql, read="postgres")
         if not ast_stmts or any(s is None for s in ast_stmts):
             l1_ok = False
-            l1_detail = "SQL 为空或未解析出有效语句（空串 / 纯空白 / 纯注释 / 纯分隔符）"
+            # 说明里必须区分「没生成出来」和「写错了」——两者的处置动作完全不同：
+            # 前者要去补口径/字段（知识库或语义层），后者才是改 SQL。
+            # 早先只写「SQL 为空或未解析出有效语句」，业务方会以为是 SQL 写法问题，
+            # 反复点「重新生成」也无效（2026-10-30 实测 DR-20261030-GJRN）。
+            l1_detail = (
+                "SQL 为空或未解析出有效语句（空串 / 纯空白 / 纯注释 / 纯分隔符）。"
+                "这不是 SQL 写法问题：上游没生成出内容，请看上方「口径未建模 / 缺口」提示，"
+                "先补齐口径或字段再重新生成。"
+            )
             syntax_issues.append(l1_detail)
     except sqlglot.errors.ParseError as e:
         l1_ok = False

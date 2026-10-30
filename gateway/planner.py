@@ -339,7 +339,12 @@ NEG_PENDING = [
 
 
 def _months_in(t):
-    ms = re.findall(r"(\d{4})年(\d{1,2})月", t)
+    # 需求原文常写成「2026 年 1 月」（数字与年月之间有空格，业务人员手打就是这样），
+    # 原正则 `(\d{4})年(\d{1,2})月` 一个都匹配不到 → 时间条件被静默丢掉，
+    # SQL 变成"全量统计"还照常返回，比报错更危险（2026-10-30 实测
+    # DR-20261030-GJRN「2026 年 1 月份以来」）。先把年月日两侧空白规整掉再匹配。
+    s = re.sub(r"\s*(年|月|日)\s*", r"\1", t or "")
+    ms = re.findall(r"(\d{4})年(\d{1,2})月", s)
     return ["%s-%02d-01" % (y, int(m)) for y, m in ms]
 
 
@@ -724,6 +729,57 @@ def plan_b(dataset, nl):
     _combo = _store_metric_combo(dataset, t)
     if _combo:
         return _combo
+    # ── 新增 / 新注册会员（2026-10-30 补）────────────────────────────────
+    # 实测 DR-20261030-GJRN：「统计 2026 年 1 月份以来 所有新注册的会员的数量
+    # 及其对应的明细信息」。库里 `dim_member.register_date` 就在语义层里，
+    # 但 plan_b 没有这条意图 → 掉进兜底「口径未建模」被硬拒，
+    # 业务方看到的是"系统没建这个口径"，而事实是"口径就摆在那没登记"。
+    #
+    # 三处刻意选择：
+    #   ① 明细列**逐个点名**，不用 `SELECT *`：`member_phone` / `id_card` 在 MDL 里是
+    #      【未建模：对 AI 不可见】，星号会把它们带出来（红线：敏感字段不进生成结果）。
+    #   ② 数量与明细同一次返回：用 `COUNT(*) OVER ()` 挂在明细行上，业务方既看到
+    #      逐条明细，也知道总数是多少；分两条 SQL 会让人自己加总，容易口径打架。
+    #   ③ 时间用 `>= 月初`（「以来」语义），不给上限——上限写在需求里才加。
+    if any(k in t for k in ("新注册", "新增会员", "新增的会员", "注册会员", "新会员")) or (
+        "注册" in t and "会员" in t
+    ):
+        since = m1
+        where_sql = "WHERE m.register_date >= '%s'" % since if since else ""
+        _member_rule = [
+            "口径：新注册会员 = dim_member 中 register_date 落在统计起点之后的会员",
+            "敏感字段（会员手机号 / 身份证）未建模，SQL 不引用",
+        ]
+        if "各门店" in t or "按门店" in t:
+            return _ok(
+                "B",
+                "新增会员数·门店",
+                "SELECT s.store_name AS 归属门店, COUNT(*) AS 新增会员数 "
+                "FROM dim_member m JOIN dim_store s ON m.store_id = s.store_id %s "
+                "GROUP BY s.store_name ORDER BY 新增会员数 DESC" % where_sql,
+                _objects(dataset, ["dim_member", "dim_store"], rules=_member_rule),
+            )
+        want_detail = any(
+            k in t for k in ("明细", "基本信息", "信息", "列表", "清单", "逐条", "分别列出")
+        )
+        if not want_detail:
+            return _ok(
+                "B",
+                "新增会员数",
+                "SELECT COUNT(*) AS 新增会员数 FROM dim_member m %s" % where_sql,
+                _objects(dataset, ["dim_member"], rules=_member_rule),
+            )
+        return _ok(
+            "B",
+            "新增会员明细（含总数）",
+            "SELECT m.member_id AS 会员ID, m.member_name AS 会员姓名, m.grade AS 会员等级, "
+            "m.member_status AS 会员状态, m.register_date AS 注册日期, "
+            "s.store_name AS 归属门店, COUNT(*) OVER () AS 新增会员总数 "
+            "FROM dim_member m LEFT JOIN dim_store s ON m.store_id = s.store_id %s "
+            "ORDER BY m.register_date, m.member_id" % where_sql,
+            _objects(dataset, ["dim_member", "dim_store"], rules=_member_rule),
+        )
+
     if ("会员数" in t or "会员人数" in t) and ("门店" in t):
         return _ok(
             "B",
@@ -1143,12 +1199,14 @@ def plan_b(dataset, nl):
     _supported = _supported_intents_b(t)
     _gap = _explain_gap_b(dataset, t)
     _guide = (
-        "请按以下顺序补齐后重试（不需要改代码）：\n"
+        "请按以下顺序补齐后重试（业务方只需做①，②由技术方完成）：\n"
         "① 业务口径 → 在知识库《01-指标口径说明书·零售会员域》补充该口径定义"
         "（含计算公式、统计范围、排除项、并列排序规则），"
         "由业务方确认口径、技术方落文档；\n"
-        "② 语义建模 → 在 gateway/planner.py 的 plan_b 中登记该意图"
-        "（参照同文件内既有意图写法，SQL 必须只引用 MDL 可见对象）；\n"
+        "② 语义登记 → 技术方在语义层登记该意图（实现位置 "
+        "gateway/planner.py 的 plan_b，参照同文件既有意图写法，"
+        "SQL 只引用 MDL 可见对象）——**这一步不是业务方能自助完成的**，"
+        "请把本条差距转给技术方排期；\n"
         "③ 补齐后重新点「生成 SQL」，系统会重新对齐。"
     )
     return _refuse(
@@ -1173,6 +1231,8 @@ def _supported_intents_b(t):
         names.append("订单量·门店/时间")
     if "最活跃" in t or "活跃客户" in t or "购买频次" in t or "下单频次" in t:
         names.append("活跃会员排行（购买频次口径）")
+    if "新注册" in t or "新增会员" in t or "新会员" in t or "注册" in t:
+        names += ["新增会员数", "新增会员明细（含总数）", "新增会员数·门店"]
     if "券" in t or "核销" in t:
         names.append("（券核销相关口径「待上架」，当前不可用）")
     return "、".join(names) if names else "（无匹配：当前需求未触及任何已建模口径）"

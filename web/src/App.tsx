@@ -131,7 +131,25 @@ function AppShell() {
     api
       .e2eStatus(demandId, dataset)
       .then((s) => {
-        if (alive) setStatus(s)
+        if (!alive) return
+        // 僵尸需求单：页面从 localStorage / URL 恢复的单号可能已被清理，
+        // 需求块取不到且原因明确是「不存在」时，必须退回列表——
+        // 否则用户可以在这条并不存在的需求上继续点「生成候选 / 生成 SQL」，
+        // 每一步都报错，看起来像系统坏了（2026-10-30 实测 DR-20261021-A1AL）。
+        const gone =
+          !s?.demand &&
+          (s?.partial_errors || []).some(
+            (e: any) => e?.block === 'demand' && /不存在/.test(String(e?.detail || '')),
+          )
+        if (gone) {
+          const stale = demandId
+          persistDemand(null, 'list')
+          setDemandId(null)
+          setStep('list')
+          notify(`需求 ${stale} 已不存在（可能已被清理），已回到需求列表，请重新选择`)
+          return
+        }
+        setStatus(s)
       })
       .catch(() => {
         if (alive) setStatus(null)
@@ -139,7 +157,7 @@ function AppShell() {
     return () => {
       alive = false
     }
-  }, [demandId, dataset, token])
+  }, [demandId, dataset, token, notify])
 
   useEffect(() => {
     persistDemand(demandId, step)

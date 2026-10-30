@@ -985,10 +985,32 @@ def schema_candidates(demand_id: str, dataset: str = "B") -> dict:
 
     候选**只在语义层闭集内产生**，不连物理库猜字段；未命中时给 `miss_reason`，**不猜、不填**。
     关联路径每条都能指回 `mdl.relationships` 的下标（可回溯）。
+
+    前置：该需求必须已经跑过需求分析、产出了结构化需求对象。缺前置时返回
+    `{ok:false, error, hint}`，其中 `hint` 是给业务方可执行的下一步（不含内部工具名）。
     """
+    # 先分两类前置缺失，别把两种不同的情况说成同一句：
+    #   ① 需求单本身不存在（例如选了本地缓存的旧单号）→ 应是"回列表重新选单"；
+    #   ② 需求存在但还没做分析 → 应是"先完成需求分析"。
+    # 早先两种都直接透传 requirement.get 的原始报错（还带内部工具名
+    # `requirement_structured`），业务方看不懂也不知道该点哪里（2026-10-30 实测）。
+    try:
+        demand_mod.get(demand_id)
+    except Exception:
+        return {
+            "ok": False,
+            "error": "需求单 %s 不存在，可能已被清理" % demand_id,
+            "hint": "回「需求链路」列表重新选择一条需求；若刚在别处新建，刷新后再试。",
+            "reason_code": "DEMAND_NOT_FOUND",
+        }
     req = _wired("requirement", "get", demand_id)
     if req.get("ok") is False:
-        return req
+        return {
+            "ok": False,
+            "error": "需求 %s 还没产出结构化需求对象（尚未完成需求分析）" % demand_id,
+            "hint": "先到「需求链路」把这条需求走到第 2 步「读懂你的需求」并完成，再回来生成候选。",
+            "reason_code": "REQUIREMENT_NOT_STRUCTURED",
+        }
     return _wired("sqlpack", "candidates", dataset, req)
 
 

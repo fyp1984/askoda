@@ -47,15 +47,30 @@ export function fmtPct(v: unknown): string {
 const MISS_REASON_ZH: Record<string, string> = {
   'F-MISS-NO-SUBJECT': '还没识别到统计主体（门店 / 商品 / 会员等），暂无法给出指标候选',
   'F-MISS-NO-GRAN': '还没确定时间粒度，暂无法给出指标候选',
+  // 2026-10-30 实测 DR-20261030-GJRN：需求只说「会员的数量及明细」，
+  // 没点名任何指标口径 → 后端给 F-MISS-NO-CALIBER。界面原样显示了这串内部
+  // 错误码，业务方既看不懂也拿不到下一步动作。这里改成"说明 + 怎么办"。
+  'F-MISS-NO-CALIBER':
+    '需求里没有点名具体指标字段（如「销售额」「复购率」），只说了「数量 / 明细」。' +
+    '这不算错：可以继续生成，系统会按主体表给出明细与总数；' +
+    '若要特定指标，请到「对一对关键说法」补一句口径。',
 }
 
-/** miss_reason 可能是字符串或 {code, message} 对象，统一取出友好文案。 */
+/** 去掉文案里残留的内部错误码（`F-MISS-XXX：` 前缀或 `（F-MISS-XXX）` 括号）。 */
+function stripReasonCode(text: string): string {
+  return String(text || '')
+    .replace(/^[A-Z]-[A-Z]+-[A-Z-]+[：:]\s*/, '')
+    .replace(/[（(][A-Z]-[A-Z]+-[A-Z-]+[）)]/g, '')
+    .trim()
+}
+
+/** miss_reason 可能是字符串或 {code, message, detail} 对象，统一取出友好文案。 */
 export function missReasonText(miss: unknown): string | null {
   if (!miss) return null
-  if (typeof miss === 'string') return miss
-  const m = miss as { code?: string; message?: string }
+  if (typeof miss === 'string') return stripReasonCode(miss) || null
+  const m = miss as { code?: string; message?: string; detail?: string }
   if (m.code && MISS_REASON_ZH[m.code]) return MISS_REASON_ZH[m.code]
-  return m.message || m.code || null
+  return stripReasonCode(m.message || m.detail || m.code || '') || null
 }
 
 /** SQL 生成器的人话名。 */
