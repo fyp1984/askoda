@@ -194,6 +194,18 @@ services:
       KNOWLEDGE_API_URL: "${KNOWLEDGE_API_URL:-http://host.docker.internal:19380/api/v1}"
       KNOWLEDGE_API_KEY: "${KNOWLEDGE_API_KEY:-}"
       KNOWLEDGE_DATASET_ID: "${KNOWLEDGE_DATASET_ID:-}"
+      # ── 知识底座可切换（2026-10-30 · MCP 统一接入）────────────────
+      # KNOWLEDGE_BACKEND=ragflow       → RAGFlow REST 直连（默认，历史行为）
+      # KNOWLEDGE_BACKEND=mcp-weknora   → 经 MCP 接入 WeKnora（CR008 产品架构）
+      #   KNOWLEDGE_MCP_URL    如 http://host.docker.internal:18180/mcp/{endpoint_id}
+      #   KNOWLEDGE_MCP_TOKEN  WeKnora MCP endpoint 的 mcp_* token
+      #   KNOWLEDGE_MCP_PROVIDER  weknora（默认）/ ragflow
+      #   KNOWLEDGE_DATASET_ID 复用为 knowledge_base_id（逗号分隔多个）
+      KNOWLEDGE_BACKEND: "${KNOWLEDGE_BACKEND:-ragflow}"
+      KNOWLEDGE_MCP_URL: "${KNOWLEDGE_MCP_URL:-}"
+      KNOWLEDGE_MCP_TOKEN: "${KNOWLEDGE_MCP_TOKEN:-}"
+      KNOWLEDGE_MCP_PROVIDER: "${KNOWLEDGE_MCP_PROVIDER:-weknora}"
+      KNOWLEDGE_KB_IDS: "${KNOWLEDGE_KB_IDS:-}"
       # ── 大模型原生 SQL 生成（可选）────────────────────────────────
       # 三项（BASE_URL/API_KEY/MODEL）齐全即启用；不配则保持确定性规划器，
       # 与历史行为完全一致。兼容 OpenAI / DeepSeek / DashScope(qwen) 等
