@@ -223,7 +223,10 @@ export default function PageSql({
             risks={sql!.generation_risks || []}
             block={(sql as any).generation_block}
             dataset={dataset}
+            demandId={demandId}
+            demandStatus={(status?.demand as any)?.status}
             onRetried={realign}
+            onReturned={onRefresh}
           />
         ) : null}
 

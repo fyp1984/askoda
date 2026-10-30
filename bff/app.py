@@ -175,6 +175,35 @@ class DemandSetStatusIn(BaseModel):
     actor: str = Field(default="", description="操作人，用于留痕")
 
 
+class ClarifyItemIn(BaseModel):
+    """一条待明确项（前端回传勾选结果时使用）。"""
+
+    id: str | None = None
+    slot: str = ""
+    question: str = ""
+    answer: str = ""
+
+
+class DemandReturnIn(BaseModel):
+    """退回需求方补充（CR010）。"""
+
+    dataset: str = "B"
+    gap_kind: str = ""
+    gap_text: str = ""
+    items: list[ClarifyItemIn] = Field(default_factory=list)
+    note: str | None = None
+    actor: str = ""
+
+
+class DemandSupplementIn(BaseModel):
+    """需求方补充完成后回填。"""
+
+    answers: list[ClarifyItemIn] = Field(default_factory=list)
+    extra_description: str = ""
+    fields: dict = Field(default_factory=dict)
+    actor: str = ""
+
+
 # 需求状态机取值，与 gateway/demand.py:40 STATUSES 逐字一致。
 # 在 BFF 侧独立持有一份，是为了让**非法状态在服务端就被拒**，
 # 不透传到网关（网关虽也会拒，但那时已经产生了一次无意义的跨服务调用）。
@@ -320,8 +349,106 @@ async def set_demand_status(demand_id: str, body: DemandSetStatusIn) -> Any:
     return sanitize(result)
 
 
-# 7. POST /api/v1/demand/similar-precheck —— 提交前查重
-@app.post(f"{API}/demand/similar-precheck", tags=["需求"])
+# 6b. GET /api/v1/demand/{id}/clarify —— 预览「要问需求方什么」（CR010）
+@app.get(f"{API}/demand/{{demand_id}}/clarify", tags=["需求"])
+async def demand_clarify(
+    demand_id: str,
+    dataset: str = "B",
+    gap_kind: str = "",
+    gap_text: str = "",
+) -> Any:
+    """生成失败时的退回包：待明确项 / 补充建议 / 已确认底座。
+
+    产品定位（CR010）：缺口处置第一顺位是**退回需求方补充**，不是补知识库。
+    知识库补口径是长期治理（小时/天级、跨部门），退需求是分钟级、一个人。
+    本接口只读，供界面在真正退回前预览——不写库、不改状态。
+    """
+    result = await call(
+        "demand_clarify",
+        {
+            "demand_id": demand_id,
+            "dataset": dataset,
+            "gap_kind": gap_kind,
+            "gap_text": gap_text,
+        },
+    )
+    reason = _tool_rejected(result)
+    if reason:
+        raise ApiError(
+            code="CLARIFY_FAILED",
+            message=reason,
+            hint="没能生成待明确项。请确认需求编号存在，然后重试；"
+                 "若持续失败，可先手工按「补充建议」改写需求描述。",
+        )
+    return sanitize(result)
+
+
+# 6c. POST /api/v1/demand/{id}/return —— 退回需求方补充
+@app.post(f"{API}/demand/{{demand_id}}/return", tags=["需求"])
+async def demand_return(demand_id: str, body: DemandReturnIn) -> Any:
+    """把需求退回发起人补充（状态 → 待补充修改），并固化本次要补的项。
+
+    与「已退回」的区别：「已退回」＝不做这条需求（终态）；
+    「待补充修改」＝仍要做，只是描述不清（可回流）。
+    """
+    result = await call(
+        "demand_return",
+        {
+            "demand_id": demand_id,
+            "dataset": body.dataset,
+            "gap_kind": body.gap_kind,
+            "gap_text": body.gap_text,
+            "items": [i.model_dump() for i in body.items],
+            "note": body.note,
+            "actor": body.actor,
+        },
+    )
+    reason = _tool_rejected(result)
+    if reason:
+        raise ApiError(
+            code="RETURN_FAILED",
+            message=reason,
+            hint="退回没有成功。请确认需求编号与状态；若需求已终态（已通过/已退回），"
+                 "需先回到「待分析」再退回。",
+        )
+    return sanitize(result)
+
+
+# 6d. POST /api/v1/demand/{id}/supplement —— 需求方补充完成后回填
+@app.post(f"{API}/demand/{{demand_id}}/supplement", tags=["需求"])
+async def demand_supplement(demand_id: str, body: DemandSupplementIn) -> Any:
+    """把作答写回需求描述（追加，不覆盖原文），并把状态拨回「待分析」。
+
+    回填后由前端触发重新分析——服务端不自动重跑，避免无人在场时消耗算力。
+    """
+    if not body.answers and not (body.extra_description or "").strip() and not body.fields:
+        raise ApiError(
+            code="EMPTY_SUPPLEMENT",
+            message="没有收到任何补充内容。",
+            hint="至少回答一个问题，或直接改写需求描述后再提交。",
+        )
+    result = await call(
+        "demand_supplement",
+        {
+            "demand_id": demand_id,
+            "answers": [a.model_dump() for a in body.answers],
+            "extra_description": body.extra_description,
+            "fields": body.fields,
+            "actor": body.actor,
+        },
+    )
+    reason = _tool_rejected(result)
+    if reason:
+        raise ApiError(
+            code="SUPPLEMENT_FAILED",
+            message=reason,
+            hint="补充没有写回。请稍后重试；若持续失败，可把补充内容发给我，"
+                 "由我核对是哪一步没落库。",
+        )
+    return sanitize(result)
+
+
+# 7. POST /api/v1/demand/similar-precheck —— 提交前查重@app.post(f"{API}/demand/similar-precheck", tags=["需求"])
 async def similar_precheck(body: SimilarPrecheckIn) -> Any:
     """相似需求预检。
 

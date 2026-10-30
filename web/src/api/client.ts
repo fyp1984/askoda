@@ -63,6 +63,42 @@ export const api = {
   similarPrecheck: (body: { title: string; description?: string; top?: number; threshold?: number }) =>
     post<SimilarPrecheckResp>('/demand/similar-precheck', body),
 
+  // ---- 退回需求方补充（CR010）----
+  // 缺口处置第一顺位是退需求而不是补知识：补知识是小时/天级的跨部门动作，
+  // 退需求是分钟级的一个人动作。这三个接口支撑「预览 → 退回 → 就地补充 → 回流」。
+  clarifyPack: (
+    demandId: string,
+    args: { dataset?: string; gap_kind?: string; gap_text?: string } = {},
+  ) => {
+    const q = new URLSearchParams()
+    q.set('dataset', args.dataset || 'B')
+    if (args.gap_kind) q.set('gap_kind', args.gap_kind)
+    if (args.gap_text) q.set('gap_text', args.gap_text)
+    return request<Record<string, unknown>>(
+      `/demand/${encodeURIComponent(demandId)}/clarify?${q.toString()}`,
+    )
+  },
+  returnDemand: (
+    demandId: string,
+    body: {
+      dataset?: string
+      gap_kind?: string
+      gap_text?: string
+      items?: { id?: string; slot?: string; question?: string; answer?: string }[]
+      note?: string
+      actor?: string
+    },
+  ) => post<Record<string, unknown>>(`/demand/${encodeURIComponent(demandId)}/return`, body),
+  supplementDemand: (
+    demandId: string,
+    body: {
+      answers?: { id?: string; slot?: string; question?: string; answer?: string }[]
+      extra_description?: string
+      fields?: Record<string, string>
+      actor?: string
+    },
+  ) => post<Record<string, unknown>>(`/demand/${encodeURIComponent(demandId)}/supplement`, body),
+
   createDemand: (body: Record<string, unknown>) => post<Record<string, unknown>>('/demand', body),
   demandList: (args: { status?: string; limit?: number; offset?: number } = {}) => {
     const q = new URLSearchParams()

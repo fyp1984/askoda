@@ -25,6 +25,7 @@
 """
 import datetime as dt
 import difflib
+import json
 import random
 import string
 
@@ -260,6 +261,91 @@ def _event(demand_id, event_type, actor, detail):
         "INSERT INTO demand_events (demand_id, event_type, actor, detail) VALUES (%s,%s,%s,%s)",
         (demand_id, event_type, actor, db.dumps(detail)),
     )
+
+
+# 允许需求方自行修订的字段（PRD §9.3 回退与修改闭环）
+EDITABLE = [
+    "title",
+    "business_context",
+    "description",
+    "expected_output",
+    "time_range",
+    "expected_finish_at",
+]
+
+
+def update(demand_id, patch, actor="business", note=None, append=False):
+    """修订需求内容（退回补充的落地动作）。
+
+    为什么需要它：生成失败时最快的路是让需求方补一句话，而不是去知识库补口径。
+    没有「改需求」这个动作，退回就只是一句无出口的话（CR010）。
+
+    ``append=True`` 时对 ``description`` / ``expected_output`` 做**追加**而非覆盖，
+    避免需求方补一句话就把原文冲掉。修订同样过敏感扫描并重算掩码字段，
+    并在事件表留一条 ``revised``（记录改了哪些字段、追加还是覆盖）。
+    """
+    row = db.query_one(
+        "SELECT * FROM demand_requests WHERE demand_id=%s", (demand_id,)
+    )
+    if not row:
+        raise DemandError("需求单不存在：%s" % demand_id)
+
+    clean = {}
+    for k, v in (patch or {}).items():
+        if k not in EDITABLE:
+            continue
+        if v is None:
+            continue
+        s = str(v).strip()
+        if not s:
+            continue
+        if append and k in ("description", "expected_output"):
+            old = (row.get(k) or "").rstrip()
+            clean[k] = (old + "\n" + s).strip() if old else s
+        else:
+            clean[k] = s
+    if not clean:
+        raise DemandError(
+            "没有可修订的内容；可改字段：%s" % "、".join(EDITABLE)
+        )
+    # 核心三项修订后不得为空（与提交校验口径一致）
+    for k in CORE_TRIO:
+        if k in clean and not clean[k].strip():
+            raise DemandError("「%s」不能为空" % k)
+
+    # 敏感扫描：只对本次改动字段重算，与既有记录合并
+    old_sens = row.get("sensitivity") or {}
+    if isinstance(old_sens, str):
+        try:
+            old_sens = json.loads(old_sens)
+        except Exception:
+            old_sens = {}
+    summary = dict((old_sens or {}).get("types") or {})
+    for f in SCAN_FIELDS:
+        v = clean.get(f)
+        if isinstance(v, str) and v.strip():
+            _, s = masking.scan(v)
+            for mk, mn in s.items():
+                summary[mk] = summary.get(mk, 0) + mn
+
+    sets = ", ".join("%s=%%s" % k for k in clean)
+    db.execute(
+        "UPDATE demand_requests SET %s, sensitivity=%%s, updated_at=now(), "
+        "version=version+1 WHERE demand_id=%%s" % sets,
+        tuple(clean.values())
+        + (db.dumps({"types": summary, "hits": sum(summary.values())}), demand_id),
+    )
+    _event(
+        demand_id,
+        "revised",
+        actor,
+        {
+            "fields": sorted(clean.keys()),
+            "mode": "append" if append else "replace",
+            "note": note,
+        },
+    )
+    return get(demand_id)
 
 
 def set_status(demand_id, status, actor="analyst", note=None):

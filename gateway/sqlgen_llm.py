@@ -450,10 +450,17 @@ def generate_sql(demand_id=None, dataset="B", nl="", structured=None, knowledge=
     max_repair = max(0, min(3, int(max_repair)))
     messages = build_generation_messages(ds, nl, structured=structured, knowledge=knowledge)
     attempts, notes, risks = [], [], []
+
+    # 单轮预算：**只试一次、且限时**。
+    # 2026-10-30 实测（本地 deepseek-r1:7b）：单次调用 40s 起，大 prompt 更久；
+    # 若再按配置里的 timeout(75s) × 重试 1 次，用户点「生成」要干等 3~5 分钟，
+    # 而实测两轮都被门禁挡下、最终仍回落规划器 —— 等得越久越亏。
+    # 故此处显式收紧：给一次限时尝试，救不回立刻回落，让缺口/退回包及时呈现。
+    _budget = int(os.getenv("LLM_SQL_TIMEOUT", "45") or 45)
     last_err = ""
 
     for i in range(max_repair + 1):
-        resp = llm.chat(messages, json_mode=True)
+        resp = llm.chat(messages, json_mode=True, timeout=_budget, max_retries=0)
         if not resp.get("ok"):
             last_err = resp.get("error") or "LLM 调用失败"
             attempts.append({"round": i + 1, "ok": False, "error": last_err})

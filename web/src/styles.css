@@ -757,4 +757,94 @@ table.grid td:first-child, table.grid th:first-child { white-space: nowrap; }
 .slot-body { margin-top: 6px; }
 .slot.collapsed > .slot-body { display: none; }
 
+/* ── 缺口处置三档（CR010：退需求优先于补知识，按成本从低到高排）── */
+.routebox { margin: 4px 0 12px; display: grid; gap: 8px; }
+.routeitem {
+  border: 1px solid #e6e8eb; border-radius: 6px; padding: 10px 12px; background: #fcfcfd;
+}
+.routeitem.rec {
+  border-color: #9fc4ee; background: #f4f9ff;
+  box-shadow: inset 3px 0 0 #2f6fbf;
+}
+.routehead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.routeno { font-weight: 700; color: #2f6fbf; }
+.routename { font-size: 13.5px; font-weight: 700; color: #333; }
+.routetag { font-size: 11.5px; padding: 1px 7px; border-radius: 9px; font-weight: 700; }
+.routetag.fast { background: #e9f6ec; color: #2d7a45; }
+.routetag.slow { background: #fff4e5; color: #9a6212; }
+.routetag.hard { background: #f2f0fa; color: #5a4a9a; }
+.routestar {
+  margin-left: auto; font-size: 11.5px; font-weight: 700; color: #fff;
+  background: #2f6fbf; padding: 1px 8px; border-radius: 9px;
+}
+.routedesc { margin: 6px 0 0; font-size: 12.5px; color: #555; line-height: 1.7; }
+.routemeta { color: #8a8a8a; }
+
+/* 待明确项：一屏内可读完、可点选、可手写 */
+.claritbox { margin: 10px 0; border: 1px solid #e6e8eb; border-radius: 6px; overflow: hidden; }
+.clarithead {
+  padding: 8px 12px; background: #f7f8fa; font-size: 12.5px; font-weight: 700;
+  color: #444; display: flex; gap: 10px; align-items: center;
+}
+.claritmust { font-weight: 600; color: #a83a3a; font-size: 12px; }
+.clarit { padding: 10px 12px; border-top: 1px solid #f0f1f3; background: #fff; }
+.clarit.must { background: #fffdf7; }
+.claritq {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 13.5px; color: #222; font-weight: 600;
+}
+.claritslot {
+  flex: 0 0 auto; font-size: 11.5px; font-weight: 700; color: #23508f;
+  background: #eaf2fb; border-radius: 9px; padding: 1px 8px; white-space: nowrap;
+}
+.clarittag {
+  font-size: 11px; font-weight: 700; color: #b3261e; background: #fdecec;
+  border-radius: 8px; padding: 1px 6px; white-space: nowrap;
+}
+.claritwhy { margin-top: 5px; font-size: 12.5px; color: #7a7a7a; line-height: 1.6; }
+.claritopts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.optbtn {
+  font-size: 12.5px; padding: 4px 10px; border-radius: 14px;
+  border: 1px solid #d7dbe0; background: #fff; color: #333; cursor: pointer;
+}
+.optbtn:hover { border-color: #2f6fbf; color: #2f6fbf; }
+.optbtn.on { border-color: #2f6fbf; background: #eaf2fb; color: #23508f; font-weight: 700; }
+.optbtn.ghost { border-style: dashed; color: #7a7a7a; }
+.claritinput {
+  width: 100%; margin-top: 8px; padding: 6px 10px; font-size: 13px;
+  border: 1px solid #d7dbe0; border-radius: 6px; box-sizing: border-box;
+}
+.claritinput:focus { outline: 2px solid #cfe0f5; border-color: #2f6fbf; }
+.knownbox {
+  padding: 8px 12px; border-top: 1px solid #f0f1f3; background: #fbfbfc;
+  font-size: 12.5px; color: #666;
+}
+.knownbox summary { cursor: pointer; }
+.knownbox ul { margin: 6px 0 0; padding-left: 18px; }
+.knownbox li { margin: 3px 0; }
+
+/* 退回 / 补充动作条 */
+.returnbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0 4px; }
+.linklike {
+  border: none; background: none; color: #2f6fbf; font-size: 12.5px;
+  cursor: pointer; text-decoration: underline; padding: 0;
+}
+.supintro { font-size: 13px; color: #555; line-height: 1.7; margin-bottom: 8px; }
+.claritsupp { margin-top: 12px; }
+.claritsupp textarea {
+  width: 100%; font-size: 13px; padding: 8px 10px; border: 1px solid #d7dbe0;
+  border-radius: 6px; font-family: inherit; box-sizing: border-box;
+}
+
+/* 次要动作按钮（缺口不在需求侧时，退回退化为次要动作，避免劝人做无用功） */
+button.secondary {
+  background: #fff; color: #2f6fbf; border: 1px solid #9fc4ee;
+}
+button.secondary:hover:not(:disabled) { background: #f4f9ff; }
+
+/* 技术侧处置细节折叠（对业务方是噪音，收起来给排障的人看） */
+.donebox > summary {
+  cursor: pointer; font-size: 12.5px; font-weight: 700; color: #2d7a45;
+}
+
 

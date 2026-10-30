@@ -3,6 +3,7 @@ from starlette.responses import JSONResponse
 from wren import WrenClient, WrenError
 import analysis as analysis_mod
 import attachments
+import clarify as clarify_mod
 import collect as collect_mod
 import db
 import demand as demand_mod
@@ -385,6 +386,160 @@ def demand_set_status(
         return demand_mod.set_status(
             demand_id, status, actor=actor or "analyst", note=note
         )
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+# ---------------------------------------------------------------------------
+# M2 · 退回需求方补充（CR010：缺口处置第一顺位是退需求，不是补知识）
+# ---------------------------------------------------------------------------
+@mcp.tool
+def demand_clarify(
+    demand_id: str,
+    dataset: str = "B",
+    gap_kind: str = "",
+    gap_text: str = "",
+) -> dict:
+    """组装「退回需求方补充」包：待明确项 + 补充建议 + 已确认底座。
+
+    只读，不写库——供界面在真正退回之前先预览「要问需求方什么」。
+
+    产品定位：生成失败时，让需求提出人补一句话（分钟级、一个人）远比去知识库
+    补口径（小时/天级、跨部门）便宜。故本工具产出的每一条待明确项都带原文证据
+    (``anchor``)，并区分「必须回答」(required) 与「可选项」，不做无依据的追问。
+
+    `gap_kind` 传缺口类型（口径未建模 / 数据缺失 / 口径未定义 / 口径待上架）时，
+    会据此判定处置路径 ``route``：demand（退需求）/ knowledge（补知识）/ engineering（技术侧）。
+    """
+    try:
+        demand = demand_mod.get(demand_id)
+        req = _wired("requirement", "get", demand_id)
+        if isinstance(req, dict) and req.get("ok") is False:
+            req = None
+        return clarify_mod.build(
+            demand,
+            requirement=req,
+            dataset=dataset,
+            gap_kind=gap_kind,
+            gap_text=gap_text,
+        )
+    except demand_mod.DemandError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@mcp.tool
+def demand_return(
+    demand_id: str,
+    dataset: str = "B",
+    gap_kind: str = "",
+    gap_text: str = "",
+    items: list | None = None,
+    note: str | None = None,
+    actor: str = "",
+) -> dict:
+    """把需求退回给发起人补充（状态 → 待补充修改），并把待明确项留痕。
+
+    `items` 传界面勾选的待明确项；不传则按 `demand_clarify` 的全量生成。
+    退回不是打回重做：留痕里固化了「这次要补哪几项」，需求方补完即可重新分析。
+    """
+    try:
+        demand = demand_mod.get(demand_id)
+        req = _wired("requirement", "get", demand_id)
+        if isinstance(req, dict) and req.get("ok") is False:
+            req = None
+        pack = clarify_mod.build(
+            demand,
+            requirement=req,
+            dataset=dataset,
+            gap_kind=gap_kind,
+            gap_text=gap_text,
+        )
+        picked = [i for i in (items or []) if isinstance(i, dict)] or pack["items"]
+        demand_mod.set_status(
+            demand_id,
+            "待补充修改",
+            actor=actor or "analyst",
+            note=note or ("退回补充：%s" % pack["headline"]),
+        )
+        demand_mod._event(
+            demand_id,
+            "returned_for_clarify",
+            actor or "analyst",
+            {
+                "dataset": dataset,
+                "gap_kind": pack["gap_kind"],
+                "route": pack["route"],
+                "items": [
+                    {"id": i.get("id"), "slot": i.get("slot"),
+                     "question": i.get("question")}
+                    for i in picked
+                ],
+                "note": note,
+            },
+        )
+        pack["items"] = picked
+        pack["status"] = "待补充修改"
+        return pack
+    except demand_mod.DemandError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@mcp.tool
+def demand_supplement(
+    demand_id: str,
+    answers: list | None = None,
+    extra_description: str = "",
+    fields: dict | None = None,
+    actor: str = "",
+) -> dict:
+    """需求方补充完成后回填需求单，并把状态从「待补充修改」拨回「待分析」。
+
+    `answers` 形如 `[{"question": "…", "answer": "…"}]`，会拼成【需求补充】段落
+    **追加**到需求描述（不覆盖原文）；`fields` 用于直接改标题/时间范围/输出预期等。
+
+    回填后由调用方触发重新分析——本工具不自动重跑，避免在无人在场时消耗算力。
+    """
+    try:
+        demand = demand_mod.get(demand_id)
+        before = demand.get("status")
+        patch = dict(fields or {})
+        block = clarify_mod.compose_supplement(answers, extra_description)
+        if block:
+            patch["description"] = block
+        if not patch:
+            return {"ok": False, "error": "没有收到任何补充内容"}
+        updated = demand_mod.update(
+            demand_id, patch, actor=actor or "business",
+            note="退回补充后回填", append=True,
+        )
+        demand_mod._event(
+            demand_id,
+            "supplemented",
+            actor or "business",
+            {"answers": len(answers or []), "fields": sorted((fields or {}).keys())},
+        )
+        back_to = False
+        if before == "待补充修改":
+            updated = demand_mod.set_status(
+                demand_id, "待分析", actor=actor or "business",
+                note="补充完成，重新进入分析",
+            )
+            back_to = True
+        return {
+            "ok": True,
+            "demand_id": demand_id,
+            "status": updated.get("status"),
+            "status_from": before,
+            "requeued": back_to,
+            "description": updated.get("description"),
+            "next": "请重新执行分析（analysis_first_round）与生成（sql_generate）",
+        }
+    except demand_mod.DemandError as e:
+        return {"ok": False, "error": str(e)}
     except Exception as e:
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 

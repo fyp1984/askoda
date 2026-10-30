@@ -19,12 +19,15 @@
 确定性兜底（封闭世界、未命中即拒）。
 """
 import db
+import os
 import secrets
 import registry
 import sqlpack as sqlpack_mod
 import planner as planner_mod
 import gates as gates_mod
 import requirement as requirement_mod
+import demand as demand_mod
+import clarify as clarify_mod
 import fallback as fallback_mod
 
 MISSING_MARK = "无候选结论（该槽位在本轮分析中为空）"
@@ -694,13 +697,46 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
                 desc = fields
         nl = (title.strip() + " " + desc.strip()).strip()
 
+        # ── 路由：确定性优先 / 大模型优先 ───────────────────────────
+        # 2026-10-30 实测（本地 Ollama deepseek-r1:7b）：
+        #   · 确定性规划器命中时，整条 generate 只要 1.7s；
+        #   · 同一条需求走大模型，单次调用 40s 起，prompt 更大时超 75s 超时，
+        #     再叠一次重试 ⇒ 用户点「生成」要干等 3~5 分钟，且两轮实测都被门禁
+        #     挡下、最终仍回落规划器。
+        # 结论：**能秒出且经过人工校验的口径，不该排在慢路径后面**。
+        # 默认 deterministic-first：规划器命中即下发，未命中才交给大模型救。
+        # 想恢复「先大模型后规划器」：设环境变量 SQLGEN_ROUTE=llm-first（无需改代码）。
+        _route = os.getenv("SQLGEN_ROUTE", "deterministic-first").strip().lower()
+        _det_first_hit = False
+        _planned_first = None
+        if nl and _route == "deterministic-first":
+            try:
+                _planned_first = planner_mod.plan(ds, nl)
+            except Exception:  # noqa: BLE001  规划器异常不阻塞大模型路径
+                _planned_first = None
+            if _planned_first and _planned_first.get("sql") and not _planned_first.get(
+                "blocked"
+            ):
+                sql_draft = str(_planned_first["sql"])
+                generator_label = "deterministic-planner"
+                _det_first_hit = True
+                # 同步给 planned：下游「引用留痕」按 planned.objects 取选中表，
+                # 不同步会让 ct/tf/gr 全空、引用落错档（sqlgen_citations_selftest 会红）。
+                planned = _planned_first
+                generation_notes.append(
+                    "确定性意图命中（intent=%s），秒级下发；"
+                    "未调用大模型（如需大模型改写，把 SQLGEN_ROUTE 设为 llm-first）"
+                    % _planned_first.get("intent")
+                )
+
         # ── 大模型原生生成（可选旁路）────────────────────────────────
-        # 产品本身对接大模型：网关侧优先用 LLM 生成复杂需求，失败/未配置再回落确定性规划器。
+        # 产品本身对接大模型：规划器未命中时用 LLM 兜底救回非常见意图，
+        # 失败/未配置再回落确定性规划器的「拒绝 + 缺口说明」。
         # 这是**新增旁路**：不改 candidate_sql 路径，也不改未配置时的既有行为。
         # 质量由 sqlgen_llm 内部「生成→门禁校验→修复」闭环保证；不过门禁则绝不下发。
         _llm_used = False
         _structured = _requirement_safe(demand_id)
-        if nl:
+        if nl and not _det_first_hit:
             try:
                 import sqlgen_llm as _llmmod  # 惰性导入：模块缺失不影响既有链路
                 if _llmmod.is_enabled():
@@ -731,7 +767,7 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
                 )
 
         blocked = False
-        if not _llm_used:
+        if not _llm_used and not _det_first_hit:
             if not nl:
                 generation_risks.append("确定性兜底：构造 nl 为空 → planner 会返回 _refuse（不猜 SQL）")
                 planned = planner_mod._refuse(
@@ -740,7 +776,7 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
                     "先保证 demand_requests 有 title/description，或 requirement 槽位非空",
                 )
             else:
-                planned = planner_mod.plan(ds, nl)
+                planned = _planned_first or planner_mod.plan(ds, nl)
             sql_draft = planned.get("sql") or ""
             blocked = planned.get("blocked")
         if blocked:
@@ -756,9 +792,9 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
                 "确定性兜底 planner 拒绝生成：%s" % (_intent or "未命中已建模意图")
             )
             # title 只放类型化结论，不要把整段描述重复一遍（界面另有 gap 行）
-            _kind_title = _classify_gap(
-                _extract_between(_reason, "当前差距：", None)
-            )["kind"]
+            _gap_text = _extract_between(_reason, "当前差距：", None) or _reason
+            _needs = _classify_gap(_gap_text)
+            _kind_title = _needs["kind"]
             generation_block = {
                 "blocked": True,
                 "title": _kind_title,
@@ -767,14 +803,33 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
                 "reason": _reason,
                 "guide": _guide,
                 "supported": _extract_between(_reason, "已支持：", "。当前差距："),
-                "gap": _extract_between(_reason, "当前差距：", None) or _reason,
+                "gap": _gap_text,
                 "guide_steps": [
                     x for x in _split_guide(_guide)
                     if not x.startswith("请按以下顺序") and not x.startswith("不需要改代码")
                 ],
-                "needs": _classify_gap(_extract_between(_reason, "当前差距：", None) or _reason),
+                "needs": _needs,
             }
-        elif not _llm_used:
+            # CR010：缺口处置的第一顺位是「退回需求方补充」，不是补知识库。
+            # 把退回包一并挂在 generation_block 上（**追加键，不动既有键**），
+            # 前端点一次就能拿到待明确项；这里任何异常都不许影响生成结论本身。
+            try:
+                _dm = demand_mod.get(demand_id) if demand_id else {}
+                _rq = requirement_mod.get(demand_id) if demand_id else None
+                _pack = clarify_mod.build(
+                    _dm or {},
+                    requirement=_rq,
+                    dataset=dataset,
+                    gap_kind=_kind_title,
+                    gap_text=_gap_text,
+                )
+                generation_block["route"] = _pack.get("route")
+                generation_block["clarify"] = _pack
+            except Exception as _ce:
+                generation_risks.append(
+                    "退回包生成失败（不影响生成结论）：%s" % str(_ce)[:120]
+                )
+        elif not _llm_used and not _det_first_hit:
             generation_notes.append(
                 "确定性兜底命中 intent=%s；引用 MDL 对象 %d 个" % (
                     planned.get("intent"), len(planned.get("objects") or []),

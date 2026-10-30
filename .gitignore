@@ -18,6 +18,9 @@ node_modules/
 # 浏览器自动化工具（playwright-cli）的会话产物：快照/截图，仅本地调试用
 .playwright-cli/
 .vite/
+
+# 本地数据快照（改数据/改状态前的备份，只留本机，不入库）
+.backup/
 *.tsbuildinfo
 npm-debug.log*
 yarn-error.log*
