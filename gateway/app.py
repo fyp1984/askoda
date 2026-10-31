@@ -155,7 +155,7 @@ def _probe_components():
 
 @mcp.custom_route("/healthz", methods=["GET"])
 async def healthz(_request):
-    datasets = [_probe(ds) for ds in registry.DATASETS.values()]
+    datasets = [_probe(ds) for ds in registry.all().values()]
     comps = _probe_components()
     # 判定口径：网关自身 + 语义层双库 + 元数据库 + 附件存储决定 ok/degraded；
     # 知识库（RAGFlow 独立栈）单独展示——它不可用时问数链路仍应可用，故不拖垮整体状态。
@@ -172,7 +172,7 @@ async def healthz(_request):
             "host": HOST,
             "port": PORT,
             "mcp_path": MCP_PATH,
-            "datasets_registered": sorted(registry.DATASETS),
+            "datasets_registered": sorted(registry.all()),
         },
         "datasets": datasets,
         "components": comps,
@@ -186,7 +186,7 @@ async def healthz(_request):
 @mcp.tool
 def gateway_health() -> dict:
     """网关健康检查：返回网关自检状态、各数据集 Wren 语义层连通性、M2 依赖组件连通性。"""
-    datasets = [_probe(ds) for ds in registry.DATASETS.values()]
+    datasets = [_probe(ds) for ds in registry.all().values()]
     comps = _probe_components()
     return {
         "status": "ok" if all(d["ok"] for d in datasets) else "degraded",
@@ -199,8 +199,105 @@ def gateway_health() -> dict:
 
 @mcp.tool
 def datasets() -> dict:
-    """列出已注册数据集及其语义层规模（模型数 / 字段数 / 关系数）。"""
-    return {"datasets": [ds.describe() for ds in registry.DATASETS.values()]}
+    """列出已注册数据集及其语义层规模（模型数 / 字段数 / 关系数）。
+
+    包含两部分：环境变量装配的（A/B）与前端「数据集登记」写入的运行期数据集。
+    """
+    rows = []
+    for ds in registry.all().values():
+        try:
+            rows.append(ds.describe())
+        except Exception as e:  # noqa: BLE001 —— MDL 读不到时如实报，不让整个清单挂掉
+            rows.append({"key": ds.key, "label": ds.label, "domain": ds.domain,
+                         "wren_endpoint": (ds.wren_url or "") + "/mcp",
+                         "error": "%s: %s" % (type(e).__name__, str(e)[:160])})
+    return {"datasets": rows, "env_keys": sorted(registry._ENV_KEYS)}
+
+
+@mcp.tool
+def dataset_register(
+    key: str,
+    label: str = "",
+    domain: str = "",
+    engine: str = "",
+    wren_url: str = "",
+    mdl_json: str = "",
+    mdl_path: str = "",
+    pg_dsn: str = "",
+    enabled: bool = True,
+    actor: str = "",
+) -> dict:
+    """登记（或修改）一个数据集：前端「取数通道 · 数据集登记」的落库入口。
+
+    `engine` 是引擎代号（A/B/C…），地址由网关按 compose 服务名约定解析，
+    也接受 `wren_url` 显式覆盖。MDL 优先用内联 JSON（`mdl_json`），
+    避免容器内文件权限问题；`mdl_path` 仅作兼容。
+    保存后 5 秒内生效，不用重建镜像或重启网关。
+    """
+    import dataset_store
+
+    try:
+        out = dataset_store.upsert(
+            {
+                "key": key, "label": label, "domain": domain, "engine": engine,
+                "wren_url": wren_url,
+                "mdl_json": mdl_json, "mdl_path": mdl_path, "pg_dsn": pg_dsn,
+                "enabled": enabled,
+            },
+            actor=actor,
+        )
+    except dataset_store.RegistryError as e:
+        return {"ok": False, "error": str(e), "stage": "validate"}
+    registry.refresh(force=True)
+    out["datasets"] = sorted(registry.all())
+    return out
+
+
+@mcp.tool
+def dataset_probe(
+    key: str = "",
+    engine: str = "",
+    wren_url: str = "",
+    mdl_json: str = "",
+    pg_dsn: str = "",
+) -> dict:
+    """接入前自检：PG 连通 / Wren 端点 / MDL 合法性 三条判据分开给结论。
+
+    未传的连接串或 MDL 会回落到该 `key` 已登记的配置（前端「重新探测」无需重填口令）。
+    注意：引擎侧 MDL 是否已装载，只能由 Wren 的 manifest 反查；
+    `models_match=false` 表示网关侧有语义层、引擎侧还没装载，此时 SQL 能生成但执行会失败。
+    """
+    import dataset_store
+
+    return dataset_store.probe({"key": key, "engine": engine, "wren_url": wren_url,
+                                "mdl_json": mdl_json, "pg_dsn": pg_dsn})
+
+
+@mcp.tool
+def dataset_registry() -> dict:
+    """列出「数据集登记」表里的运行期数据集（不含环境变量装配的 A/B）。
+
+    与 `datasets` 的差别：`datasets` 是**能用的**（含 A/B），本工具是**登记过的**，
+    供前端做增删改与状态比对。
+    """
+    import dataset_store
+
+    rows = dataset_store.list_rows()
+    return {"ok": True, "total": len(rows), "items": rows, "datasets": sorted(registry.all())}
+
+
+@mcp.tool
+def dataset_delete(key: str, actor: str = "") -> dict:
+    """移除一个数据集登记（不影响业务库本身，也不删任何数据）。"""
+    import dataset_store
+
+    try:
+        out = dataset_store.delete(key, actor=actor)
+    except dataset_store.RegistryError as e:
+        return {"ok": False, "error": str(e), "stage": "validate"}
+    registry.refresh(force=True)
+    out["datasets"] = sorted(registry.all())
+    return out
 
 
 @mcp.tool
@@ -373,6 +470,20 @@ def demand_summarize(demand_id: str | None = None) -> dict:
     """需求汇总：给单号则汇总该单（状态 / 敏感命中 / 事件分布），不给则出全局看板。"""
     try:
         return demand_mod.summarize(demand_id)
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@mcp.tool
+def demand_purge(demand_ids: list[str], actor: str = "", dry_run: bool = False) -> dict:
+    """清理历史需求（含分析轮次 / 确认记录 / 结构化需求 / 取数记录 / 知识引用）。
+
+    只删**显式点名**的单号，没有"清空全部"的隐式语义；`dry_run=True` 只回报将删多少行。
+    适用：验收 / 联调之后清测试单——它们会污染"相似需求预检"和看板统计。
+    不适用：想保留单据只改状态——那用 demand_set_status。
+    """
+    try:
+        return demand_mod.purge(demand_ids, actor=actor or "admin", dry_run=dry_run)
     except Exception as e:
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
@@ -565,6 +676,79 @@ def knowledge_list_kbs() -> dict:
         return fn()
     except Exception as e:
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@mcp.tool
+def knowledge_bind(kb_ids: list[str] | None = None, actor: str = "", reset: bool = False) -> dict:
+    """设置本次问答生效的知识库（前端「系统设置 · 知识库接入」的落库入口）。
+
+    两层作用域必须分清：
+    - **可见范围**（WeKnora MCP endpoint 绑定的库）是硬边界，本工具改不了；
+    - **生效范围**（本工具写的）只是在这条边界内挑几个库用。
+
+    传空列表 = 明确表示"不接知识库"（会写库，不会回落环境变量）；
+    `reset=True` 才删掉持久化配置、让环境变量重新生效。
+    """
+    import kb_settings
+
+    wanted = [str(x).strip() for x in (kb_ids or []) if str(x).strip()]
+    # 先拿可见范围做交叉校验：勾了底座看不见的库，保存"成功"但检索必然零命中，
+    # 这是最难查的一类静默失效。所以宁可在这里拒绝，也不让配置带病生效。
+    fn = getattr(knowledge, "list_kbs", None)
+    visible = None
+    if fn is not None:
+        try:
+            data = fn()
+            visible = data.get("kbs") or []
+        except Exception:  # noqa: BLE001 —— 底座不可达时不阻断保存，只做提示
+            visible = None
+    if visible is not None and wanted:
+        known = {kb.get("id") for kb in visible}
+        unknown = [k for k in wanted if k not in known]
+        if unknown:
+            return {
+                "ok": False,
+                "error": "这些知识库不在底座对该应用的可见范围内：%s" % "、".join(unknown),
+                "hint": "先在知识库平台把它们绑定到本应用的 MCP 端点，再回来勾选；"
+                        "未保存，原配置不变。",
+                "visible": visible,
+            }
+
+    try:
+        out = kb_settings.save(wanted, actor=actor, reset=reset)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300]),
+                "hint": "确认元数据库可用；配置未写入时检索仍按原配置执行"}
+    if visible is not None:
+        # 可见清单是在保存**之前**取的，里面的 is_active 还是旧状态；
+        # 用保存结果重算一遍，否则前端保存后会把"刚勾上的库"标成未生效。
+        active = set(out.get("kb_ids") or [])
+        out["visible"] = [
+            {**kb, "is_active": kb.get("id") in active} for kb in visible
+        ]
+    return out
+
+
+@mcp.tool
+def knowledge_settings() -> dict:
+    """当前知识库接入配置：生效的库、来源（界面 / 环境变量）、底座可见范围。"""
+    import kb_settings
+
+    try:
+        out = kb_settings.get_settings()
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+    fn = getattr(knowledge, "list_kbs", None)
+    if fn is not None:
+        try:
+            data = fn()
+            out["visible"] = data.get("kbs") or []
+            out["endpoint"] = data.get("endpoint")
+            out["base"] = data.get("base")
+        except Exception as e:  # noqa: BLE001
+            out["visible"] = None
+            out["visible_error"] = "%s: %s" % (type(e).__name__, str(e)[:200])
+    return out
 
 
 @mcp.tool

@@ -229,10 +229,31 @@ def _tool(name: str) -> str:
     return t
 
 
+def _configured_ids(dataset_ids=None) -> list:
+    """本次调用真正使用的库：显式指定 > 界面配置 > 环境变量（见 kb_settings）。
+
+    界面配置读不到（元数据库故障等）时静默回落——知识检索不该因为
+    "配置库读不到"整条链路不可用，那属于拿小故障换大故障。
+    """
+    if dataset_ids:
+        ids = [str(x).strip() for x in dataset_ids if str(x).strip()]
+        if ids:
+            return ids
+    try:
+        import kb_settings
+
+        ids = kb_settings.resolve_ids()
+        if ids:
+            return ids
+    except Exception:  # noqa: BLE001
+        pass
+    return list(KB_IDS)
+
+
 def _resolve_kb_ids(dataset_ids=None) -> list:
-    ids = [str(x).strip() for x in (dataset_ids or KB_IDS) if str(x).strip()]
+    ids = _configured_ids(dataset_ids)
     if not ids:
-        # 未配置时探测：取 endpoint 作用域内第一个知识库（list_knowledge_bases 本身
+        # 未配置时探测：取 endpoint 作用域内的库（list_knowledge_bases 本身
         # 就只返回已绑定到该 endpoint 的库，作用域天然收敛）
         data = _CLIENT.call_json(_tool("list_knowledge_bases"), {})
         kbs = data.get("knowledge_bases") or []
@@ -254,9 +275,10 @@ def health():
     try:
         data = _CLIENT.call_json(_tool("list_knowledge_bases"), {})
         kbs = data.get("knowledge_bases") or []
+        active = _configured_ids()
         target = None
         for kb in kbs:
-            if not KB_IDS or kb.get("id") in KB_IDS:
+            if not active or kb.get("id") in active:
                 target = kb
                 break
         if target is None and kbs:
@@ -307,22 +329,28 @@ def health():
 
 
 def list_kbs():
-    """列出 MCP 端点作用域内**全部**可见知识库（不过滤，供客户端选库）。
+    """列出 MCP 端点作用域内**全部**可见知识库（不过滤，供前端选库）。
 
-    与 health 的差异：health 只报默认作用域（KNOWLEDGE_KB_IDS）命中那个库；
-    本函数把 token 可见的库全部列出并标注 is_default，客户端据此做
-    「指定知识库 ID」的逻辑隔离与引用授权选择。
+    与 health 的差异：health 只报「当前生效范围」里命中的那个库；
+    本函数把 token 可见的库全部列出，并标注 `is_active`（本次问答实际用不用），
+    前端据此做「逻辑隔离 + 引用授权」的选择。
+
+    两层作用域要同时给出去：`visible`（底座可见 = 硬边界）与 `active`（本次生效）。
+    只给一层，用户会以为"选不到"是功能坏了，其实是被底座边界挡住了。
     """
     t0 = time.time()
     try:
         data = _CLIENT.call_json(_tool("list_knowledge_bases"), {})
         kbs = data.get("knowledge_bases") or []
+        active = _configured_ids()
         rows = [
             {
                 "id": kb.get("id"),
                 "name": kb.get("name"),
-                "is_default": (kb.get("id") in KB_IDS) if KB_IDS else False,
+                "is_active": kb.get("id") in active,
+                "is_env_default": kb.get("id") in KB_IDS,
                 "description": kb.get("description") or "",
+                "capabilities": kb.get("capabilities") or [],
             }
             for kb in kbs
             if kb.get("id")
@@ -333,6 +361,7 @@ def list_kbs():
             "endpoint": MCP_URL,
             "ms": int((time.time() - t0) * 1000),
             "total": len(rows),
+            "active_ids": active,
             "kbs": rows,
         }
     except KnowledgeError as e:
@@ -572,7 +601,7 @@ def upload_document(filename, content, content_type="", dataset_id=""):
             "error": "MCP 后端的 add_document 仅支持文本类文件（md/markdown/txt）；"
                      "%s 请走底座控制台上传或改用直连模式" % suffix,
         }
-    kb_id = (dataset_id or (KB_IDS[0] if KB_IDS else "")).strip()
+    kb_id = (dataset_id or ((_configured_ids() or [""])[0])).strip()
     if not kb_id:
         ids = _resolve_kb_ids()
         kb_id = ids[0] if ids else ""

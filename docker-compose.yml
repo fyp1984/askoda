@@ -132,6 +132,38 @@ services:
       - ./wren-docker-b/workspace:/workspace
 
   # ------------------------------------------------------------------
+  # 模拟库 C · 企业信贷域（M10 新增）
+  #
+  # 为什么单开一个引擎而不是复用 A/B：Wren 引擎的连接信息是**启动期**从
+  # connection_info.json 读的，一个引擎只连一个库。要接第三个业务库就必须有
+  # 第三个引擎——这是引擎的机制，不是我们的设计选择。
+  #
+  # 首次启动时 mdL 为空（models: []），属正常：业务库建好、MDL 生成后再装载。
+  # 装载动作 = 覆盖本目录的 mdl.json + 重启本容器（`docker restart wren-mcp-c`），
+  # 之后在前端「取数通道 · 数据集登记」里登记 C 即可出现在数据集下拉里。
+  # ------------------------------------------------------------------
+  wren-mcp-c:
+    image: ghcr.io/canner/wren-engine-ibis:latest
+    container_name: wren-mcp-c
+    restart: unless-stopped
+    environment:
+      ENABLE_MCP_SERVER: "true"
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "9000"
+      WREN_URL: localhost:8000
+      WEB_UI_ENABLED: "false"
+      CONNECTION_INFO_FILE: /workspace/connection_info.json
+      MDL_PATH: /workspace/mdl.json
+      MDL_WORKSPACE: /workspace
+    ports:
+      - "9004:9000"
+      - "9005:9001"
+      - "18003:8000"
+    volumes:
+      - ./wren-docker-c/workspace:/workspace
+
+  # ------------------------------------------------------------------
   # 服务端网关（MCP 服务端 · 双库接入 · 只读执行）
   # ------------------------------------------------------------------
   gateway:
@@ -152,6 +184,8 @@ services:
         condition: service_started
       wren-mcp-b:
         condition: service_started
+      wren-mcp-c:
+        condition: service_started
       assistant-postgres:
         condition: service_healthy
     extra_hosts:
@@ -169,6 +203,9 @@ services:
       # 容器内走服务名，不经宿主机回环
       WREN_A_URL: "http://wren-mcp-a:9000"
       WREN_B_URL: "http://wren-mcp-b:9000"
+      # M10：信贷域引擎。前端「数据集登记」只填代号 C，地址由网关按这个变量解析，
+      # 浏览器里永远不出现内网地址（R2）。
+      WREN_C_URL: "http://wren-mcp-c:9000"
       MDL_A_PATH: "/app/mdl/a.json"
       MDL_B_PATH: "/app/mdl/b.json"
       # --- M2 新增 ---
@@ -180,6 +217,8 @@ services:
       # 元数据采集用的数据源直连串（仅采集结构，查询一律走语义层）
       WREN_PG_A_DSN: "${COMPOSE_WREN_PG_A_DSN:-postgresql://test:test@host.docker.internal:15432/test}"
       WREN_PG_B_DSN: "${COMPOSE_WREN_PG_B_DSN:-postgresql://test:test@host.docker.internal:15432/retail}"
+      # M10：信贷域（库不存在时采集步骤会明确报错，不影响 A/B）
+      WREN_PG_C_DSN: "${COMPOSE_WREN_PG_C_DSN:-postgresql://test:test@host.docker.internal:15432/credit}"
       # 附件对象存储：2026-10-15 起改用 **EKOS 统一对象存储**（ekos-minio，EKOS 冻结端口 19000/19001）。
       # 走 host.docker.internal 而非服务名：ekos-minio 属 EKOS 的 compose 项目（网络不同，
       # 本工程不接入它的网络，避免编排耦合）；与 WREN_PG_* / KNOWLEDGE_API_URL 同一口径。
@@ -258,6 +297,11 @@ services:
       ASKODA_BFF_PORT: "18081"
       ASKODA_SERVE_STATIC: "1"
       ASKODA_MCP_TIMEOUT: "180"
+      # 数据集登记（前端「数据源」页）用的默认库位置。
+      # ★ 为什么不能在前端填：架构红线 A2 规定业务用户面前不出现开源组件内部地址，
+      #   所以主机地址只能由部署侧给一份默认值，页面上只让填库名/端口。
+      ASKODA_DB_HOST: "${ASKODA_DB_HOST:-host.docker.internal}"
+      ASKODA_DB_PORT: "${ASKODA_DB_PORT:-15432}"
     ports:
       # 宿主机 18081：前端入口 http://127.0.0.1:18081/
       # ★ 绑127.0.0.1 而非 0.0.0.0 —— 当前**没有任何入站鉴权与多租户隔离**

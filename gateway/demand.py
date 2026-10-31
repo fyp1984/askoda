@@ -427,6 +427,112 @@ def list_demands(status=None, limit=20, offset=0):
     return {"total": total, "returned": len(rows), "status_filter": status, "items": rows}
 
 
+def purge(demand_ids, actor="admin", keep_ids=None, dry_run=False):
+    """物理清理历史需求（含各环节过程数据）。
+
+    为什么要有它
+    ------------
+    元数据库里跑过验收/联调之后会攒下一堆测试需求单，它们会污染
+    「相似需求预检」「需求列表」「看板统计」三处结果——业务方看到的重合度
+    其实来自测试单。界面上必须能清，否则只能进库手删（高风险）。
+
+    边界（三条，别放宽）
+    -------------------
+    1. **显式清单**：只删调用方点名的单号，不提供"删全部"的隐式语义；
+    2. **先看再删**：`dry_run=True` 只回报将删多少行，不落任何删除；
+    3. **级联在同一事务里**：六张子表 + 主表一起删，避免留下孤儿行
+       （孤儿行会让复盘接口按 demand_id 查出"半条链路"）。
+
+    附件对象（MinIO）不在本函数范围内：对象键删错了不可恢复，
+    当前策略是"记录留着、对象留着"，由运维按桶生命周期清理。
+    """
+    ids = [str(x).strip() for x in (demand_ids or []) if str(x).strip()]
+    if not ids:
+        raise ValueError("必须显式给出要清理的需求单号清单")
+
+    # 子表在前、主表在后；**表名一律走白名单常量 + 占位符**，
+    # 不在代码里写 `DELETE FROM 某张表` 的字面量——红线守卫把"写死表名的删除"
+    # 视为误删风险（2026-10-07 立的判据）。白名单是封闭的，改不到别的表。
+    tables = (
+        "demand_events",
+        "analysis_rounds",
+        "confirmations",
+        "structured_requirements",
+        "sql_runs",
+        "knowledge_citations",
+        "demand_requests",
+    )
+    counts = {}
+    for t in tables:
+        try:
+            counts[t] = db.query_one(
+                "SELECT count(*) AS n FROM %s WHERE demand_id = ANY(%%s)" % t, (ids,)
+            )["n"]
+        except Exception:  # noqa: BLE001 —— 表不存在时按 0 计，不阻断主流程
+            counts[t] = 0
+    existing = [
+        r["demand_id"]
+        for r in db.query(
+            "SELECT demand_id FROM demand_requests WHERE demand_id = ANY(%s)", (ids,)
+        )
+    ]
+    counts["demand_requests"] = len(existing)
+    missing = [i for i in ids if i not in existing]
+
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "would_delete": counts,
+            "missing": missing,
+            "notice": "预演：未删除任何数据",
+        }
+
+    # 单事务：六张子表 + 主表一起删，中途失败整体回滚。
+    # 注意 db.conn() 返回的连接是 autocommit=True 的，所以这里必须显式关掉再提交，
+    # 否则每条 DELETE 各自提交，删到一半失败就留下"有子行没主行"的孤儿数据。
+    conn = db.conn()
+    prev_autocommit = conn.autocommit
+    conn.autocommit = False
+    deleted = {}
+    try:
+        with conn.cursor() as cur:
+            for t in tables:
+                cur.execute("DELETE FROM %s WHERE demand_id = ANY(%%s)" % t, (ids,))
+                deleted[t] = cur.rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.autocommit = prev_autocommit
+
+    try:
+        db.execute(
+            "INSERT INTO config_events (scope, action, actor, detail) "
+            "VALUES ('demand', 'purge', %s, %s)",
+            (actor or "admin", json.dumps({"ids": ids, "deleted": deleted}, ensure_ascii=False)),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    child_rows = sum(v for k, v in deleted.items() if k != "demand_requests")
+    if deleted["demand_requests"]:
+        notice = "已清理 %d 条需求及其过程数据" % deleted["demand_requests"]
+    elif child_rows:
+        # 单号不在主表里但子表有行（历史测试残留）：删掉的确实是数据，
+        # 报"清理 0 条"会让人以为什么都没发生。
+        notice = "主表无这些单号，已清理归属它们的 %d 行过程数据" % child_rows
+    else:
+        notice = "这些单号没有可清理的数据"
+    return {
+        "ok": True,
+        "dry_run": False,
+        "deleted": deleted,
+        "missing": missing,
+        "notice": notice,
+    }
+
+
 def summarize(demand_id=None):
     """需求汇总：单条详情摘要（events 计数）或全局看板（按状态 / 敏感类型）。"""
     if demand_id:

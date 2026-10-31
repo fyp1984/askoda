@@ -1,0 +1,7 @@
+{
+  "catalog": "wren_catalog",
+  "schema": "public",
+  "dataSource": "postgres",
+  "models": [],
+  "relationships": []
+}

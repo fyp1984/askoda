@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/client'
 import { Card, ErrorBox, Loading } from '../components/ui'
 import RichText from '../components/RichText'
+import DatasetRegistry from '../components/DatasetRegistry'
 // 缺因是 {code, detail} 对象，原样 String() 会渲染成 [object Object]；
 // 统一走 display 层转成人话（含未知错误码的去码兜底）。
 import { missReasonText } from '../lib/display'
@@ -15,11 +16,15 @@ import { missReasonText } from '../lib/display'
 export default function PageDatasource({
   dataset,
   demandId,
+  actor = '',
   onNotify,
+  onRegistryChanged,
 }: {
   dataset: string
   demandId: string | null
+  actor?: string
   onNotify?: (msg: string) => void
+  onRegistryChanged?: () => void
 }) {
   const [version, setVersion] = useState<Record<string, any> | null>(null)
   const [loading, setLoading] = useState(false)
@@ -92,6 +97,8 @@ export default function PageDatasource({
 
   return (
     <div className="page">
+      <DatasetRegistry actor={actor} onNotify={onNotify} onChanged={onRegistryChanged} />
+
       <Card
         title={`数据源接入 · ${dataset} 库`}
         collapsible

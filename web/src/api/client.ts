@@ -178,6 +178,28 @@ export const api = {
   llmSettings: () => request<LlmSettings>('/settings/llm'),
   saveLlmSettings: (body: LlmSettingsIn) => post<LlmSaveResp>('/settings/llm', body),
   testLlm: (body: LlmTestIn) => post<LlmTestResp>('/settings/llm/test', body),
+
+  // ---- 系统设置 · 知识库接入（M10）----
+  knowledgeSettings: () => request<KnowledgeSettings>('/settings/knowledge'),
+  saveKnowledge: (body: { kb_ids: string[]; actor?: string; reset?: boolean }) =>
+    post<KnowledgeSettings>('/settings/knowledge', body),
+  testKnowledge: (body: { kb_id?: string; question?: string }) =>
+    post<KnowledgeTestResp>('/settings/knowledge/test', body),
+
+  // ---- 数据源接入 · 数据集登记（M10）----
+  datasetRegistry: () => request<DatasetRegistryResp>('/datasource/registry'),
+  probeDataset: (body: DatasetFormIn) => post<DatasetProbeResp>('/datasource/probe', body),
+  registerDataset: (body: DatasetFormIn & { key: string; label?: string; domain?: string }) =>
+    post<Record<string, any>>('/datasource/registry', body),
+  unregisterDataset: (key: string, actor = '') =>
+    request<Record<string, any>>(
+      `/datasource/registry/${encodeURIComponent(key)}?actor=${encodeURIComponent(actor)}`,
+      { method: 'DELETE' },
+    ),
+
+  // ---- 需求清理（M10）----
+  purgeDemands: (body: { demand_ids: string[]; actor?: string; dry_run?: boolean }) =>
+    post<PurgeResp>('/demand/purge', body),
 }
 
 // ---- M8 新增响应形状 ----
@@ -506,4 +528,97 @@ export type LlmTestResp = {
   notice?: string
   error?: string
   config?: { base_url?: string; model?: string; credential_masked?: string }
+}
+
+// ---------------------------------------------------------------------------
+// 知识库接入（M10）
+// ---------------------------------------------------------------------------
+export type KnowledgeBaseVisible = {
+  id: string
+  name: string
+  /** 本次问答实际是否使用（勾选状态以服务端为准，避免刷新后被本地状态覆盖） */
+  is_active?: boolean
+  /** 是否为环境变量里配的默认库（部署期决定，界面上只是标注） */
+  is_env_default?: boolean
+  description?: string
+  capabilities?: string[]
+}
+
+export type KnowledgeSettings = {
+  ok: boolean
+  kb_ids?: string[]
+  /** 生效来源：db=界面保存；env=环境变量；none=未接入 */
+  source?: 'db' | 'env' | 'none'
+  env_kb_ids?: string[]
+  persisted?: boolean
+  updated_by?: string
+  updated_at?: string
+  db_error?: string
+  /** 底座可见范围（硬边界）：不在这个列表里的库，勾了也搜不到 */
+  visible?: KnowledgeBaseVisible[] | null
+  visible_error?: string
+  base?: string
+  notice?: string
+}
+
+export type KnowledgeTestResp = {
+  ok: boolean
+  question?: string
+  hits: number
+  sources: Array<{ document_name?: string; similarity?: number; snippet?: string }>
+  notice?: string
+}
+
+// ---------------------------------------------------------------------------
+// 数据集登记（M10）
+// ---------------------------------------------------------------------------
+export type DatasetFormIn = {
+  host?: string
+  port?: number
+  dbname?: string
+  user?: string
+  password?: string
+  engine?: string
+  mdl_json?: string
+  actor?: string
+}
+
+export type RegisteredDataset = {
+  key: string
+  label?: string
+  domain?: string
+  engine?: string
+  /** 只回显库名，地址与口令不出网关 */
+  database?: string
+  models?: number
+  fields?: number
+  has_inline_mdl?: boolean
+  enabled?: boolean
+  updated_by?: string
+  updated_at?: string
+}
+
+export type DatasetRegistryResp = {
+  ok: boolean
+  registered: RegisteredDataset[]
+  usable: Array<{ key: string; label?: string; domain?: string; models?: number; fields?: number; error?: string }>
+  env_keys: string[]
+}
+
+export type DatasetProbeResp = {
+  ok: boolean
+  checks: Record<string, { ok: boolean; error?: string; hint?: string; [k: string]: any }>
+  notice?: string
+}
+
+// ---------------------------------------------------------------------------
+// 需求清理（M10）
+// ---------------------------------------------------------------------------
+export type PurgeResp = {
+  ok: boolean
+  dry_run?: boolean
+  deleted?: Record<string, number>
+  would_delete?: Record<string, number>
+  missing?: string[]
+  notice?: string
 }

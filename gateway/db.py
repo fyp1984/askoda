@@ -399,6 +399,51 @@ DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_config_events_scope "
     "ON config_events (scope, event_id DESC)",
+    # ------------------------------------------------------------------
+    # 知识库接入（M10 · 前端「系统设置 · 知识库接入」写、网关检索读）
+    #
+    # 为什么单独一张表而不是复用 config_events：events 是流水，配置要有当前态。
+    # 为什么 kb_ids 是数组：一个需求可能同时需要"口径字典"和"业务规程"两个库，
+    # 只允许选一个库等于逼用户在两个库之间二选一。
+    #
+    # 与底座的关系：这里只决定「用哪几个库」，不改变底座侧的可见范围
+    # （WeKnora MCP endpoint 绑定的库才是硬边界）。前端把两层都展示出来，
+    # 避免出现"选了却搜不到、也不知道为什么"的黑箱。
+    # ------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS kb_settings (
+        settings_id INTEGER PRIMARY KEY,
+        kb_ids      JSONB NOT NULL DEFAULT '[]'::jsonb,
+        updated_by  TEXT NOT NULL DEFAULT 'system',
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    # ------------------------------------------------------------------
+    # 数据集登记（M10 · 前端「取数通道 · 数据集登记」写、registry 运行期加载）
+    #
+    # mdl_json 为什么入库而不是只留文件路径：实测 bind mount 源在 ~/Documents 下时，
+    # 容器内即使 root 也可能读不到（PermissionError，2026-10-15），而读不到 MDL 会让
+    # L2 静态规则被静默跳过——这正是"门禁全绿但口径错"的温床。把 MDL 放进库，
+    # 新库接入就不必再走"改文件 + 重建镜像"那条路。
+    #
+    # pg_dsn 存明文的前提与 llm_settings 的 api_key 一致：单租户内网部署、
+    # 出参只给脱敏标识（见 registry._safe_dsn），且该库的访问权本就等于业务库访问权。
+    # ------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS dataset_registry (
+        dataset_key TEXT PRIMARY KEY,
+        label       TEXT NOT NULL DEFAULT '',
+        domain      TEXT NOT NULL DEFAULT '',
+        engine      TEXT NOT NULL DEFAULT '',
+        wren_url    TEXT NOT NULL DEFAULT '',
+        mdl_path    TEXT NOT NULL DEFAULT '',
+        mdl_json    JSONB,
+        pg_dsn      TEXT NOT NULL DEFAULT '',
+        enabled     BOOLEAN NOT NULL DEFAULT true,
+        updated_by  TEXT NOT NULL DEFAULT 'system',
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
 ]
 
 
@@ -432,6 +477,8 @@ def table_stats():
         "knowledge_citations",
         "llm_settings",
         "config_events",
+        "kb_settings",
+        "dataset_registry",
     ):
         try:
             out[t] = query_one("SELECT count(*) AS n FROM %s" % t)["n"]

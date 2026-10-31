@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type LlmProvider, type LlmSettings, type LlmTestResp } from '../api/client'
 import { Card, ErrorBox, Loading } from '../components/ui'
 import RichText from '../components/RichText'
+import KnowledgeBinding from '../components/KnowledgeBinding'
 
 /**
  * 菜单④ · 系统设置 · 大模型连接
@@ -210,6 +211,8 @@ export default function PageSettings({
 
   return (
     <div className="page">
+      <KnowledgeBinding readonly={readonly} actor={actor} onNotify={onNotify} />
+
       <Card
         title="大模型连接"
         collapsible

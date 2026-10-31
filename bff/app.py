@@ -24,7 +24,13 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from config import BFF_PORT, SERVE_STATIC, STATIC_DIR
+from config import (
+    BFF_PORT,
+    DB_DEFAULT_HOST,
+    DB_DEFAULT_PORT,
+    SERVE_STATIC,
+    STATIC_DIR,
+)
 from mcp_client import McpError, get_client
 import attachment_proxy
 import llm_view
@@ -306,8 +312,53 @@ async def list_demands(
     return sanitize(result)
 
 
-# 6. POST /api/v1/demand/{id}/set-status —— 需求状态流转（含「验收通过」收口）
-@app.post(f"{API}/demand/{{demand_id}}/set-status", tags=["需求"])
+class DemandPurgeIn(BaseModel):
+    demand_ids: list[str] = Field(default_factory=list)
+    actor: str = Field(default="")
+    dry_run: bool = Field(default=False, description="只回报将删多少行，不落删除")
+
+
+@app.post(f"{API}/demand/purge", tags=["需求"])
+async def purge_demands(body: DemandPurgeIn) -> Any:
+    """物理清理历史需求（含分析/确认/取数等过程数据）。
+
+    为什么需要显式清单：删除不可恢复，任何"顺手清空"的隐式语义都是事故。
+    前端从列表勾选后把单号带过来；`dry_run=true` 先看影响面再动手。
+    """
+    ids = [i.strip() for i in body.demand_ids if i and i.strip()]
+    if not ids:
+        raise ApiError(
+            code="DEMAND_IDS_REQUIRED",
+            message="没有指定要清理的需求单号。",
+            hint="在需求列表里勾选要删的单子，再点清理。",
+        )
+    if len(ids) > 200:
+        raise ApiError(
+            code="DEMAND_IDS_TOO_MANY",
+            message=f"一次最多清理 200 条，本次传了 {len(ids)} 条。",
+            hint="分批勾选后重试。",
+        )
+    try:
+        data = await call(
+            "demand_purge",
+            {"demand_ids": ids, "actor": body.actor or "admin", "dry_run": body.dry_run},
+        )
+    except McpError as exc:
+        raise ApiError(
+            code="DEMAND_PURGE_FAILED",
+            message=str(exc),
+            hint="清理没执行。数据未删除；确认网关与元数据库可用后重试。",
+        )
+    if _tool_rejected(data):
+        raise ApiError(
+            code="DEMAND_PURGE_REJECTED",
+            message=_tool_rejected(data) or "清理被拒绝",
+            hint="确认单号格式正确（DR-…），且这些需求确实存在。",
+        )
+    return sanitize(data)
+
+
+# 6. POST /api/v1/demand/{id}/set-status —— 需求状态流转（含「验收通过」收口）@app.post(f"{API}/demand/{{demand_id}}/set-status", tags=["需求"])
 async def set_demand_status(demand_id: str, body: DemandSetStatusIn) -> Any:
     """流转需求单状态，转发网关 `demand_set_status`。
 
@@ -1133,6 +1184,154 @@ async def datasource_candidates(demand_id: str, dataset: str = "B") -> Any:
 
 
 # --------------------------------------------------------------------------
+# M10 · 数据集登记（把「再接一个业务库」变成界面动作）
+#
+# 三条约束（别放宽）：
+#   1. **浏览器不出现内网地址**（R2）：前端只提交主机/端口/库名/账号，连接串由本层组装；
+#      引擎也只填代号（A/B/C），地址由网关按 compose 服务名约定解析。
+#   2. **口令只进不出**：登记后回显只有库名，不返回连接串与口令。
+#   3. **先探测再登记**：`/datasource/probe` 把「PG 通不通 / 引擎活不活 / MDL 对不对」
+#      三条判据分开给结论——合并成一个"成功"会让「通了但查不了」这种状态无法表达。
+# --------------------------------------------------------------------------
+class DbConnIn(BaseModel):
+    # 主机默认由服务端决定（R2：页面不出现内部地址）；显式传 host 时以传入为准，
+    # 供运维脚本调用，不供浏览器表单使用。
+    host: str = Field(default="", description="留空 = 用部署方配置的默认数据库位置")
+    port: int = Field(default=0, ge=0, le=65535, description="0 = 用部署方默认端口")
+    dbname: str = Field(default="", description="库名")
+    user: str = Field(default="")
+    password: str = Field(default="")
+
+
+class DatasetRegisterIn(DbConnIn):
+    key: str = Field(default="", description="数据集编码，建议单个大写字母（如 C）")
+    label: str = Field(default="")
+    domain: str = Field(default="")
+    engine: str = Field(default="", description="引擎代号 A/B/C；地址由网关解析")
+    mdl_json: str = Field(default="", description="MDL（JSON 文本）；留空则用已登记的")
+    enabled: bool = True
+    actor: str = Field(default="")
+
+
+class DatasetProbeIn(DbConnIn):
+    key: str = Field(default="")
+    engine: str = Field(default="")
+
+
+def _compose_dsn(body: DbConnIn) -> str:
+    """把表单字段拼成连接串。只在这里出现，别处不要重复拼。"""
+    if not body.dbname.strip():
+        raise ApiError(
+            code="DB_NAME_REQUIRED",
+            message="库名没填。",
+            hint="填上要接入的业务库名（例如 credit），再点测试。",
+        )
+    host = body.host.strip() or DB_DEFAULT_HOST
+    if not host:
+        raise ApiError(
+            code="DB_HOST_NOT_CONFIGURED",
+            message="部署方还没配置默认数据库位置，页面不允许手工填内部地址。",
+            hint="请让运维在 BFF 的环境变量里设置 ASKODA_DB_HOST（可同时设 ASKODA_DB_PORT），"
+                 "重启 BFF 后再登记。",
+        )
+    port = int(body.port) or DB_DEFAULT_PORT
+    from urllib.parse import quote
+
+    pwd = quote(body.password or "", safe="")
+    user = quote(body.user or "", safe="")
+    return "postgresql://%s:%s@%s:%d/%s" % (
+        user, pwd, host, port, body.dbname.strip()
+    )
+
+
+@app.get(f"{API}/datasource/registry", tags=["数据源接入"])
+async def datasource_registry_list() -> Any:
+    """已登记的数据集 + 当前可用的数据集清单（下拉框数据源）。"""
+    try:
+        reg = await call("dataset_registry")
+        usable = await call("datasets")
+    except McpError as exc:
+        raise ApiError(
+            code="DATASET_REGISTRY_UNAVAILABLE",
+            message=str(exc),
+            hint="网关未就绪或元数据库不可用；先确认后端状态，再回来刷新。",
+        )
+    return {
+        "ok": True,
+        "registered": sanitize((reg or {}).get("items") or []),
+        "usable": sanitize((usable or {}).get("datasets") or []),
+        "env_keys": (usable or {}).get("env_keys") or [],
+    }
+
+
+@app.post(f"{API}/datasource/probe", tags=["数据源接入"])
+async def datasource_probe(body: DatasetProbeIn) -> Any:
+    """登记前自检：连接 / 引擎 / MDL 三条判据分开报。"""
+    args: dict[str, Any] = {"key": body.key.strip().upper(), "engine": body.engine.strip().upper()}
+    if body.dbname.strip():
+        args["pg_dsn"] = _compose_dsn(body)
+    try:
+        data = await call("dataset_probe", args)
+    except McpError as exc:
+        raise ApiError(
+            code="DATASET_PROBE_FAILED",
+            message=str(exc),
+            hint="探测请求没发出去。请确认网关在线后重试。",
+        )
+    return sanitize(data)
+
+
+@app.post(f"{API}/datasource/registry", tags=["数据源接入"])
+async def datasource_register(body: DatasetRegisterIn) -> Any:
+    """登记/修改一个数据集：写入后几秒内即出现在顶部数据集下拉里。"""
+    if not body.key.strip():
+        raise ApiError(
+            code="DATASET_KEY_REQUIRED",
+            message="数据集编码没填。",
+            hint="用一个不与现有库重复的短编码，建议单个大写字母（如 C）。",
+        )
+    args = {
+        "key": body.key.strip().upper(),
+        "label": body.label.strip() or body.key.strip().upper(),
+        "domain": body.domain.strip(),
+        "engine": (body.engine.strip().upper() or body.key.strip().upper()),
+        "mdl_json": body.mdl_json,
+        "pg_dsn": _compose_dsn(body),
+        "enabled": body.enabled,
+        "actor": body.actor,
+    }
+    try:
+        data = await call("dataset_register", args)
+    except McpError as exc:
+        raise ApiError(
+            code="DATASET_REGISTER_FAILED",
+            message=str(exc),
+            hint="登记没成功。确认网关在线、元数据库可用后重试。",
+        )
+    if _tool_rejected(data):
+        raise ApiError(
+            code="DATASET_REGISTER_INVALID",
+            message=_tool_rejected(data) or "登记被拒绝",
+            hint="按提示补齐 MDL 或编码后重试；编码只允许大写字母、数字、下划线与横线。",
+        )
+    return sanitize(data)
+
+
+@app.delete(f"{API}/datasource/registry/{{key}}", tags=["数据源接入"])
+async def datasource_unregister(key: str, actor: str = "") -> Any:
+    """移除数据集登记。**不删业务库、不删任何数据**，只是不再出现在下拉里。"""
+    try:
+        data = await call("dataset_delete", {"key": key, "actor": actor})
+    except McpError as exc:
+        raise ApiError(
+            code="DATASET_DELETE_FAILED",
+            message=str(exc),
+            hint="移除失败。请稍后重试；业务库本身不受影响。",
+        )
+    return sanitize(data)
+
+
+# --------------------------------------------------------------------------
 # M8 · 菜单④ 系统设置 · 大模型连接
 #
 # 为什么把「配模型」做成产品能力而不是部署参数
@@ -1258,6 +1457,107 @@ async def settings_llm_test(body: LlmTestIn) -> Any:
             hint="网关未就绪或请求超时；请先确认后端状态，再重试测试。",
         )
     return _llm_view(data)
+
+
+# --------------------------------------------------------------------------
+# M10 · 系统设置 · 知识库接入
+#
+# 为什么要有这一页
+# ----------------
+# 知识作用域原先只能改底座数据库（WeKnora 的 mcp_endpoints.knowledge_base_ids），
+# 换库=进后台改库表。业务侧既看不见"现在用哪个库"，也无法在换域时自己切换。
+# 做进界面之后：勾选 → 保存 → 下一次分析立即生效（无需重启）。
+#
+# 两层作用域必须都展示（只给一层会形成黑箱）：
+#   · 可见范围 = 底座 MCP 端点绑定的库，是**硬边界**，本页只能看不能改；
+#   · 生效范围 = 本页勾选的库，必须落在可见范围内。
+# --------------------------------------------------------------------------
+class KnowledgeBindIn(BaseModel):
+    kb_ids: list[str] = Field(default_factory=list, description="要生效的知识库 ID；空数组=不接知识库")
+    actor: str = Field(default="")
+    reset: bool = Field(default=False, description="删除持久化配置，回落环境变量")
+
+
+class KnowledgeTestIn(BaseModel):
+    kb_id: str = Field(default="", description="要试的知识库 ID；留空用当前生效范围")
+    question: str = Field(default="", description="试检索的问题；留空用一个中性问句")
+
+
+@app.get(f"{API}/settings/knowledge", tags=["系统设置"])
+async def settings_knowledge_get() -> Any:
+    """当前知识库接入配置 + 底座可见库清单。"""
+    try:
+        data = await call("knowledge_settings")
+    except McpError as exc:
+        raise ApiError(
+            code="KB_CONFIG_UNAVAILABLE",
+            message=str(exc),
+            hint="网关未就绪或知识底座不可达；先看首页「后端状态」，再到知识库平台确认服务在跑。",
+        )
+    return sanitize(data)
+
+
+@app.post(f"{API}/settings/knowledge", tags=["系统设置"])
+async def settings_knowledge_save(body: KnowledgeBindIn) -> Any:
+    """保存生效知识库。写库即生效，不重启。"""
+    try:
+        data = await call(
+            "knowledge_bind",
+            {"kb_ids": body.kb_ids, "actor": body.actor, "reset": body.reset},
+        )
+    except McpError as exc:
+        raise ApiError(
+            code="KB_CONFIG_SAVE_FAILED",
+            message=str(exc),
+            hint="配置没写入。确认元数据库可用后重试；未写入时检索仍按原配置执行。",
+        )
+    if _tool_rejected(data):
+        raise ApiError(
+            code="KB_CONFIG_INVALID",
+            message=_tool_rejected(data) or "保存被拒绝",
+            hint="检查所选库是否仍在底座的可见范围内。",
+        )
+    return sanitize(data)
+
+
+@app.post(f"{API}/settings/knowledge/test", tags=["系统设置"])
+async def settings_knowledge_test(body: KnowledgeTestIn) -> Any:
+    """用一条问题试检索：确认"这个库接进来了、里面确实有内容"。
+
+    只回报命中条数与来源文档名，不把整段原文回传——试一下不等于把知识库导出来。
+    """
+    question = body.question.strip() or "这个知识库主要讲了什么"
+    args: dict[str, Any] = {"question": question, "top_k": 3}
+    if body.kb_id.strip():
+        args["kb_id"] = body.kb_id.strip()
+    try:
+        data = await call("knowledge_search", args)
+    except McpError as exc:
+        raise ApiError(
+            code="KB_TEST_FAILED",
+            message=str(exc),
+            hint="检索请求没发出去。确认知识底座在线后重试。",
+        )
+    items = (data or {}).get("citations") or (data or {}).get("items") or []
+    return sanitize(
+        {
+            "ok": bool((data or {}).get("ok", True)),
+            "question": question,
+            "hits": len(items),
+            "sources": [
+                {
+                    "document_name": it.get("document_name"),
+                    "similarity": it.get("similarity"),
+                    "snippet": (it.get("snippet") or "")[:120],
+                }
+                for it in items[:3]
+            ],
+            "notice": (
+                "命中 %d 条，可以保存" % len(items) if items
+                else "一条都没命中：可能是库里还没有文档，或问题与文档用词差异太大"
+            ),
+        }
+    )
 
 
 # --------------------------------------------------------------------------
