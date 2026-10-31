@@ -540,6 +540,21 @@ def upload_document(filename, content, content_type="", dataset_id=""):
     name = str(filename or "").strip()
     if not name:
         return {"ok": False, "error": "缺少文件名"}
+    # 🔴 content 在调用方（gateway/app.py）是 base64 解出来的 **bytes**——RAGFlow 版
+    #    要 bytes 拼 multipart，本版要 str 塞 JSON。切换底座时漏了这层适配，
+    #    表现为上传必定失败：`TypeError: Object of type bytes is not JSON serializable`，
+    #    错误信息看起来像框架问题，实际是类型没转。实测 2026-10-31。
+    #    在这里统一解码而不是改 app.py：两个 provider 共用同一个入口，
+    #    类型归一放在 provider 边界上，调用方不必知道自己接的是哪家底座。
+    if isinstance(content, (bytes, bytearray)):
+        try:
+            content = bytes(content).decode("utf-8")
+        except UnicodeDecodeError as e:
+            return {
+                "ok": False,
+                "error": "文件不是 UTF-8 文本，MCP 底座的 add_document 只收文本："
+                         "%s（第 %d 字节起）；请转存为 UTF-8 后重试" % (e.reason, e.start),
+            }
     suffix = os.path.splitext(name)[1].lower()
     if suffix not in ALLOWED_SUFFIXES:
         return {
