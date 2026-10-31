@@ -463,6 +463,12 @@ def candidates(dataset_key, requirement):
     mdl = ds.mdl
     idx = _mdl_index(mdl)
 
+    # 两类文字必须分开（2026-10-31 实测 bug 的根因）：
+    #   notes      = 输入不全 / 覆盖率偏低等**解释性说明**，主体表照样命中；
+    #   miss_lines = 真的没匹配到任何主体表时的**未命中原因**。
+    # 早先只用 miss_reason 一个字段承两种语义，前端「非空即告警」⇒ 命中 6 张表的
+    # 需求也弹「未命中候选」（DR-20261030-GJRN）。
+    notes = []
     miss_lines = []
 
     # 需求侧候选文本：subject.value + 每个 output_fields[i].value（跳过缺失占位）
@@ -479,13 +485,13 @@ def candidates(dataset_key, requirement):
     cleaned = [x for x in inputs_raw if x is not None and MISSING_MARK not in str(x)]
 
     if subj_val is None or MISSING_MARK in str(subj_val):
-        miss_lines.append("上游 subject 槽位为空（value 为缺失占位串），未参与匹配")
+        notes.append("上游 subject 槽位为空（value 为缺失占位串），未参与匹配")
     if not field_vals or all(
         v is None or MISSING_MARK in str(v) for v in field_vals
     ):
-        miss_lines.append("上游 output_fields 为空，未参与匹配")
+        notes.append("上游 output_fields 为空，未参与匹配")
     if not cleaned:
-        miss_lines.append(
+        notes.append(
             "需求侧无任何有效候选词输入（subject + output_fields 全为缺失占位）"
         )
 
@@ -498,6 +504,8 @@ def candidates(dataset_key, requirement):
     coverage = (labeled_cols / total_cols * 100.0) if total_cols else 0.0
 
     if not subj_tables:
+        # 真未命中：输入侧的缺失本身就是原因之一，一并写进 miss_reason
+        miss_lines.extend(notes)
         miss_lines.append(
             "在 MDL 闭集（模型名/物理表名/列名/列中文名）内未匹配到任何主体表。"
             "候选词 token=%s；匹配日志=%s；MDL 列中文名覆盖率=%.1f%% (%d/%d)。"
@@ -509,9 +517,9 @@ def candidates(dataset_key, requirement):
         )
     else:
         # 即便主体表命中，也记录覆盖率备查（A 库场景下即便命中 1 张表，
-        # 列级中文名也稀缺——这是预期现象，写进 miss_reason 不写在 error 里）
+        # 列级中文名也稀缺——这是预期现象，写进 notes 不写在 error 里）
         if coverage < 50.0:
-            miss_lines.append(
+            notes.append(
                 "MDL 列中文名覆盖率=%.1f%%（%d/%d），低于 50%%；列级候选主要靠英文列名命中。"
                 % (coverage, labeled_cols, total_cols)
             )
@@ -529,6 +537,12 @@ def candidates(dataset_key, requirement):
         "filter_field_candidates": filter_cols,
         "miss_reason": " ｜ ".join(miss_lines),
         "_coverage_pct": round(coverage, 1),
+        # 以下两键为**追加**（既有键名与顺序不动，兼容既有消费方）。
+        # matched 是「是否命中主体表」的唯一判据；miss_reason 只写未命中原因，
+        # notes 承载「输入不全 / 覆盖率偏低」等解释性说明 —— 调用方不要再靠
+        # `miss_reason` 非空来判断未命中。
+        "matched": bool(subj_tables),
+        "notes": notes,
     }
 
 
@@ -740,6 +754,10 @@ def build(demand_id, dataset="B"):
         "_debug": {
             "miss_reason": cand["miss_reason"],
             "mdl_coverage_pct": cand.get("_coverage_pct"),
+            # 追加：命中与否的显式判据 + 解释性说明（miss_reason 现在只在真未命中时非空，
+            # 上游若要打印「输入不全/覆盖率偏低」这类提示，读 notes）
+            "matched": cand.get("matched"),
+            "notes": cand.get("notes") or [],
         },
     }
     return package

@@ -82,6 +82,14 @@ export default function PageDatasource({
 
   const tables: any[] = (scan?.tables || []) as any[]
 
+  // 候选命中判定：以 matched 为准，缺该键（旧版网关）时退回「有没有主题表」。
+  // 不能用 miss_reason 非空来判未命中 —— 它承载的是「说明」而非「结论」，
+  // 旧逻辑会让「命中 6 张表」的需求照样弹出「未命中候选」告警。
+  const candTables: any[] = (cand?.subject_tables || []) as any[]
+  const candMatched: boolean = cand ? (cand.matched ?? candTables.length > 0) : false
+  const candNotes: string[] = cand ? ((cand.notes || []) as any[]).map(String) : []
+  const candMiss: string = cand ? String(cand.miss_reason || '') : ''
+
   return (
     <div className="page">
       <Card
@@ -187,15 +195,42 @@ export default function PageDatasource({
             {cand?.ok === false ? (
               <div className="errbox">
                 <div className="errbox-title">{<RichText text={String(cand.error || '生成失败')} />}</div>
+                {cand.hint ? (
+                  <div className="errbox-hint">{<RichText text={String(cand.hint)} />}</div>
+                ) : null}
               </div>
             ) : null}
-            {cand?.miss_reason ? (
+
+            {cand?.ok === false ? null : candMatched ? (
+              <div className="okbox">
+                <div className="okbox-title">
+                  已匹配到 {candTables.length} 张主题表
+                  {candTables[0]?.table ? `（首张 ${candTables[0].table}）` : ''}
+                </div>
+                <div className="okbox-msg">
+                  {candTables.map((t: any) => t.table || t.model).filter(Boolean).join('、')}
+                </div>
+              </div>
+            ) : (
               <div className="warnbox">
                 <div className="warnbox-title">未命中候选</div>
-                <div className="warnbox-hint"><RichText text={missReasonText(cand.miss_reason) || '未命中候选'} /></div>
+                <div className="warnbox-hint">
+                  {<RichText text={missReasonText(candMiss) || '未命中候选'} />}
+                </div>
               </div>
+            )}
+
+            {/* 未命中时 miss_reason 已经把输入缺失原因拼进正文，notes 再列一遍就是重复 */}
+            {candMatched && candNotes.length > 0 ? (
+              <p className="muted">
+                另需注意：{candNotes.join('；')}
+              </p>
             ) : null}
-            <pre className="sqlbox small">{JSON.stringify(cand, null, 2)}</pre>
+
+            <details className="fold">
+              <summary>候选原文（排障用）</summary>
+              <pre className="sqlbox small">{JSON.stringify(cand, null, 2)}</pre>
+            </details>
           </>
         ) : null}
       </Card>

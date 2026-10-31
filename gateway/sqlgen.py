@@ -207,7 +207,11 @@ def plan(demand_id, dataset="B"):
         pack_version = pack.get("pack_version") or ""
         if pack.get("_debug"):
             cov = pack["_debug"].get("mdl_coverage_pct")
-            mr = pack["_debug"].get("miss_reason") or ""
+            # miss_reason 现在只在「真未命中主体表」时非空；覆盖率/输入不全等
+            # 解释性文字已挪到 notes，读的时候要兼容两种来源，避免提示里出现空值。
+            mr = pack["_debug"].get("miss_reason") or "；".join(
+                pack["_debug"].get("notes") or []
+            )
             if cov is not None and cov < 50.0:
                 draft_gate_detail_chunks.append(
                     "MDL 列中文名覆盖率较低：%.1f%%，miss_reason=%s" % (cov, mr[:120])

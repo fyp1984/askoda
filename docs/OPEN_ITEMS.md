@@ -225,3 +225,9 @@
 | 28 | **生成耗时：确定性优先 + 大模型单轮预算** | ✅ 已实现，可回退 | `SQLGEN_ROUTE`（默认 `deterministic-first`）、`LLM_SQL_TIMEOUT`（默认 45s） | 实测：规划器命中时 1.7s；同一条走 LLM 单次 40s 起、超时 75s 再叠重试 ⇒ 用户干等 3~5 分钟，且两轮都被门禁挡下。改后：已建模需求 200s+→**1s**；未建模需求 200s+→**47s**。回退：`SQLGEN_ROUTE=llm-first`。 |
 | 29 | **门禁项数 118→121 回填** | ✅ 已闭合 | `tools/gate_count_sync.py --write` | 新增 `clarify_selftest`（12 项断言）+ G0 两项，G0 92 / G1 29。 |
 | 30 | **时间条件丢失面**（原 #24 未消） | 新需求出现「时间条件没生效」时 | 逐意图核对 WHERE 来源 | 本轮未扩大修复面；实测「按会员等级汇总」补充后仍无 WHERE。 |
+
+## 十、本批（2026-10-31 · 候选命中判定：假告警修复）
+
+| # | 事项 | 状态 | 依赖 | 说明 |
+|---|---|---|---|---|
+| 31 | **「未命中候选」假告警**：明明匹配到主题表，界面却报未命中 | ✅ 已修复（G0 93 / G1 30 / G2 6 全绿） | `gateway/sqlpack.py`、`gateway/sqlgen.py`、`web/src/pages/PageDatasource.tsx`、新增 `tools/candidates_selftest.py`（7 项断言） | 实测 DR-20261030-GJRN：候选已给出 `dim_member`（score 6.0）＋主键/时间/4 个过滤字段、`_coverage_pct=100`，界面顶部却弹黄色「未命中候选 · 上游 output_fields 为空」。根因是 `miss_reason` 一个字段承两种语义（真未命中 + 输入不全/覆盖率说明），前端「非空即告警」。改法：`candidates` 追加 `matched`（唯一判据）与 `notes`（解释性说明），`miss_reason` 只在真未命中时非空；前端按 `matched` 三态渲染，命中给绿框＋表名清单，原始 JSON 收进「候选原文（排障用）」折叠。既有键名与顺序未动（契约）。 |
