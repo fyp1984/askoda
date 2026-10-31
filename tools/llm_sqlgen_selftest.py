@@ -244,6 +244,49 @@ def _t_gen_repair():
             sqlgen_llm.validate_sql = orig_val
 
 
+@case("generate：输出无法解析（原始非空、无 explanation）⇒ 文案点名「无法解析」，不误导为闭集无解")
+def _t_gen_unparsable():
+    with env(LLM_MAX_REPAIR="0", **_FAKE_LLM):
+        orig_chat = llm.chat
+        orig_val = sqlgen_llm.validate_sql
+        try:
+            # 模拟本地小模型：JSON 未闭合、长尾重复（实测 qwen2.5:1.5b 就是这样）
+            sqlgen_llm.llm.chat = lambda *a, **k: {
+                "ok": True,
+                "content": '{"sql": "SELECT a FROM t INNER JOIN t ON t.a = t.a INNER JOIN',
+                "latency_ms": 1,
+            }
+            sqlgen_llm.validate_sql = lambda sql, ds, req: (False, ["SQL 为空"], None)
+            r = sqlgen_llm.generate_sql(demand_id=None, dataset="B", nl="查会员")
+            assert r["ok"] is False
+            assert "无法解析出 SQL" in (r.get("error") or ""), r.get("error")
+            assert not any("闭集内无法满足" in x for x in (r.get("risks") or [])), \
+                "模型只是输出坏了，不该说成「闭集内无解」（会把人误导去改需求）"
+        finally:
+            sqlgen_llm.llm.chat = orig_chat
+            sqlgen_llm.validate_sql = orig_val
+
+
+@case("generate：模型明确说闭集内无解（sql 空 + explanation）⇒ 保留「闭集内无法满足」")
+def _t_gen_refuse_by_model():
+    with env(LLM_MAX_REPAIR="0", **_FAKE_LLM):
+        orig_chat = llm.chat
+        orig_val = sqlgen_llm.validate_sql
+        try:
+            sqlgen_llm.llm.chat = lambda *a, **k: {
+                "ok": True,
+                "content": '{"sql": "", "explanation": "语义层无会员等级与复购的关联口径"}',
+                "latency_ms": 1,
+            }
+            sqlgen_llm.validate_sql = lambda sql, ds, req: (False, ["SQL 为空"], None)
+            r = sqlgen_llm.generate_sql(demand_id=None, dataset="B", nl="查复购率")
+            assert r["ok"] is False
+            assert any("闭集内无法满足" in x for x in (r.get("risks") or [])), r.get("risks")
+        finally:
+            sqlgen_llm.llm.chat = orig_chat
+            sqlgen_llm.validate_sql = orig_val
+
+
 def main():
     failed = []
     for name, fn in CASES:

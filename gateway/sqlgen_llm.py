@@ -456,7 +456,11 @@ def generate_sql(demand_id=None, dataset="B", nl="", structured=None, knowledge=
     # 若再按配置里的 timeout(75s) × 重试 1 次，用户点「生成」要干等 3~5 分钟，
     # 而实测两轮都被门禁挡下、最终仍回落规划器 —— 等得越久越亏。
     # 故此处显式收紧：给一次限时尝试，救不回立刻回落，让缺口/退回包及时呈现。
-    _budget = int(os.getenv("LLM_SQL_TIMEOUT", "45") or 45)
+    # 2026-10-31 复测：本地模型实际分布是 38.9s（语义层内需求，能过门禁）到
+    # 64.8s（跨表需求，被 L2 正确拦下）。原 45s 恰好卡在中间 ⇒ 语义层内能跑通的
+    # 需求也被判超时，属"本来能成却先砍掉"。故默认放宽到 90s：
+    # 本地联调以「能跑通」为先，接入正式 API（3~8s）后应回落到 45s 以内。
+    _budget = int(os.getenv("LLM_SQL_TIMEOUT", "90") or 90)
     last_err = ""
 
     for i in range(max_repair + 1):
@@ -495,8 +499,20 @@ def generate_sql(demand_id=None, dataset="B", nl="", structured=None, knowledge=
             }
         last_err = "；".join(issues) or "未通过校验"
         if not sql:
-            # 模型明确表示闭集内无法满足：不再盲目修复
-            risks.append("LLM 表示闭集内无法满足需求：%s" % (parsed.get("explanation") or "")[:200])
+            # 「拿不到 SQL」有两种性质完全不同的原因，旧文案一律写成「闭集内无法满足」，
+            # 会把业务方误导向「去改需求」：
+            #   a) 模型明确说了闭集内无解（有 explanation，sql 为空）——该退需求/补语义层；
+            #   b) 模型输出了内容但不是合法 JSON（长尾重复、引号/括号未闭合）——本地小模型
+            #      常见，该换更大模型或缩上下文，跟需求写得清不清楚无关。
+            _raw = (parsed.get("raw") or "").strip()
+            if _raw and not (parsed.get("explanation") or "").strip():
+                last_err = (
+                    "模型输出无法解析出 SQL（原始约 %d 字符，疑似 JSON 未闭合或多轮重复）"
+                    "；本地小模型常见，换更大模型或缩短上下文可缓解" % len(_raw)
+                )
+                risks.append(last_err)
+            else:
+                risks.append("LLM 表示闭集内无法满足需求：%s" % (parsed.get("explanation") or "")[:200])
             break
         if i < max_repair:
             messages = build_repair_messages(ds, nl, sql, last_err, structured=structured)
