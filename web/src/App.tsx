@@ -4,7 +4,6 @@ import { RoleProvider, useRole, ROLE_META, ROLES, type Role } from './role'
 import SideNav from './components/SideNav'
 import WizardStepper from './components/WizardStepper'
 import PageMdl from './pages/PageMdl'
-import PageKnowledge from './pages/PageKnowledge'
 import PageDatasource from './pages/PageDatasource'
 import PageDemandList from './pages/PageDemandList'
 import PageSubmit from './pages/PageSubmit'
@@ -12,16 +11,30 @@ import PageAnalysis from './pages/PageAnalysis'
 import PageConfirm from './pages/PageConfirm'
 import PageSql from './pages/PageSql'
 import PageDelivery from './pages/PageDelivery'
+import PageSettings from './pages/PageSettings'
+import PageMetrics from './pages/PageMetrics'
 import DemandStatusActions from './components/DemandStatusActions'
-import { Card } from './components/ui'
 
-/** 模块 key（左侧导航）。 */
-type MenuKey = 'demand' | 'mdl' | 'knowledge' | 'datasource' | 'audit' | 'system'
+/** 模块 key（左侧导航）。知识管理入口已按 CR009 剔除——知识收集/治理全部在 WeKnora 平台完成，Askoda 经 MCP 消费。复盘留痕菜单已移除：审计回放常驻「出数与交付」页底部。 */
+type MenuKey = 'demand' | 'mdl' | 'datasource' | 'metrics' | 'system'
 /** 需求链路内的步骤 key。'list' 是需求列表枢纽页，不计入向导五步。 */
 type StepKey = 'list' | 'submit' | 'analysis' | 'confirm' | 'sql' | 'delivery'
 
 const DEMAND_KEY = 'askoda.currentDemandId'
 const THEME_KEY = 'askoda.theme'
+const DATASET_KEY = 'askoda.dataset'
+
+/** 顶部数据集下拉的选项。原先写死 A/B 两项，新库接入后永远选不到；
+ *  改为从 `/datasets` 拉——**下拉里有什么，取决于网关实际注册了什么**。 */
+type DatasetOption = { key: string; label: string; domain?: string }
+
+function readStoredDataset(fallback: string): string {
+  try {
+    return window.localStorage.getItem(DATASET_KEY) || fallback
+  } catch {
+    return fallback
+  }
+}
 
 function readDemandFromLocation(): { id: string | null; step: StepKey | null } {
   const params = new URLSearchParams(window.location.search)
@@ -58,15 +71,6 @@ function persistDemand(id: string | null, step: StepKey) {
   window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`)
 }
 
-/** 向导五步 stepKey → 节点序号（'list' 不在向导内）。 */
-const STEP_TO_NODE: Record<string, number> = {
-  submit: 0,
-  analysis: 1,
-  confirm: 2,
-  sql: 3,
-  delivery: 4,
-}
-
 function AppShell() {
   const restored = readDemandFromLocation()
   const { role, setRole, isReadonly, actor } = useRole()
@@ -74,7 +78,11 @@ function AppShell() {
   const [menu, setMenuState] = useState<MenuKey>('demand')
   const [step, setStep] = useState<StepKey>(restored.step || 'list')
   const [demandId, setDemandId] = useState<string | null>(restored.id || readStoredDemand())
-  const [dataset, setDataset] = useState('B')
+  const [dataset, setDatasetState] = useState(() => readStoredDataset('B'))
+  const [dsOptions, setDsOptions] = useState<DatasetOption[]>([
+    { key: 'B', label: 'B 库 · 零售会员域' },
+    { key: 'A', label: 'A 库 · 电商域' },
+  ])
   const [status, setStatus] = useState<E2eStatus | null>(null)
   const [health, setHealth] = useState<string>('检查中…')
   const [token, setToken] = useState(0)
@@ -112,6 +120,44 @@ function AppShell() {
     window.setTimeout(() => setNotice(''), 4000)
   }, [])
 
+  // 数据集清单：从网关拉，登记新库后调用 loadDatasets() 即可出现在下拉里。
+  // 拿不到时保留内置两项——下拉空掉会让整条链路"没法选库"，比显示旧清单更糟。
+  const loadDatasets = useCallback(async () => {
+    try {
+      const r = await api.datasets()
+      const list = (r.datasets || [])
+        .filter((d) => d && d.key)
+        .map((d) => ({ key: d.key, label: d.label || d.key, domain: d.domain }))
+      if (list.length) setDsOptions(list)
+      return list
+    } catch {
+      return []
+    }
+  }, [])
+
+  useEffect(() => {
+    loadDatasets()
+  }, [loadDatasets])
+
+  const setDataset = useCallback((key: string) => {
+    setDatasetState(key)
+    try {
+      window.localStorage.setItem(DATASET_KEY, key)
+    } catch {
+      /* 隐私模式下忽略：至少当前会话仍可用 */
+    }
+  }, [])
+
+  // 选中的库被移除/改名后，下拉会显示空白且查询全错——自动落到第一个可用库并提示。
+  useEffect(() => {
+    if (!dsOptions.length) return
+    if (!dsOptions.some((d) => d.key === dataset)) {
+      const first = dsOptions[0].key
+      setDataset(first)
+      notify(`原数据集已不可用，已切换到「${dsOptions[0].label}」`)
+    }
+  }, [dsOptions, dataset, setDataset, notify])
+
   // 数据集自动对齐：打开一条需求时，若它只在「某一个」数据集上做过分析，
   // 就自动对齐到该数据集，避免电商域(A)需求被默认 B 库语境持续「口径未定义」。
   // 若两个数据集都做过分析（歧义），则尊重手动选择并提示切换，绝不擅自跳。
@@ -140,7 +186,25 @@ function AppShell() {
     api
       .e2eStatus(demandId, dataset)
       .then((s) => {
-        if (alive) setStatus(s)
+        if (!alive) return
+        // 僵尸需求单：页面从 localStorage / URL 恢复的单号可能已被清理，
+        // 需求块取不到且原因明确是「不存在」时，必须退回列表——
+        // 否则用户可以在这条并不存在的需求上继续点「生成候选 / 生成 SQL」，
+        // 每一步都报错，看起来像系统坏了（2026-10-30 实测 DR-20261021-A1AL）。
+        const gone =
+          !s?.demand &&
+          (s?.partial_errors || []).some(
+            (e: any) => e?.block === 'demand' && /不存在/.test(String(e?.detail || '')),
+          )
+        if (gone) {
+          const stale = demandId
+          persistDemand(null, 'list')
+          setDemandId(null)
+          setStep('list')
+          notify(`需求 ${stale} 已不存在（可能已被清理），已回到需求列表，请重新选择`)
+          return
+        }
+        setStatus(s)
       })
       .catch(() => {
         if (alive) setStatus(null)
@@ -148,7 +212,7 @@ function AppShell() {
     return () => {
       alive = false
     }
-  }, [demandId, dataset, token])
+  }, [demandId, dataset, token, notify])
 
   useEffect(() => {
     persistDemand(demandId, step)
@@ -182,7 +246,6 @@ function AppShell() {
   }, [])
 
   const blocking = (status?.analysis?.rule_check?.blocking_risks as unknown[] | undefined)?.length ?? 0
-  const openConf = (status?.confirmations?.open_count as number | undefined) ?? 0
   const demandStatus = status?.demand?.status
 
   const readonlyModule = isReadonly(menu)
@@ -201,8 +264,11 @@ function AppShell() {
           <label className="ds-pick">
             <span className="ds-lbl">数据集</span>
             <select value={dataset} onChange={(e) => setDataset(e.target.value)}>
-              <option value="B">B 库 · 零售会员域</option>
-              <option value="A">A 库 · 电商域</option>
+              {dsOptions.map((d) => (
+                <option key={d.key} value={d.key}>
+                  {d.label}
+                </option>
+              ))}
             </select>
           </label>
           <label className="roleswitch" title="SSO 就绪前为本地演示切换；切换后页面按角色隔离">
@@ -268,7 +334,22 @@ function AppShell() {
               />
               {/* 需求列表枢纽：选已有需求，或跳去「提个需求」新建 */}
               {step === 'list' ? (
-                <PageDemandList currentId={demandId} onPick={onPickDemand} />
+                <PageDemandList
+                  currentId={demandId}
+                  onPick={onPickDemand}
+                  actor={actor}
+                  onNotify={notify}
+                  onPurged={(ids) => {
+                    // 当前打开的需求被清掉后必须回到列表并解除引用，
+                    // 否则页面会继续拿一个不存在的单号反复请求（表现为"每一步都报错"）。
+                    if (demandId && ids.includes(demandId)) {
+                      persistDemand(null, 'list')
+                      setDemandId(null)
+                      setStatus(null)
+                    }
+                    refresh()
+                  }}
+                />
               ) : null}
               {step === 'submit' ? (
                 <PageSubmit onSubmitted={onSubmitted} demandId={demandId} actor={actor} readonly={readonlyModule} />
@@ -306,39 +387,22 @@ function AppShell() {
           ) : null}
 
           {menu === 'mdl' ? <PageMdl dataset={dataset} onNotify={notify} /> : null}
-          {menu === 'knowledge' ? <PageKnowledge demandId={demandId} /> : null}
           {menu === 'datasource' ? (
-            <PageDatasource dataset={dataset} demandId={demandId} onNotify={notify} />
+            <PageDatasource
+              dataset={dataset}
+              demandId={demandId}
+              actor={actor}
+              onNotify={notify}
+              onRegistryChanged={loadDatasets}
+            />
           ) : null}
 
-          {menu === 'audit' ? (
-            <div className="page">
-              <Card title="复盘留痕" collapsible id="audit">
-                <p className="muted">
-                  审计回放按「需求」维度展开：打开一条需求，进入「出数与交付」即可看到完整判断链回放
-                  （每次执行的 SQL、门禁结论、知识引用与责任人）。
-                </p>
-                <p>
-                  {demandId ? (
-                    <button className="primary" onClick={() => onWizardStep('delivery')}>
-                      前往当前需求的回放
-                    </button>
-                  ) : (
-                    '先选一条需求，再回放它的处理记录。'
-                  )}
-                </p>
-              </Card>
-            </div>
+          {menu === 'metrics' ? (
+            <PageMetrics dataset={dataset} actor={actor} readonly={readonlyModule} onNotify={notify} />
           ) : null}
 
           {menu === 'system' ? (
-            <div className="page">
-              <Card title="系统设置" collapsible id="system">
-                <p className="muted">
-                  数据空间（租户）与全局配置在此管理。当前为演示态，相关能力建设中。
-                </p>
-              </Card>
-            </div>
+            <PageSettings readonly={readonlyModule} actor={actor} onNotify={notify} />
           ) : null}
         </main>
       </div>

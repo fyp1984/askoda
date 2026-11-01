@@ -20,7 +20,7 @@
 ## 边界
 
 - 只做**本地文件**与**规则索引**校验，不碰网络（Wren 探活由 /healthz 负责）。
-- 不改任何工具入参，不进 MCP 工具面（工具面仍为 48，见 docs/MCP_TOOLS.md）。
+- 不改任何工具入参，不进 MCP 工具面（工具面仍为 51，见 docs/MCP_TOOLS.md）。
 """
 
 from __future__ import annotations

@@ -176,6 +176,253 @@ def _t_between_empty():
     assert sg._extract_between(None, "[", "]") == ""
 
 
+@case("规划器粒度：需求写了「按月」⇒ SQL 必须按月分组（不许静默丢粒度）")
+def _t_planner_month_granularity():
+    """2026-10-23 实测缺陷：`各门店销售额` 意图原先只看「各门店」，
+    需求里的「按月」被直接丢掉 ⇒ SQL 少了月度维度。REQ-COVERAGE 上线后这类 SQL
+    会被正确判红，但**产品不能只会拦**——同一句话说了按月，就该按月出数。
+
+    这里直接调 plan_b（不经 registry），所以用一个只提供 models 的轻量替身。
+    """
+    import planner as pl
+
+    class _DS:
+        key = "B"
+        models = {"dwd_order_di": {}, "dim_store": {}}
+
+    monthly = pl.plan_b(_DS(), "各门店按月的销售额")
+    assert monthly.get("blocked") is not True, monthly.get("reason")
+    sql_m = monthly.get("sql") or ""
+    assert "date_trunc('month'" in sql_m, "按月需求却没用月度表达式：%s" % sql_m
+    assert "GROUP BY" in sql_m and "月份" in sql_m, "月度维度没进 SELECT/GROUP BY：%s" % sql_m
+
+    plain = pl.plan_b(_DS(), "各门店销售额")
+    assert plain.get("blocked") is not True, plain.get("reason")
+    sql_p = plain.get("sql") or ""
+    assert "date_trunc" not in sql_p, "没要求按月却加了月度维度（过度拟合）：%s" % sql_p
+
+
+class _StubDS(object):
+    """B 库的最小替身：只提供 plan_b 需要的 `models` 键。
+
+    ⚠️ 用**全部 8 张表**而不是只放两张：`_objects()` 会按 models 求交集，
+    替身缺表时 SQL 里的表会被悄悄过滤掉，判据就测不到真实形态了。
+    """
+    key = "B"
+    models = {name: {} for name in (
+        "ads_coupon_order_di", "ads_member_grade_change_wi", "ads_member_repurchase_di",
+        "dim_member", "dim_store", "dwd_order_detail_di", "dwd_order_di",
+        "dws_store_daily_agg",
+    )}
+
+
+def _plan_b(text):
+    import planner as pl
+    r = pl.plan_b(_StubDS(), text)
+    return (r.get("sql") or ""), r
+
+
+@case("规划器：说「排名」就要排序；没说就不要加（双向防过拟合）")
+def _t_planner_rank():
+    """2026-10-23 基线实测缺陷：`各门店销售额排名` 生成的 SQL **没有 ORDER BY** ——
+    "排名"只是把行列出来，业务方拿到的是一堆无序数据。"""
+    ranked, _r = _plan_b("各门店销售额排名")
+    assert "order by" in ranked.lower(), "说了排名却没有排序：%s" % ranked
+    assert "desc" in ranked.lower(), "排序方向必须是降序（排名＝从高到低）：%s" % ranked
+
+    plain, _r2 = _plan_b("各门店销售额")
+    assert "order by" not in plain.lower(), "没要求排序却加了 ORDER BY（过度拟合）：%s" % plain
+
+    # ⚠️ 单字「前」不能当排序信号：「目前」「之前」会误命中
+    cur, _r3 = _plan_b("目前各门店销售额")
+    assert "order by" not in cur.lower(), "「目前」被误判成排序意图：%s" % cur
+
+    top, _r4 = _plan_b("前5名门店销售额")
+    assert "order by" in top.lower(), "「前5名」没有排序：%s" % top
+
+
+@case("规划器：一句话要两样东西就要出两样（订单量 + 销售额）")
+def _t_planner_two_metrics():
+    """2026-10-23 基线实测缺陷：`各门店月度订单量和销售额` 只出了销售额，
+    订单数被整段吞掉。这类"说了没做"以前没人逐项比对需求，所以一直没被发现。"""
+    sql, _r = _plan_b("各门店月度订单量和销售额")
+    assert "count(" in sql.lower(), "要了订单量却没有计数：%s" % sql
+    assert "order_cnt" in sql or "订单数" in sql, "订单数没有出现在输出列：%s" % sql
+    assert "pay_amount" in sql, "销售额丢了：%s" % sql
+    assert "date_trunc('month'" in sql, "月度维度丢了：%s" % sql
+
+
+@case("规划器：说「占比」就要算出占比（占比的分母范围要跟维度一致）")
+def _t_planner_share():
+    total, _r = _plan_b("各门店销售额占比")
+    assert "over (" in total.lower(), "说了占比却没有窗口函数算分母：%s" % total
+    assert "partition by" not in total.lower(), (
+        "不带月度却在窗口里分区了（分母变成每行自己）：%s" % total)
+
+    monthly, _r2 = _plan_b("各门店按月的销售额占比")
+    assert "partition by" in monthly.lower(), (
+        "月度占比没有按月分区 ⇒ 分母成了全期合计，跨月比较没有意义：%s" % monthly)
+
+
+@case("规划器：客单价是派生指标（不能被判成「数据缺失」）")
+def _t_planner_aov():
+    """2026-10-23 基线实测缺陷：客单价走了兜底，提示「B 库无客单价相关表」——
+    客单价本来就不是一张表，这句提示会把业务方引去找数据源。"""
+    sql, r = _plan_b("各门店客单价")
+    assert "客单价" in sql, "客单价需求没有生成 SQL：%s / %s" % (sql, r.get("reason"))
+    assert "count(distinct" in sql.lower(), (
+        "客单价分母必须是不同订单号（一单多明细会重复计）：%s" % sql)
+    assert "pay_amount" in sql, "客单价分子应为实付金额：%s" % sql
+
+    overall, _r2 = _plan_b("客单价")
+    assert "客单价" in overall, "整体客单价也没出数：%s" % overall
+
+
+@case("规划器：泛化说法「复购情况」不该被当成「未建模」硬拒")
+def _t_planner_repurchase_generic():
+    sql, r = _plan_b("会员复购情况")
+    assert sql, "表与字段都在库里却拒了（这是「明明有数据说没有」）：%s" % r.get("reason")
+    assert "repurchase_flag" in sql, "复购口径没用到标记列：%s" % sql
+    # 不替业务方算比率：分母口径未确认，算了会被直接拿去汇报
+    assert "复购率" not in sql, "未指定比率却自己算了复购率：%s" % sql
+
+
+@case("规划器：说「按月」就要按月分组（等级异动）")
+def _t_planner_grade_change_month():
+    sql, _r = _plan_b("会员等级异动按月趋势")
+    assert "change_month" in sql, "change_month 就在表里，说按月却没按月分组：%s" % sql
+    assert "group by" in sql.lower(), "没有分组：%s" % sql
+
+    plain, _r2 = _plan_b("会员等级异动情况")
+    assert "change_month" not in plain, "没要求按月却加了月份维度：%s" % plain
+
+
+@case("规划器：同比/环比按「日历」对基期，不用行号窗口")
+def _t_planner_yoy_mom():
+    """2026-10-23 基线实测缺陷：说「同比 / 环比」→ 返回一张普通月度销售额表，
+    对比那一段整段丢掉。
+
+    ⚠️ 这里钉的不是"有没有对比列"，而是**基期怎么取**：
+      `LAG(SUM(x), 1) OVER (ORDER BY 月份)` 在月份连续时与日历自连接**结果完全一样**，
+      只有缺一个月时才分道扬镳 —— 行号窗口会拿两个月前的数当"上月"，
+      而 SQL 照样跑通、门禁照样过，**只是数字是错的**。
+      所以必须断言"没有 LAG"，否则哪天有人图省事换成窗口函数，
+      在连续月份的数据上看不出任何区别，测试也不会红。
+    """
+    # ⚠️ 断言一律对 lower() 做：SQL 里的关键字是 `INTERVAL` / `ORDER BY` 大写，
+    #   直接对原文断言会因为大小写而永远失败（这里第一次写就踩了）。
+    mom, _r = _plan_b("各门店销售额环比")
+    _m = mom.lower()
+    assert "interval '1 month'" in _m, "环比基期没有按日历取上一个月：%s" % mom
+    assert "lag(" not in _m, (
+        "用了行号窗口取基期：缺月时会拿错月份且不报错：%s" % mom)
+    assert "环比" in mom, "没有环比列：%s" % mom
+    assert "interval '1 year'" not in _m, "只要环比却带上了同比：%s" % mom
+
+    yoy, _r2 = _plan_b("销售额同比")
+    _y = yoy.lower()
+    assert "interval '1 year'" in _y, "同比基期没有按日历年取：%s" % yoy
+    assert "lag(" not in _y, "同比用了行号窗口：%s" % yoy
+    # 基期金额列必须一起出：否则增长率整列 NULL 时业务方分不清"没数据"还是"算错"
+    assert "去年同期" in yoy, (
+        "没输出基期金额列 ⇒ 增长率空的时候说不出原因：%s" % yoy)
+
+    both, _r3 = _plan_b("各门店销售额同比和环比")
+    _b = both.lower()
+    assert "interval '1 year'" in _b and "interval '1 month'" in _b, (
+        "要了两样却只给一样：%s" % both)
+
+    plain, _r4 = _plan_b("各门店销售额")
+    assert "interval" not in plain.lower(), (
+        "没要同比环比却加了对比（过度拟合）：%s" % plain)
+
+
+@case("规划器：组合分支里的「排名 / 前N名」不能被吃掉")
+def _t_planner_combo_rank():
+    """2026-10-23 基线实测缺陷：`各门店会员数和销售额排名` 返回按**门店名**排的表
+    —— 排序是有的，只是排在错的列上。这比"没有排序"更难发现：
+    SQL 里有 ORDER BY、门禁看不出问题，只有拿去做"前十名"时才发现顺序不对。
+    """
+    plain, _r = _plan_b("各门店会员数和销售额")
+    assert "order by s.store_name" in plain.lower(), (
+        "不排名时应按门店名稳定输出：%s" % plain)
+    assert "desc" not in plain.lower(), "没要求排名却降序了（过度拟合）：%s" % plain
+    assert "limit" not in plain.lower(), "没要求前N名却限行了：%s" % plain
+
+    ranked, _r2 = _plan_b("各门店会员数和销售额排名")
+    assert "desc" in ranked.lower(), "说了排名却没有降序：%s" % ranked
+    assert "销售额" in ranked, "排名基数不是销售额：%s" % ranked
+    # 两个指标一个都不能少（排名不该把组合吃掉）
+    assert "dim_member" in ranked and "pay_amount" in ranked, (
+        "排名把跨指标组合吃掉了：%s" % ranked)
+
+    top3, _r3 = _plan_b("各门店会员数和销售额前3名")
+    assert "limit 3" in top3.lower(), (
+        "「前3名」只排序不限行 ⇒ 返回全榜单：%s" % top3)
+
+
+@case("规划器：中位数必须是 MEDIAN，不是 SUM")
+def _t_planner_median():
+    sql, _r = _plan_b("各门店销售额中位数")
+    assert "median(" in sql.lower(), "问中位数没给 MEDIAN：%s" % sql
+    _flat = sql.lower().replace(" ", "")
+    assert "sum(o.pay_amount)as销售额" not in _flat, (
+        "中位数被换成了合计 —— 中位数的意义正是「不被少数大额订单拉高」，"
+        "换成 SUM 等于把这个问题取消了：%s" % sql)
+
+
+@case("规划器：说「每天」就要落到日粒度")
+def _t_planner_daily():
+    sql, _r = _plan_b("各门店每天的销售额")
+    assert "order_date" in sql, "日粒度没有用业务日期：%s" % sql
+    assert "date_trunc('month'" not in sql, (
+        "说了「每天」却按月分组（粒度丢失）：%s" % sql)
+
+
+@case("规划器：「最高的品类」要出品类列（组内取最大，不是跨店排名）")
+def _t_planner_top_category():
+    sql, _r = _plan_b("各门店销售额最高的品类")
+    assert "category_name" in sql, "问品类却没有品类列（问 A 答 B）：%s" % sql
+    assert "row_number" in sql.lower(), "没有组内排名，取不出「每店最高的那个」：%s" % sql
+    assert "partition by" in sql.lower(), "组内排名没有分区 ⇒ 变成全表排名：%s" % sql
+    assert "date_trunc('month'" not in sql, (
+        "「最高的品类」被串到「最高的月份」分支了：%s" % sql)
+
+
+@case("规划器：品类销售额必须排除退款订单（明细表没有状态字段，必须 JOIN 订单表）")
+def _t_planner_category_excludes_refund():
+    """2026-10-23 人工验收准备时实测发现的真缺陷。
+
+    原来品类分支是 `FROM dwd_order_detail_di GROUP BY category_name`，
+    **没有任何订单状态过滤** ⇒ 把已退款订单也算进销售额（实测 10300.4）；
+    而门店销售额排除了退款（9644.5）。同一个「销售额」两个维度两个口径，
+    差 655.9 —— 业务方一核对就发现对不上，而系统里找不到任何解释。
+
+    ⚠️ 关键点不是"有没有 WHERE"，而是"**明细表根本没有 order_status 字段**"
+      （实测语义层报错：Valid fields are detail_id / order_id / store_id / sku_id /
+       category_name / quantity / ...）⇒ 必须 JOIN 订单表才可能过滤。
+      所以这条判据同时断言 JOIN 与 WHERE，缺一条都不算过。
+    """
+    sql, _r = _plan_b("各品类销售额")
+    low = sql.lower()
+    assert "order_status" in low and "已完成" in sql, (
+        "品类销售额没有排除退款订单（口径与门店销售额不一致）：%s" % sql)
+    assert "dwd_order_di" in low, (
+        "明细表没有订单状态字段，必须有订单表 JOIN 才可能过滤退款：%s" % sql)
+    assert "join" in low, "没有 JOIN 订单表：%s" % sql
+
+    # 占比与排名两个变体同样要带过滤（同一段代码，但历史上就是"改一处漏一处"）
+    share, _r2 = _plan_b("各品类销售额占比")
+    assert "order_status" in share.lower(), "占比变体丢了退款过滤：%s" % share
+    rank, _r3 = _plan_b("各品类销售额排名")
+    assert "order_status" in rank.lower(), "排名变体丢了退款过滤：%s" % rank
+
+    # 每店最高品类走的是另一段代码，也要带过滤
+    topcat, _r4 = _plan_b("各门店销售额最高的品类")
+    assert "order_status" in topcat.lower(), (
+        "每店最高品类没排除退款（与品类销售额口径不一致）：%s" % topcat)
+
+
 def main():
     failed = []
     for name, fn in CASES:

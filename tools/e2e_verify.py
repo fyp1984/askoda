@@ -60,6 +60,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -372,11 +373,19 @@ def stage_execute(rep, demand_id):
     if not demand_id:
         rep.add("execute", "前置 demand_id", False, "① 未产出 demand_id，跳过本阶段")
         return None
+    _t_exec = time.time()
     st, data, raw = http("POST", API + "/demand/%s/sql/execute" % demand_id,
                          {"dataset": DATASET, "actor": "e2e_verify"})
+    _exec_secs = time.time() - _t_exec
     if not rep.add("execute", "POST /sql/execute HTTP 200", st == 200,
                    "HTTP=%s %s" % (st, brief(raw, 200))):
         return None
+    # T04 超时回归：只读执行必须在 10 秒内返回。
+    # 为什么阈值写 10s 而不是"跟 BFF 一致"：原先的现象是 MCP 直调要等 60s 才回，
+    # 而 BFF 只要 3.5s —— 说明卡的是**调用方的等待策略**，不是查询本身。
+    # 这里不测"快不快"，测的是"有没有退化成等满超时"，10s 是很宽的线。
+    rep.add("execute", "只读执行 < 10s 返回（T04 超时回归）", _exec_secs < 10.0,
+            "实测 %.2fs" % _exec_secs)
     if not isinstance(data, dict):
         return rep.add("execute", "返回 JSON 对象", False, brief(raw)) and None
 

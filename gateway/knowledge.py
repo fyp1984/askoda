@@ -326,8 +326,15 @@ def _parse_error_text(row):
     return pm[-300:]
 
 
-def list_documents(limit=50):
-    ds_id = DATASET_ID
+def list_documents(limit=50, dataset_ids=None):
+    # dataset_ids（2026-10-30 追加，与 MCP 版函数面对齐）：取首个作为数据集；
+    # 为空回落 DATASET_ID / health 探测的默认作用域。
+    ds_id = ""
+    if dataset_ids:
+        first = list(dataset_ids)[0] if dataset_ids else ""
+        ds_id = str(first or "").strip()
+    if not ds_id:
+        ds_id = DATASET_ID
     if not ds_id:
         h = health()
         ds_id = ((h.get("dataset") or {}).get("id")) or ""
@@ -355,6 +362,35 @@ def list_documents(limit=50):
             for r in rows
         ],
     }
+
+
+def list_kbs():
+    """列出可见数据集（RAGFlow 直连版：GET /datasets，供客户端选库）。
+
+    函数面与 MCP 版 list_kbs 对齐：返回 {ok, base, total, kbs:[{id,name,is_default}]}。
+    """
+    try:
+        d = _get("/datasets?page=1&page_size=100")
+        rows = d.get("data") or []
+        kbs = [
+            {
+                "id": r.get("id"),
+                "name": r.get("name"),
+                "is_default": (r.get("id") == DATASET_ID) if DATASET_ID else False,
+                "description": r.get("description") or "",
+            }
+            for r in rows
+            if r.get("id")
+        ]
+        return {"ok": True, "base": "RAGFlow 直连", "total": len(kbs), "kbs": kbs}
+    except KnowledgeError as e:
+        return {"ok": False, "base": "RAGFlow 直连", "error": str(e)[:200]}
+    except Exception as e:
+        return {
+            "ok": False,
+            "base": "RAGFlow 直连",
+            "error": "%s: %s" % (type(e).__name__, str(e)[:200]),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1062,3 +1098,29 @@ def retire_citation(citation_id, reason):
     elif isinstance(rc, dict) and "rowcount" in rc:
         updated = int(rc["rowcount"])
     return {"ok": True, "updated": updated}
+
+
+# ---------------------------------------------------------------------------
+# 后端分发（2026-10-30 · MCP 统一接入，CR008 产品架构落地）
+# ---------------------------------------------------------------------------
+# 产品架构：WeKnora（或其它知识库平台）为底座，应用经 **MCP** 接入；RAGFlow 直连
+# 保留为回退。KNOWLEDGE_BACKEND 取值：
+#   ragflow        —— 本文件原实现（RAGFlow REST 直连，默认，行为与历史完全一致）
+#   mcp-weknora / mcp / mcp-ragflow —— knowledge_mcp.py（MCP streamable-http）
+# 分发方式：本文件是全仓唯一导入点（app/analysis/sqlgen/backflow/tools 均以
+# `import knowledge` + 属性访问消费），在文件**末尾**重绑后端耦合的六个函数即可
+# 全局生效，公共函数面与返回形状不变——调用方零改动，符合「不改已有入参名」红线。
+# 注意：分发块必须在文件末尾——knowledge_mcp 顶部会 `import knowledge` 引用
+# 本模块的通用件（KnowledgeError/extract_keywords 等），依赖上方已完成定义。
+KNOWLEDGE_BACKEND = os.getenv("KNOWLEDGE_BACKEND", "ragflow").strip().lower()
+
+if KNOWLEDGE_BACKEND.startswith("mcp"):
+    import knowledge_mcp as _kb_mcp  # noqa: E402
+
+    health = _kb_mcp.health
+    search = _kb_mcp.search
+    list_documents = _kb_mcp.list_documents
+    list_kbs = _kb_mcp.list_kbs
+    upload_document = _kb_mcp.upload_document
+    document_status = _kb_mcp.document_status
+    delete_document = _kb_mcp.delete_document

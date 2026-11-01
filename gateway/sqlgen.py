@@ -12,18 +12,22 @@
 
 为什么 generate() 里允许传 candidate_sql
 -----------------------------------------
-硬约束里「网关侧不调用任何 LLM」——自由生成能力放在客户端 Agent，它会把
-candidate_sql 作为参数回传给网关；网关只做"收+审+存"。客户端 Agent 挂掉时，
-网关不会断链——此时 candidate_sql=None，回落 planner.plan(ds, nl) 确定性兜底。
-两条路径的产出都要立刻过 gates.review()，保证"不管 SQL 从哪来，网关只放行同一套门禁"。
+两条生成来源并存：① 客户端 Agent 把 candidate_sql 回传给网关（网关只做"收 + 审 + 存"）；
+② 网关侧**大模型原生生成**（可选，见 sqlgen_llm.py；未配置即禁用，自动回落确定性）。
+无论 SQL 从哪来，都立刻过 gates.review()——网关只放行同一套门禁。
+客户端 Agent 挂掉且未启用大模型时不会断链：candidate_sql=None → 回落 planner.plan
+确定性兜底（封闭世界、未命中即拒）。
 """
 import db
+import os
 import secrets
 import registry
 import sqlpack as sqlpack_mod
 import planner as planner_mod
 import gates as gates_mod
 import requirement as requirement_mod
+import demand as demand_mod
+import clarify as clarify_mod
 import fallback as fallback_mod
 
 MISSING_MARK = "无候选结论（该槽位在本轮分析中为空）"
@@ -51,15 +55,34 @@ def _pack_safe(demand_id, dataset):
 
 def _requirement_safe(demand_id):
     """get requirement；失败返回 None（供 fallback nl 拼凑使用）。"""
+    req, _why = _requirement_for_gate(demand_id)
+    return req
+
+
+def _requirement_for_gate(demand_id):
+    """给门禁用：返回 (需求对象 or None, 取不到的原因)。
+
+    为什么要和 `_requirement_safe` 分开：那个函数服务的是 planner 的 nl 兜底，
+    只关心「有没有」；而门禁的 detail 要回答「为什么没有」。丢了原因，L-REQ 的
+    跳过说明就会退化成一句放之四海皆准的废话（历史上正是「调用方未传 demand_id」），
+    让人往「接线断了」的方向查——真实原因往往只是「这条需求还没合成结构化需求」，
+    或「查库失败」。**诊断文案指错方向，比不写更贵。**
+    """
+    if not demand_id:
+        return None, "调用方未传 demand_id"
     try:
         req = requirement_mod.get(demand_id)
-    except Exception:
-        return None
-    if isinstance(req, dict) and req.get("ok") is False:
-        return None
+    except Exception as e:  # noqa: BLE001
+        return None, "取结构化需求抛异常 %s: %s" % (type(e).__name__, str(e)[:160])
     if not isinstance(req, dict):
-        return None
-    return req
+        return None, "结构化需求返回非对象（%s）" % type(req).__name__
+    if req.get("ok") is False:
+        return None, str(
+            req.get("error")
+            or "尚未合成结构化需求（先跑 requirement_structured）"
+        )
+    return req, ""
+
 
 
 def _demand_title_desc(demand_id):
@@ -83,6 +106,84 @@ def _demand_title_desc(demand_id):
 # ---------------------------------------------------------------------------
 # 第一段：plan · 出计划草稿（不含 SQL 正文）
 # ---------------------------------------------------------------------------
+def _record_sqlgen_citations(demand_id, chosen_table="", time_field="",
+                             granularity="", models=None, notes_prefix="SQL_PLAN"):
+    """把「SQL 生成期实际做了哪些取证检索」落进 `knowledge_citations`。
+
+    🔴 为什么必须抽成独立函数（2026-10-22 实测发现）
+    ------------------------------------------------
+    这段逻辑原先只写在 `plan()` 里。但**`generate()` 从不调 `plan()`**——两段式里
+    plan 是独立工具 `sql_plan`，而主链路（前端 / BFF → `sql_generate`）直接进
+    generate ⇒ `dataset_id='sqlgen_plan_stage'` 的行**在主链路上一条都不会新增**。
+    症状极隐蔽：引用表里有历史数据、`knowledge_citation_list` 也查得到，
+    但永远查不到「**这段 SQL 是按哪份口径文档写的**」——而这恰好是业务方核对
+    数据来源时最需要的那一条。实测两条新需求跑完整链路后，该 stage 新增 0 行。
+
+    ⚠️ 两条路径共用同一个 `dataset_id='sqlgen_plan_stage'`（不新造 stage 名）：
+       它表达的是「SQL 生成期的取证」，不是「plan() 这个函数被调用过」。
+       新造一个 stage 只会把同一件事拆成两处，让下游过滤逻辑分叉。
+
+    ⚠️ 幂等键（fingerprint）沿用「本次结论 + 命中引用集合」：同一条需求重跑
+       同一套结论不会重复堆行，结论变了才留新行。
+
+    返回 `{"written": n 或 None, "skipped": 原因, "error": 错误}`；**绝不抛异常**
+    ——引用留痕失败不能让生成链路崩。
+    """
+    out = {"written": None, "skipped": None, "error": ""}
+    if not demand_id:
+        out["skipped"] = "无 demand_id"
+        return out
+    _rq_title, _rq_desc = _demand_title_desc(demand_id)
+    if not (chosen_table or str(_rq_title or "").strip() or str(_rq_desc or "").strip()):
+        out["skipped"] = "无选表也无需求标题/描述，检索词无从构造"
+        return out
+    try:
+        import knowledge as _k_sg  # noqa: E402  惰性导入：模块缺失不影响生成链路
+        if not (hasattr(_k_sg, "search") and hasattr(_k_sg, "record_citations_once")):
+            out["skipped"] = "knowledge 模块无检索/留痕接口"
+            return out
+        q_sg = "%s 选表=%s 时间=%s 颗粒度=%s 需求=%s" % (
+            notes_prefix,
+            chosen_table or "",
+            time_field or "",
+            granularity or "",
+            (str(_rq_title) + " " + str(_rq_desc))[:100].strip() or "",
+        )
+        ks_sg = _k_sg.search(q_sg[:200], top_k=4)
+        cits_sg = ks_sg.get("citations") if isinstance(ks_sg, dict) else []
+        if not cits_sg:
+            # 检索没命中不是错误：知识库里确实没有可引用的内容。
+            out["skipped"] = "本次检索无命中（知识库无相关文档）"
+            return out
+        _fp_ids = "|".join(
+            sorted(
+                str(c.get("chunk_id") or c.get("document_id") or idx)
+                for idx, c in enumerate(cits_sg)
+            )
+        )
+        _fp = "ct=%s;tf=%s;gr=%s;mods=%s;cits=%s" % (
+            chosen_table or "", time_field or "", granularity or "",
+            ",".join(models or []) or "", _fp_ids,
+        )
+        rc_res = _k_sg.record_citations_once(
+            demand_id,
+            q_sg[:140],
+            cits_sg,
+            stage="sqlgen_plan_stage",
+            actor="sqlgen_plan",
+            fingerprint=_fp,
+            round_no=None,
+            sql_run_id=None,
+            dataset_id="sqlgen_plan_stage",
+        )
+        if isinstance(rc_res, dict):
+            out["written"] = rc_res.get("inserted", 0)
+            out["skipped"] = rc_res.get("skipped")
+    except Exception as e:  # noqa: BLE001
+        out["error"] = "%s: %s" % (type(e).__name__, str(e)[:160])
+    return out
+
+
 def plan(demand_id, dataset="B"):
     """出计划草稿（§4.7 · 一段式）：选表/选关联路径/选时间字段。
 
@@ -106,7 +207,11 @@ def plan(demand_id, dataset="B"):
         pack_version = pack.get("pack_version") or ""
         if pack.get("_debug"):
             cov = pack["_debug"].get("mdl_coverage_pct")
-            mr = pack["_debug"].get("miss_reason") or ""
+            # miss_reason 现在只在「真未命中主体表」时非空；覆盖率/输入不全等
+            # 解释性文字已挪到 notes，读的时候要兼容两种来源，避免提示里出现空值。
+            mr = pack["_debug"].get("miss_reason") or "；".join(
+                pack["_debug"].get("notes") or []
+            )
             if cov is not None and cov < 50.0:
                 draft_gate_detail_chunks.append(
                     "MDL 列中文名覆盖率较低：%.1f%%，miss_reason=%s" % (cov, mr[:120])
@@ -427,48 +532,19 @@ def plan(demand_id, dataset="B"):
     }
 
     # P-E · SQL 生成阶段取证检索落 knowledge_citations（覆盖"SQL 这一时期的实际取证动作"）
-    # 与 analysis 阶段同契约：AUTO_INTERNAL 开头作审计标记，不伪装用户可见引用
-    _rq_title, _rq_desc = _demand_title_desc(demand_id)
-    if demand_id and (chosen_table or str(_rq_title or "").strip() or str(_rq_desc or "").strip()):
-        try:
-            import knowledge as _k_sg  # noqa: E402
-            if hasattr(_k_sg, "search") and hasattr(_k_sg, "record_citations_once"):
-                q_sg = "SQL_PLAN 选表=%s 时间=%s 颗粒度=%s 需求=%s" % (
-                    chosen_table or "",
-                    time_field or "",
-                    granularity or "",
-                    (str(_rq_title) + " " + str(_rq_desc))[:100].strip() or "",
-                )
-                ks_sg = _k_sg.search(q_sg[:200], top_k=4)
-                cits_sg = ks_sg.get("citations") if isinstance(ks_sg, dict) else []
-                if cits_sg:
-                    # P1-15 · 幂等键：本次 plan 的关键结论 + 命中引用 id 集合
-                    _fp_ids = "|".join(
-                        sorted(
-                            str(c.get("chunk_id") or c.get("document_id") or idx)
-                            for idx, c in enumerate(cits_sg)
-                        )
-                    )
-                    _fp_sg = "ct=%s;tf=%s;gr=%s;mods=%s;cits=%s" % (
-                        chosen_table or "", time_field or "", granularity or "",
-                        ",".join(time_field_scope_models or []) or "", _fp_ids,
-                    )
-                    rc_res = _k_sg.record_citations_once(
-                        demand_id,
-                        q_sg[:140],
-                        cits_sg,
-                        stage="sqlgen_plan_stage",
-                        actor="sqlgen_plan",
-                        fingerprint=_fp_sg,
-                        round_no=None,
-                        sql_run_id=None,
-                        dataset_id="sqlgen_plan_stage",
-                    )
-                    if isinstance(rc_res, dict):
-                        out["_sql_plan_citations_written"] = rc_res.get("inserted", 0)
-                        out["_sql_plan_citations_skipped"] = rc_res.get("skipped")
-        except Exception:  # noqa: BLE001
-            out["_sql_plan_citations_write_error"] = True
+    _rc = _record_sqlgen_citations(
+        demand_id,
+        chosen_table=chosen_table,
+        time_field=time_field,
+        granularity=granularity,
+        models=time_field_scope_models,
+        notes_prefix="SQL_PLAN",
+    )
+    if _rc.get("written") is not None:
+        out["_sql_plan_citations_written"] = _rc.get("written")
+        out["_sql_plan_citations_skipped"] = _rc.get("skipped")
+    if _rc.get("error"):
+        out["_sql_plan_citations_write_error"] = True
 
     return out
 
@@ -551,7 +627,8 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
 
     生成器优先级：
       candidate_sql 非空（客户端 Agent 产出）  → generator=client-agent
-      candidate_sql 为空                      → generator=deterministic-planner
+      candidate_sql 为空且启用大模型           → generator=llm（sqlgen_llm，门禁不过则回落）
+      candidate_sql 为空且未启用大模型         → generator=deterministic-planner
         (planner.plan(ds, nl)，ds=数据集对象；nl=需求标题+描述 or structured_requirement
          subject.value + output_fields.value 拼接)
     """
@@ -576,6 +653,8 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
     sql_draft = None
     generator_label = None
     candidate_diff = None
+    # 走 LLM 旁路时 `planned` 不会被赋值；统一先给个空壳，避免后面按需读取时报 NameError
+    planned = {}
     if is_multi:
         # M6-2 F3 分支：多条候选先判定差异再决定是否下发
         generator_label = "client-agent"
@@ -621,17 +700,90 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
                 title = sub
                 desc = fields
         nl = (title.strip() + " " + desc.strip()).strip()
-        if not nl:
-            generation_risks.append("确定性兜底：构造 nl 为空 → planner 会返回 _refuse（不猜 SQL）")
-            planned = planner_mod._refuse(
-                dataset, "构造自然语言失败",
-                "无法从 demand_requests / structured_requirements 构造出可读 nl",
-                "先保证 demand_requests 有 title/description，或 requirement 槽位非空",
-            )
-        else:
-            planned = planner_mod.plan(ds, nl)
-        sql_draft = planned.get("sql") or ""
-        if planned.get("blocked"):
+
+        # ── 路由：确定性优先 / 大模型优先 ───────────────────────────
+        # 2026-10-30 实测（本地 Ollama deepseek-r1:7b）：
+        #   · 确定性规划器命中时，整条 generate 只要 1.7s；
+        #   · 同一条需求走大模型，单次调用 40s 起，prompt 更大时超 75s 超时，
+        #     再叠一次重试 ⇒ 用户点「生成」要干等 3~5 分钟，且两轮实测都被门禁
+        #     挡下、最终仍回落规划器。
+        # 结论：**能秒出且经过人工校验的口径，不该排在慢路径后面**。
+        # 默认 deterministic-first：规划器命中即下发，未命中才交给大模型救。
+        # 想恢复「先大模型后规划器」：设环境变量 SQLGEN_ROUTE=llm-first（无需改代码）。
+        _route = os.getenv("SQLGEN_ROUTE", "deterministic-first").strip().lower()
+        _det_first_hit = False
+        _planned_first = None
+        if nl and _route == "deterministic-first":
+            try:
+                _planned_first = planner_mod.plan(ds, nl)
+            except Exception:  # noqa: BLE001  规划器异常不阻塞大模型路径
+                _planned_first = None
+            if _planned_first and _planned_first.get("sql") and not _planned_first.get(
+                "blocked"
+            ):
+                sql_draft = str(_planned_first["sql"])
+                generator_label = "deterministic-planner"
+                _det_first_hit = True
+                # 同步给 planned：下游「引用留痕」按 planned.objects 取选中表，
+                # 不同步会让 ct/tf/gr 全空、引用落错档（sqlgen_citations_selftest 会红）。
+                planned = _planned_first
+                generation_notes.append(
+                    "确定性意图命中（intent=%s），秒级下发；"
+                    "未调用大模型（如需大模型改写，把 SQLGEN_ROUTE 设为 llm-first）"
+                    % _planned_first.get("intent")
+                )
+
+        # ── 大模型原生生成（可选旁路）────────────────────────────────
+        # 产品本身对接大模型：规划器未命中时用 LLM 兜底救回非常见意图，
+        # 失败/未配置再回落确定性规划器的「拒绝 + 缺口说明」。
+        # 这是**新增旁路**：不改 candidate_sql 路径，也不改未配置时的既有行为。
+        # 质量由 sqlgen_llm 内部「生成→门禁校验→修复」闭环保证；不过门禁则绝不下发。
+        _llm_used = False
+        _structured = _requirement_safe(demand_id)
+        if nl and not _det_first_hit:
+            try:
+                import sqlgen_llm as _llmmod  # 惰性导入：模块缺失不影响既有链路
+                if _llmmod.is_enabled():
+                    _lr = _llmmod.generate_sql(
+                        demand_id=demand_id, dataset=dataset, nl=nl, structured=_structured
+                    )
+                    if _lr.get("ok") and str(_lr.get("sql") or "").strip():
+                        sql_draft = str(_lr["sql"]).strip()
+                        generator_label = "llm"
+                        _llm_used = True
+                        generation_notes.append(
+                            "大模型生成并通过门禁：%s"
+                            % (str(_lr.get("explanation") or "")[:200] or "已通过门禁")
+                        )
+                        for _n in (_lr.get("notes") or []):
+                            generation_notes.append(str(_n))
+                        for _rk in (_lr.get("risks") or []):
+                            generation_risks.append(str(_rk))
+                    else:
+                        generation_risks.append(
+                            "大模型生成未采用，已回落确定性规划器：%s"
+                            % (str(_lr.get("error") or "")[:200] or "无可用 SQL")
+                        )
+            except Exception as _e:  # noqa: BLE001
+                generation_risks.append(
+                    "大模型生成异常，已回落确定性规划器：%s: %s"
+                    % (type(_e).__name__, str(_e)[:160])
+                )
+
+        blocked = False
+        if not _llm_used and not _det_first_hit:
+            if not nl:
+                generation_risks.append("确定性兜底：构造 nl 为空 → planner 会返回 _refuse（不猜 SQL）")
+                planned = planner_mod._refuse(
+                    dataset, "构造自然语言失败",
+                    "无法从 demand_requests / structured_requirements 构造出可读 nl",
+                    "先保证 demand_requests 有 title/description，或 requirement 槽位非空",
+                )
+            else:
+                planned = _planned_first or planner_mod.plan(ds, nl)
+            sql_draft = planned.get("sql") or ""
+            blocked = planned.get("blocked")
+        if blocked:
             #结构化返回，勿再拼成机器格式字符串（2026-10-07 用户反馈：
             #   「有很多文档格式的文字输出，排版不友好」——那正是把
             #   intent=/reason=/guide= 拼在一起直接透出所致）。
@@ -644,9 +796,9 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
                 "确定性兜底 planner 拒绝生成：%s" % (_intent or "未命中已建模意图")
             )
             # title 只放类型化结论，不要把整段描述重复一遍（界面另有 gap 行）
-            _kind_title = _classify_gap(
-                _extract_between(_reason, "当前差距：", None)
-            )["kind"]
+            _gap_text = _extract_between(_reason, "当前差距：", None) or _reason
+            _needs = _classify_gap(_gap_text)
+            _kind_title = _needs["kind"]
             generation_block = {
                 "blocked": True,
                 "title": _kind_title,
@@ -655,14 +807,33 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
                 "reason": _reason,
                 "guide": _guide,
                 "supported": _extract_between(_reason, "已支持：", "。当前差距："),
-                "gap": _extract_between(_reason, "当前差距：", None) or _reason,
+                "gap": _gap_text,
                 "guide_steps": [
                     x for x in _split_guide(_guide)
                     if not x.startswith("请按以下顺序") and not x.startswith("不需要改代码")
                 ],
-                "needs": _classify_gap(_extract_between(_reason, "当前差距：", None) or _reason),
+                "needs": _needs,
             }
-        else:
+            # CR010：缺口处置的第一顺位是「退回需求方补充」，不是补知识库。
+            # 把退回包一并挂在 generation_block 上（**追加键，不动既有键**），
+            # 前端点一次就能拿到待明确项；这里任何异常都不许影响生成结论本身。
+            try:
+                _dm = demand_mod.get(demand_id) if demand_id else {}
+                _rq = requirement_mod.get(demand_id) if demand_id else None
+                _pack = clarify_mod.build(
+                    _dm or {},
+                    requirement=_rq,
+                    dataset=dataset,
+                    gap_kind=_kind_title,
+                    gap_text=_gap_text,
+                )
+                generation_block["route"] = _pack.get("route")
+                generation_block["clarify"] = _pack
+            except Exception as _ce:
+                generation_risks.append(
+                    "退回包生成失败（不影响生成结论）：%s" % str(_ce)[:120]
+                )
+        elif not _llm_used and not _det_first_hit:
             generation_notes.append(
                 "确定性兜底命中 intent=%s；引用 MDL 对象 %d 个" % (
                     planned.get("intent"), len(planned.get("objects") or []),
@@ -671,6 +842,39 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
         # sql_plan 提供 field_mapping 可复用
         if isinstance(sql_plan, dict):
             field_mapping = list(sql_plan.get("field_mapping") or [])
+
+    # ── SQL 生成期的取证留痕（P-E）──────────────────────────────────
+    # ⚠️ 必须在 gates.review 之前：引用表达的是"这段 SQL 是照着哪些文档挑表/定口径
+    #    的"，属于生成动作的一部分；放到 review 之后就变成"审完才去补票"。
+    # 调用计划里已经给出的事实（sql_plan 入参）优先；没有就用确定性 planner 的
+    # objects 第一个当"选中的表"——够用即可，这里只求能检索到相关文档。
+    _cit_table = ""
+    _cit_tf = ""
+    _cit_gr = ""
+    _cit_models = []
+    if isinstance(sql_plan, dict):
+        _cit_table = str(sql_plan.get("chosen_table") or "")
+        _cit_tf = str(sql_plan.get("time_field") or "")
+        _cit_gr = str(sql_plan.get("granularity") or "")
+        _cit_models = list(sql_plan.get("time_field_scope_models") or [])
+    if not _cit_table:
+        _objs = (planned.get("objects") or []) if isinstance(planned, dict) else []
+        if _objs and isinstance(_objs[0], str):
+            _cit_table = _objs[0]
+    _cit_rc = _record_sqlgen_citations(
+        demand_id,
+        chosen_table=_cit_table,
+        time_field=_cit_tf,
+        granularity=_cit_gr,
+        models=_cit_models,
+        notes_prefix="SQL_GENERATE",
+    )
+    if _cit_rc.get("written"):
+        generation_notes.append(
+            "取证留痕：本次检索命中 %d 条引用，已落 knowledge_citations" % int(_cit_rc["written"])
+        )
+    elif _cit_rc.get("error"):
+        generation_notes.append("取证留痕失败（不影响生成）：%s" % _cit_rc["error"])
 
     # 立即 gates.review（L5 没有 exec_result → skipped，属预期）
     #
@@ -684,8 +888,13 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
     #   取不到就降级为 None（→ L-REQ skipped、不参与总状态），
     #   **绝不让一次查库失败把整条生成链路搞崩**。
     try:
+        _req_gate, _req_why = _requirement_for_gate(demand_id)
+        if _req_gate is None:
+            # 不把 None 递进去（那样门禁只能说"调用方没传"），而是让门禁
+            # 带着**真原因**走 skipped 分支 → detail 里能直接看到该改什么。
+            _req_gate = {"ok": False, "error": _req_why or "结构化需求不可用"}
         review = gates_mod.review(sql_draft or "", dataset=dataset,
-                                  requirement=_requirement_safe(demand_id))
+                                  requirement=_req_gate)
     except Exception as e:  # noqa: BLE001
         review = {
             "status": "不通过",

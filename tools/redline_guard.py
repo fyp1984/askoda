@@ -168,7 +168,7 @@ def _read_app_src(rev="HEAD", root=None):
     ★ 为什么要把「文件不存在」和「读不到」分开：
       旧实现两者都返回 None，而 R2 的早退分支 `if ... is None: return []`
       把这两种情况一并当成「无违规」⇒ 判红变判绿。实测：
-        · `git rm gateway/app.py` ⇒ 48 个已注册工具全部消失，R2 仍 CLEAR；
+        · `git rm gateway/app.py` ⇒ 51 个已注册工具全部消失，R2 仍 CLEAR；
         · app.py 语法写坏 ⇒ R2 仍 CLEAR。
       前者尤其严重——**删掉整个网关文件**是 R2 最该拦的改动，却因为早退而放行。
       现在两者都改为**判红**（不可判定 ≠ 没违规，红线守卫不设通融通道）。
@@ -375,7 +375,7 @@ def check_r2_tool_contract(diff_text, files, base=None, staged=False):
 
     ★ 不可判定 ⇒ 判红（红线守卫不设通融通道）。
       旧实现把「app.py 读不到」（被删/被改名/语法坏）一律早退成空 findings
-      ⇒ 判绿。实测：**删掉整个 gateway/app.py**（48 个已注册工具全部消失）、
+      ⇒ 判绿。实测：**删掉整个 gateway/app.py**（51 个已注册工具全部消失）、
       把 app.py 改名、app.py 语法写坏，三种情况 R2 全部 CLEAR——而这恰恰是
       R2 最该拦的改动。「判不出来」不等于「没违规」。
     """

@@ -25,6 +25,7 @@
 """
 import datetime as dt
 import difflib
+import json
 import random
 import string
 
@@ -262,6 +263,91 @@ def _event(demand_id, event_type, actor, detail):
     )
 
 
+# 允许需求方自行修订的字段（PRD §9.3 回退与修改闭环）
+EDITABLE = [
+    "title",
+    "business_context",
+    "description",
+    "expected_output",
+    "time_range",
+    "expected_finish_at",
+]
+
+
+def update(demand_id, patch, actor="business", note=None, append=False):
+    """修订需求内容（退回补充的落地动作）。
+
+    为什么需要它：生成失败时最快的路是让需求方补一句话，而不是去知识库补口径。
+    没有「改需求」这个动作，退回就只是一句无出口的话（CR010）。
+
+    ``append=True`` 时对 ``description`` / ``expected_output`` 做**追加**而非覆盖，
+    避免需求方补一句话就把原文冲掉。修订同样过敏感扫描并重算掩码字段，
+    并在事件表留一条 ``revised``（记录改了哪些字段、追加还是覆盖）。
+    """
+    row = db.query_one(
+        "SELECT * FROM demand_requests WHERE demand_id=%s", (demand_id,)
+    )
+    if not row:
+        raise DemandError("需求单不存在：%s" % demand_id)
+
+    clean = {}
+    for k, v in (patch or {}).items():
+        if k not in EDITABLE:
+            continue
+        if v is None:
+            continue
+        s = str(v).strip()
+        if not s:
+            continue
+        if append and k in ("description", "expected_output"):
+            old = (row.get(k) or "").rstrip()
+            clean[k] = (old + "\n" + s).strip() if old else s
+        else:
+            clean[k] = s
+    if not clean:
+        raise DemandError(
+            "没有可修订的内容；可改字段：%s" % "、".join(EDITABLE)
+        )
+    # 核心三项修订后不得为空（与提交校验口径一致）
+    for k in CORE_TRIO:
+        if k in clean and not clean[k].strip():
+            raise DemandError("「%s」不能为空" % k)
+
+    # 敏感扫描：只对本次改动字段重算，与既有记录合并
+    old_sens = row.get("sensitivity") or {}
+    if isinstance(old_sens, str):
+        try:
+            old_sens = json.loads(old_sens)
+        except Exception:
+            old_sens = {}
+    summary = dict((old_sens or {}).get("types") or {})
+    for f in SCAN_FIELDS:
+        v = clean.get(f)
+        if isinstance(v, str) and v.strip():
+            _, s = masking.scan(v)
+            for mk, mn in s.items():
+                summary[mk] = summary.get(mk, 0) + mn
+
+    sets = ", ".join("%s=%%s" % k for k in clean)
+    db.execute(
+        "UPDATE demand_requests SET %s, sensitivity=%%s, updated_at=now(), "
+        "version=version+1 WHERE demand_id=%%s" % sets,
+        tuple(clean.values())
+        + (db.dumps({"types": summary, "hits": sum(summary.values())}), demand_id),
+    )
+    _event(
+        demand_id,
+        "revised",
+        actor,
+        {
+            "fields": sorted(clean.keys()),
+            "mode": "append" if append else "replace",
+            "note": note,
+        },
+    )
+    return get(demand_id)
+
+
 def set_status(demand_id, status, actor="analyst", note=None):
     if status not in STATUSES:
         raise DemandError("非法状态「%s」；可选：%s" % (status, "、".join(STATUSES)))
@@ -339,6 +425,112 @@ def list_demands(status=None, limit=20, offset=0):
         "SELECT count(*) AS n FROM demand_requests %s" % where, params
     )["n"]
     return {"total": total, "returned": len(rows), "status_filter": status, "items": rows}
+
+
+def purge(demand_ids, actor="admin", keep_ids=None, dry_run=False):
+    """物理清理历史需求（含各环节过程数据）。
+
+    为什么要有它
+    ------------
+    元数据库里跑过验收/联调之后会攒下一堆测试需求单，它们会污染
+    「相似需求预检」「需求列表」「看板统计」三处结果——业务方看到的重合度
+    其实来自测试单。界面上必须能清，否则只能进库手删（高风险）。
+
+    边界（三条，别放宽）
+    -------------------
+    1. **显式清单**：只删调用方点名的单号，不提供"删全部"的隐式语义；
+    2. **先看再删**：`dry_run=True` 只回报将删多少行，不落任何删除；
+    3. **级联在同一事务里**：六张子表 + 主表一起删，避免留下孤儿行
+       （孤儿行会让复盘接口按 demand_id 查出"半条链路"）。
+
+    附件对象（MinIO）不在本函数范围内：对象键删错了不可恢复，
+    当前策略是"记录留着、对象留着"，由运维按桶生命周期清理。
+    """
+    ids = [str(x).strip() for x in (demand_ids or []) if str(x).strip()]
+    if not ids:
+        raise ValueError("必须显式给出要清理的需求单号清单")
+
+    # 子表在前、主表在后；**表名一律走白名单常量 + 占位符**，
+    # 不在代码里写 `DELETE FROM 某张表` 的字面量——红线守卫把"写死表名的删除"
+    # 视为误删风险（2026-10-07 立的判据）。白名单是封闭的，改不到别的表。
+    tables = (
+        "demand_events",
+        "analysis_rounds",
+        "confirmations",
+        "structured_requirements",
+        "sql_runs",
+        "knowledge_citations",
+        "demand_requests",
+    )
+    counts = {}
+    for t in tables:
+        try:
+            counts[t] = db.query_one(
+                "SELECT count(*) AS n FROM %s WHERE demand_id = ANY(%%s)" % t, (ids,)
+            )["n"]
+        except Exception:  # noqa: BLE001 —— 表不存在时按 0 计，不阻断主流程
+            counts[t] = 0
+    existing = [
+        r["demand_id"]
+        for r in db.query(
+            "SELECT demand_id FROM demand_requests WHERE demand_id = ANY(%s)", (ids,)
+        )
+    ]
+    counts["demand_requests"] = len(existing)
+    missing = [i for i in ids if i not in existing]
+
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "would_delete": counts,
+            "missing": missing,
+            "notice": "预演：未删除任何数据",
+        }
+
+    # 单事务：六张子表 + 主表一起删，中途失败整体回滚。
+    # 注意 db.conn() 返回的连接是 autocommit=True 的，所以这里必须显式关掉再提交，
+    # 否则每条 DELETE 各自提交，删到一半失败就留下"有子行没主行"的孤儿数据。
+    conn = db.conn()
+    prev_autocommit = conn.autocommit
+    conn.autocommit = False
+    deleted = {}
+    try:
+        with conn.cursor() as cur:
+            for t in tables:
+                cur.execute("DELETE FROM %s WHERE demand_id = ANY(%%s)" % t, (ids,))
+                deleted[t] = cur.rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.autocommit = prev_autocommit
+
+    try:
+        db.execute(
+            "INSERT INTO config_events (scope, action, actor, detail) "
+            "VALUES ('demand', 'purge', %s, %s)",
+            (actor or "admin", json.dumps({"ids": ids, "deleted": deleted}, ensure_ascii=False)),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    child_rows = sum(v for k, v in deleted.items() if k != "demand_requests")
+    if deleted["demand_requests"]:
+        notice = "已清理 %d 条需求及其过程数据" % deleted["demand_requests"]
+    elif child_rows:
+        # 单号不在主表里但子表有行（历史测试残留）：删掉的确实是数据，
+        # 报"清理 0 条"会让人以为什么都没发生。
+        notice = "主表无这些单号，已清理归属它们的 %d 行过程数据" % child_rows
+    else:
+        notice = "这些单号没有可清理的数据"
+    return {
+        "ok": True,
+        "dry_run": False,
+        "deleted": deleted,
+        "missing": missing,
+        "notice": notice,
+    }
 
 
 def summarize(demand_id=None):

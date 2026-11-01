@@ -1,0 +1,10 @@
+{
+  "properties": {
+    "dataSource": "postgres",
+    "host": "host.docker.internal",
+    "port": "15432",
+    "user": "test",
+    "password": "test",
+    "database": "credit"
+  }
+}

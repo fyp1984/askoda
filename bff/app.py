@@ -20,12 +20,20 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from config import BFF_PORT, SERVE_STATIC, STATIC_DIR
+from config import (
+    BFF_PORT,
+    DB_DEFAULT_HOST,
+    DB_DEFAULT_PORT,
+    SERVE_STATIC,
+    STATIC_DIR,
+)
 from mcp_client import McpError, get_client
+import attachment_proxy
+import llm_view
 from sanitize import redact_mcp_tool, sanitize
 
 import os
@@ -67,19 +75,24 @@ app.add_middleware(
 # PRD §12.7 界面原则 2：任何硬门禁拒绝都要附「为什么拒绝 + 去哪里治理」。
 # --------------------------------------------------------------------------
 class ApiError(Exception):
-    def __init__(self, code: str, message: str, hint: str, status: int = 400):
+    def __init__(self, code: str, message: str, hint: str, status: int = 400,
+                 extra: dict | None = None):
         super().__init__(message)
         self.code = code
         self.message = message
         self.hint = hint
         self.status = status
+        # 结构化附加信息（如口径校验的逐条原因）。**不参与脱敏**：
+        # 调用方只放已经确认可以给前端看的内容，别把原始堆栈塞进来。
+        self.extra = extra or {}
 
 
 @app.exception_handler(ApiError)
 async def _api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
     return JSONResponse(
         status_code=exc.status,
-        content={"code": exc.code, "message": redact_mcp_tool(exc.message), "hint": exc.hint},
+        content={"code": exc.code, "message": redact_mcp_tool(exc.message), "hint": exc.hint,
+                 **(exc.extra or {})},
     )
 
 
@@ -171,6 +184,35 @@ class DemandSetStatusIn(BaseModel):
     status: str = Field(min_length=1, description="目标状态；必须是 DEMAND_STATUSES 之一")
     note: str | None = Field(default=None, description="流转说明；退回时必填")
     actor: str = Field(default="", description="操作人，用于留痕")
+
+
+class ClarifyItemIn(BaseModel):
+    """一条待明确项（前端回传勾选结果时使用）。"""
+
+    id: str | None = None
+    slot: str = ""
+    question: str = ""
+    answer: str = ""
+
+
+class DemandReturnIn(BaseModel):
+    """退回需求方补充（CR010）。"""
+
+    dataset: str = "B"
+    gap_kind: str = ""
+    gap_text: str = ""
+    items: list[ClarifyItemIn] = Field(default_factory=list)
+    note: str | None = None
+    actor: str = ""
+
+
+class DemandSupplementIn(BaseModel):
+    """需求方补充完成后回填。"""
+
+    answers: list[ClarifyItemIn] = Field(default_factory=list)
+    extra_description: str = ""
+    fields: dict = Field(default_factory=dict)
+    actor: str = ""
 
 
 # 需求状态机取值，与 gateway/demand.py:40 STATUSES 逐字一致。
@@ -275,8 +317,53 @@ async def list_demands(
     return sanitize(result)
 
 
-# 6. POST /api/v1/demand/{id}/set-status —— 需求状态流转（含「验收通过」收口）
-@app.post(f"{API}/demand/{{demand_id}}/set-status", tags=["需求"])
+class DemandPurgeIn(BaseModel):
+    demand_ids: list[str] = Field(default_factory=list)
+    actor: str = Field(default="")
+    dry_run: bool = Field(default=False, description="只回报将删多少行，不落删除")
+
+
+@app.post(f"{API}/demand/purge", tags=["需求"])
+async def purge_demands(body: DemandPurgeIn) -> Any:
+    """物理清理历史需求（含分析/确认/取数等过程数据）。
+
+    为什么需要显式清单：删除不可恢复，任何"顺手清空"的隐式语义都是事故。
+    前端从列表勾选后把单号带过来；`dry_run=true` 先看影响面再动手。
+    """
+    ids = [i.strip() for i in body.demand_ids if i and i.strip()]
+    if not ids:
+        raise ApiError(
+            code="DEMAND_IDS_REQUIRED",
+            message="没有指定要清理的需求单号。",
+            hint="在需求列表里勾选要删的单子，再点清理。",
+        )
+    if len(ids) > 200:
+        raise ApiError(
+            code="DEMAND_IDS_TOO_MANY",
+            message=f"一次最多清理 200 条，本次传了 {len(ids)} 条。",
+            hint="分批勾选后重试。",
+        )
+    try:
+        data = await call(
+            "demand_purge",
+            {"demand_ids": ids, "actor": body.actor or "admin", "dry_run": body.dry_run},
+        )
+    except McpError as exc:
+        raise ApiError(
+            code="DEMAND_PURGE_FAILED",
+            message=str(exc),
+            hint="清理没执行。数据未删除；确认网关与元数据库可用后重试。",
+        )
+    if _tool_rejected(data):
+        raise ApiError(
+            code="DEMAND_PURGE_REJECTED",
+            message=_tool_rejected(data) or "清理被拒绝",
+            hint="确认单号格式正确（DR-…），且这些需求确实存在。",
+        )
+    return sanitize(data)
+
+
+# 6. POST /api/v1/demand/{id}/set-status —— 需求状态流转（含「验收通过」收口）@app.post(f"{API}/demand/{{demand_id}}/set-status", tags=["需求"])
 async def set_demand_status(demand_id: str, body: DemandSetStatusIn) -> Any:
     """流转需求单状态，转发网关 `demand_set_status`。
 
@@ -318,8 +405,106 @@ async def set_demand_status(demand_id: str, body: DemandSetStatusIn) -> Any:
     return sanitize(result)
 
 
-# 7. POST /api/v1/demand/similar-precheck —— 提交前查重
-@app.post(f"{API}/demand/similar-precheck", tags=["需求"])
+# 6b. GET /api/v1/demand/{id}/clarify —— 预览「要问需求方什么」（CR010）
+@app.get(f"{API}/demand/{{demand_id}}/clarify", tags=["需求"])
+async def demand_clarify(
+    demand_id: str,
+    dataset: str = "B",
+    gap_kind: str = "",
+    gap_text: str = "",
+) -> Any:
+    """生成失败时的退回包：待明确项 / 补充建议 / 已确认底座。
+
+    产品定位（CR010）：缺口处置第一顺位是**退回需求方补充**，不是补知识库。
+    知识库补口径是长期治理（小时/天级、跨部门），退需求是分钟级、一个人。
+    本接口只读，供界面在真正退回前预览——不写库、不改状态。
+    """
+    result = await call(
+        "demand_clarify",
+        {
+            "demand_id": demand_id,
+            "dataset": dataset,
+            "gap_kind": gap_kind,
+            "gap_text": gap_text,
+        },
+    )
+    reason = _tool_rejected(result)
+    if reason:
+        raise ApiError(
+            code="CLARIFY_FAILED",
+            message=reason,
+            hint="没能生成待明确项。请确认需求编号存在，然后重试；"
+                 "若持续失败，可先手工按「补充建议」改写需求描述。",
+        )
+    return sanitize(result)
+
+
+# 6c. POST /api/v1/demand/{id}/return —— 退回需求方补充
+@app.post(f"{API}/demand/{{demand_id}}/return", tags=["需求"])
+async def demand_return(demand_id: str, body: DemandReturnIn) -> Any:
+    """把需求退回发起人补充（状态 → 待补充修改），并固化本次要补的项。
+
+    与「已退回」的区别：「已退回」＝不做这条需求（终态）；
+    「待补充修改」＝仍要做，只是描述不清（可回流）。
+    """
+    result = await call(
+        "demand_return",
+        {
+            "demand_id": demand_id,
+            "dataset": body.dataset,
+            "gap_kind": body.gap_kind,
+            "gap_text": body.gap_text,
+            "items": [i.model_dump() for i in body.items],
+            "note": body.note,
+            "actor": body.actor,
+        },
+    )
+    reason = _tool_rejected(result)
+    if reason:
+        raise ApiError(
+            code="RETURN_FAILED",
+            message=reason,
+            hint="退回没有成功。请确认需求编号与状态；若需求已终态（已通过/已退回），"
+                 "需先回到「待分析」再退回。",
+        )
+    return sanitize(result)
+
+
+# 6d. POST /api/v1/demand/{id}/supplement —— 需求方补充完成后回填
+@app.post(f"{API}/demand/{{demand_id}}/supplement", tags=["需求"])
+async def demand_supplement(demand_id: str, body: DemandSupplementIn) -> Any:
+    """把作答写回需求描述（追加，不覆盖原文），并把状态拨回「待分析」。
+
+    回填后由前端触发重新分析——服务端不自动重跑，避免无人在场时消耗算力。
+    """
+    if not body.answers and not (body.extra_description or "").strip() and not body.fields:
+        raise ApiError(
+            code="EMPTY_SUPPLEMENT",
+            message="没有收到任何补充内容。",
+            hint="至少回答一个问题，或直接改写需求描述后再提交。",
+        )
+    result = await call(
+        "demand_supplement",
+        {
+            "demand_id": demand_id,
+            "answers": [a.model_dump() for a in body.answers],
+            "extra_description": body.extra_description,
+            "fields": body.fields,
+            "actor": body.actor,
+        },
+    )
+    reason = _tool_rejected(result)
+    if reason:
+        raise ApiError(
+            code="SUPPLEMENT_FAILED",
+            message=reason,
+            hint="补充没有写回。请稍后重试；若持续失败，可把补充内容发给我，"
+                 "由我核对是哪一步没落库。",
+        )
+    return sanitize(result)
+
+
+# 7. POST /api/v1/demand/similar-precheck —— 提交前查重@app.post(f"{API}/demand/similar-precheck", tags=["需求"])
 async def similar_precheck(body: SimilarPrecheckIn) -> Any:
     """相似需求预检。
 
@@ -713,8 +898,111 @@ async def citations(
 
 
 # --------------------------------------------------------------------------
-# 14. GET /api/v1/demand/{id}/replay —— ★审计回放（技术人员视角的完整判断链）
+# 13b. 附件下载（T09 · 走 BFF 代理，不把预签名链接交给浏览器）
 # --------------------------------------------------------------------------
+# 为什么必须有这一层（实测结论，不是设计洁癖）
+# ------------------------------------------
+# `attachment_url` 返回的预签名链接，host 是对象存储的**内网地址**
+# （compose 内的服务名+容器端口，或宿主机回环端口）。浏览器点开的表现：
+#   · 容器服务名解析不了 ⇒ ERR_NAME_NOT_RESOLVED；
+#   · 换成对外地址也不行 —— Host 参与签名 ⇒ 403 SignatureDoesNotMatch；
+#   · 端口没对外暴露时连不上。
+# ⇒ 浏览器只跟同源的 BFF 说话，字节流由 BFF 在服务端取回再转发。
+#   BFF 每次现取签名，所以「链接过期」这类问题也一并消失。
+#
+# 安全边界（规则实现见 bff/attachment_proxy.py，那里有离线判据）：
+#   ① 对象键白名单式校验（拒协议 / 拒 `..` / 拒反斜线）⇒ 不会变成任意 URL 抓取器；
+#   ② 地址只认网关给的签名 URL，BFF 不自己拼对象存储地址、不持有第二套密钥；
+#   ③ 下载文件名走 RFC 5987，中文不乱码。
+@app.get(f"{API}/demand/{{demand_id}}/attachments", tags=["附件"])
+async def attachments_of_demand(demand_id: str) -> Any:
+    """该需求单下的附件清单，每项附一个**同源**下载地址。"""
+    data = await call("attachment_list", {"demand_id": demand_id})
+    reason = _tool_rejected(data)
+    if reason:
+        raise ApiError("ATTACHMENT_LIST_FAILED", reason,
+                       hint="附件服务可能未就绪；不影响需求本身的分析与出数。")
+    items = []
+    for obj in (data.get("objects") or []) if isinstance(data, dict) else []:
+        key = str((obj or {}).get("object_key") or "")
+        items.append(
+            {
+                "object_key": key,
+                "filename": attachment_proxy.filename_of(key),
+                "size": (obj or {}).get("size"),
+                "last_modified": (obj or {}).get("last_modified"),
+                "download_url": attachment_proxy.download_url(API, key),
+            }
+        )
+    return {"ok": True, "demand_id": demand_id, "total": len(items), "items": items}
+
+
+@app.get(f"{API}/attachments/{{object_key:path}}", tags=["附件"])
+async def download_attachment(object_key: str) -> Any:
+    """代理下载：由 BFF 取回字节流后原样转发给浏览器。"""
+    key = attachment_proxy.safe_object_key(object_key)
+    if not key:
+        raise ApiError("ATTACHMENT_KEY_INVALID", "附件标识不合法",
+                       hint="附件标识形如「需求单号/文件名」，不应包含协议、路径回退等成分。")
+    signed = await call("attachment_url", {"object_key": key, "expires_seconds": 300})
+    reason = _tool_rejected(signed)
+    if reason or not (signed or {}).get("url"):
+        raise ApiError("ATTACHMENT_URL_FAILED", reason or "未取到下载地址",
+                       hint="对象可能已被删除，或附件服务未就绪。")
+    url = str(signed["url"])
+    try:
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            length = resp.headers.get("Content-Length")
+            if length and int(length) > attachment_proxy.SIZE_MAX:
+                raise ApiError(
+                    "ATTACHMENT_TOO_LARGE",
+                    "附件过大（%s 字节），超过代理下载上限" % length,
+                    hint="请在部署机上直接从对象存储取回该文件。",
+                )
+            body = resp.read(attachment_proxy.SIZE_MAX + 1)
+    except ApiError:
+        raise
+    except urllib.error.HTTPError as exc:
+        # 对象存储说「没有这个对象」⇒ 语义上是 404，不该报成服务故障：
+        # 用户看到「文件不存在」会去核对附件，看到「取回失败」只会来投诉系统。
+        if exc.code == 404:
+            raise ApiError(
+                "ATTACHMENT_NOT_FOUND",
+                "附件不存在或已被删除",
+                hint="可能是上传未完成，或该附件已被清理；请重新上传。",
+                status=404,
+            )
+        log.warning("附件代理下载失败 key=%s: HTTP %s", key, exc.code)
+        raise ApiError(
+            "ATTACHMENT_FETCH_FAILED",
+            "取回附件失败（对象存储返回 HTTP %s）" % exc.code,
+            hint="对象存储可能不可达或签名已失效；请稍后重试。",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("附件代理下载失败 key=%s: %s", key, exc)
+        raise ApiError("ATTACHMENT_FETCH_FAILED", "%s: %s" % (type(exc).__name__, str(exc)[:160]),
+                       hint="服务端取回附件失败；多为对象存储不可达或签名已失效。")
+    if len(body) > attachment_proxy.SIZE_MAX:
+        raise ApiError("ATTACHMENT_TOO_LARGE", "附件超过代理下载上限",
+                       hint="请在部署机上直接从对象存储取回该文件。")
+    name = attachment_proxy.filename_of(key)
+    return Response(
+        content=body,
+        media_type=attachment_proxy.guess_media_type(name),
+        headers={
+            "Content-Disposition": attachment_proxy.content_disposition(name),
+            # 附件是敏感业务材料：禁止中间缓存，也禁止被当成页面执行
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+
 # 为什么单独开一个接口、而不是塞进 e2e-status：
 # e2e-status 是「当前态」聚合（每块只取最新一次），审计回放是「历史态」查询——
 # 要能按版本号精确复原某一次的输入/门禁/结论。两者语义与生命周期都不同，
@@ -861,124 +1149,14 @@ async def semantic_collect(body: CollectIn) -> Any:
 
 
 # --------------------------------------------------------------------------
-# M8 · 菜单② 知识储备
-# PRD §12.7：知识收集 / 知识准入 / 知识库资产。
-# 说明：上传与准入依赖 RAGFlow 独立栈（B4），当前先交付「检索 + 资产 + 引用溯源」。
 # --------------------------------------------------------------------------
-class KnowledgeSearchIn(BaseModel):
-    question: str = Field(min_length=1, description="检索问题")
-    top_k: int = Field(default=5)
-    threshold: float = Field(default=0.1, description="相似度下限，必须 >0（传 0 会被服务端回退成 0.2）")
-    vector_weight: float = Field(default=0.7)
-    demand_id: str = Field(default="", description="留痕用；为空则只检索不登记引用")
-
-
-@app.get(f"{API}/knowledge/health", tags=["知识储备"])
-async def knowledge_health() -> Any:
-    """知识库连通性与数据集可见性（含已解析文档数）。"""
-    return sanitize(await call("knowledge_health", {}))
-
-
-@app.get(f"{API}/knowledge/documents", tags=["知识储备"])
-async def knowledge_documents(limit: int = 50) -> Any:
-    """知识库资产：已入库文档（名称 / 解析状态 / 分块数）。"""
-    return sanitize(await call("knowledge_documents", {"limit": limit}))
-
-
-@app.post(f"{API}/knowledge/search", tags=["知识储备"])
-async def knowledge_search(body: KnowledgeSearchIn) -> Any:
-    """检索知识库，返回带来源的引用（文档名 / 片段定位 / 相似度）。"""
-    return sanitize(
-        await call(
-            "knowledge_search",
-            {
-                "question": body.question,
-                "top_k": body.top_k,
-                "threshold": body.threshold,
-                "vector_weight": body.vector_weight,
-                "demand_id": body.demand_id,
-            },
-        )
-    )
-
-
-@app.get(f"{API}/knowledge/citations", tags=["知识储备"])
-async def knowledge_citations(
-    demand_id: str = "", include_retired: bool = False, limit: int = 50
-) -> Any:
-    """知识引用留痕记录（按 demand_id 筛选；为空则返回跨需求最近记录）。"""
-    return sanitize(
-        await call(
-            "knowledge_citation_list",
-            {"demand_id": demand_id, "include_retired": include_retired, "limit": limit},
-        )
-    )
-
-
+# 知识管理客户端接口已按 CR009 整体剔除（2026-10-30）
 # --------------------------------------------------------------------------
-# M8 · 知识准入（上传 / 解析进度 / 撤库）
-#
-# 为什么走 base64 JSON 而不用 multipart 上传
-# ------------------------------------------
-# FastAPI 收 `UploadFile` 需要 `python-multipart`，而本项目红线五「不新增运行时依赖」。
-# 前端用浏览器内置 `FileReader` 读 base64 即可，零新依赖；
-# 网关侧 `knowledge_upload` 本来就收 `content_base64`，两头都不必引库。
+# 产品内核：知识收集、准入、上架、下架等知识库管理操作全部在 WeKnora 知识库平台
+# 完成，Askoda 客户端不设知识上传 / 检索 / 资产 / 撤库入口；分析链路对知识的调取
+# 走网关 MCP（服务端内部消费面），不经客户端 REST。原 /knowledge/* 八条路由与
+# 三个入参模型一并移除；引用溯源保留在 /demand/{id}/citations（④合规审计段留痕）。
 # --------------------------------------------------------------------------
-class KnowledgeUploadIn(BaseModel):
-    filename: str = Field(min_length=1, description="原始文件名，含扩展名")
-    content_base64: str = Field(min_length=1, description="文件内容 base64")
-    content_type: str = Field(default="", description="MIME，可留空")
-    actor: str = Field(default="")
-
-
-class KnowledgeDeleteIn(BaseModel):
-    document_id: str = Field(min_length=1)
-    actor: str = Field(default="")
-
-
-@app.post(f"{API}/knowledge/upload", tags=["知识储备"])
-async def knowledge_upload(body: KnowledgeUploadIn) -> Any:
-    """上传文档到知识库并触发解析。
-
-    解析是**异步**的：本调用返回后请轮询 `GET /knowledge/status` 直到
-    `run=DONE`，否则文档还不被检索命中。
-    """
-    try:
-        result = await call(
-            "knowledge_upload",
-            {
-                "filename": body.filename,
-                "content_base64": body.content_base64,
-                "content_type": body.content_type,
-                "actor": body.actor,
-            },
-        )
-    except McpError as exc:
-        raise ApiError(
-            code="KNOWLEDGE_UPLOAD_FAILED",
-            message=str(exc),
-            hint="请确认知识库 API 可用、文件名带扩展名、文件未超限。",
-        )
-    return sanitize(result)
-
-
-@app.get(f"{API}/knowledge/status", tags=["知识储备"])
-async def knowledge_status(document_id: str = "", limit: int = 50) -> Any:
-    """文档解析进度（前端轮询用）。不传 document_id 返回全部。"""
-    return sanitize(await call("knowledge_document_status", {"document_id": document_id, "limit": limit}))
-
-
-@app.post(f"{API}/knowledge/delete", tags=["知识储备"])
-async def knowledge_delete(body: KnowledgeDeleteIn) -> Any:
-    """从知识库撤库一份文档（只删 RAGFlow 侧，不碰需求单与附件）。"""
-    try:
-        result = await call(
-            "knowledge_delete",
-            {"document_id": body.document_id, "actor": body.actor},
-        )
-    except McpError as exc:
-        raise ApiError(code="KNOWLEDGE_DELETE_FAILED", message=str(exc))
-    return sanitize(result)
 
 
 # --------------------------------------------------------------------------
@@ -1007,6 +1185,483 @@ async def datasource_candidates(demand_id: str, dataset: str = "B") -> Any:
     """在 MDL 闭集内给出主题表 / 关联路径 / 时间字段候选（未命中给 miss_reason，不猜）。"""
     return sanitize(
         await call("schema_candidates", {"demand_id": demand_id, "dataset": dataset})
+    )
+
+
+# --------------------------------------------------------------------------
+# M10 · 数据集登记（把「再接一个业务库」变成界面动作）
+#
+# 三条约束（别放宽）：
+#   1. **浏览器不出现内网地址**（R2）：前端只提交主机/端口/库名/账号，连接串由本层组装；
+#      引擎也只填代号（A/B/C），地址由网关按 compose 服务名约定解析。
+#   2. **口令只进不出**：登记后回显只有库名，不返回连接串与口令。
+#   3. **先探测再登记**：`/datasource/probe` 把「PG 通不通 / 引擎活不活 / MDL 对不对」
+#      三条判据分开给结论——合并成一个"成功"会让「通了但查不了」这种状态无法表达。
+# --------------------------------------------------------------------------
+class DbConnIn(BaseModel):
+    # 主机默认由服务端决定（R2：页面不出现内部地址）；显式传 host 时以传入为准，
+    # 供运维脚本调用，不供浏览器表单使用。
+    host: str = Field(default="", description="留空 = 用部署方配置的默认数据库位置")
+    port: int = Field(default=0, ge=0, le=65535, description="0 = 用部署方默认端口")
+    dbname: str = Field(default="", description="库名")
+    user: str = Field(default="")
+    password: str = Field(default="")
+
+
+class DatasetRegisterIn(DbConnIn):
+    key: str = Field(default="", description="数据集编码，建议单个大写字母（如 C）")
+    label: str = Field(default="")
+    domain: str = Field(default="")
+    engine: str = Field(default="", description="引擎代号 A/B/C；地址由网关解析")
+    mdl_json: str = Field(default="", description="MDL（JSON 文本）；留空则用已登记的")
+    enabled: bool = True
+    actor: str = Field(default="")
+
+
+class DatasetProbeIn(DbConnIn):
+    key: str = Field(default="")
+    engine: str = Field(default="")
+
+
+def _compose_dsn(body: DbConnIn) -> str:
+    """把表单字段拼成连接串。只在这里出现，别处不要重复拼。"""
+    if not body.dbname.strip():
+        raise ApiError(
+            code="DB_NAME_REQUIRED",
+            message="库名没填。",
+            hint="填上要接入的业务库名（例如 credit），再点测试。",
+        )
+    host = body.host.strip() or DB_DEFAULT_HOST
+    if not host:
+        raise ApiError(
+            code="DB_HOST_NOT_CONFIGURED",
+            message="部署方还没配置默认数据库位置，页面不允许手工填内部地址。",
+            hint="请让运维在 BFF 的环境变量里设置 ASKODA_DB_HOST（可同时设 ASKODA_DB_PORT），"
+                 "重启 BFF 后再登记。",
+        )
+    port = int(body.port) or DB_DEFAULT_PORT
+    from urllib.parse import quote
+
+    pwd = quote(body.password or "", safe="")
+    user = quote(body.user or "", safe="")
+    return "postgresql://%s:%s@%s:%d/%s" % (
+        user, pwd, host, port, body.dbname.strip()
+    )
+
+
+@app.get(f"{API}/datasource/registry", tags=["数据源接入"])
+async def datasource_registry_list() -> Any:
+    """已登记的数据集 + 当前可用的数据集清单（下拉框数据源）。"""
+    try:
+        reg = await call("dataset_registry")
+        usable = await call("datasets")
+    except McpError as exc:
+        raise ApiError(
+            code="DATASET_REGISTRY_UNAVAILABLE",
+            message=str(exc),
+            hint="网关未就绪或元数据库不可用；先确认后端状态，再回来刷新。",
+        )
+    return {
+        "ok": True,
+        "registered": sanitize((reg or {}).get("items") or []),
+        "usable": sanitize((usable or {}).get("datasets") or []),
+        "env_keys": (usable or {}).get("env_keys") or [],
+    }
+
+
+@app.post(f"{API}/datasource/probe", tags=["数据源接入"])
+async def datasource_probe(body: DatasetProbeIn) -> Any:
+    """登记前自检：连接 / 引擎 / MDL 三条判据分开报。"""
+    args: dict[str, Any] = {"key": body.key.strip().upper(), "engine": body.engine.strip().upper()}
+    if body.dbname.strip():
+        args["pg_dsn"] = _compose_dsn(body)
+    try:
+        data = await call("dataset_probe", args)
+    except McpError as exc:
+        raise ApiError(
+            code="DATASET_PROBE_FAILED",
+            message=str(exc),
+            hint="探测请求没发出去。请确认网关在线后重试。",
+        )
+    return sanitize(data)
+
+
+@app.post(f"{API}/datasource/registry", tags=["数据源接入"])
+async def datasource_register(body: DatasetRegisterIn) -> Any:
+    """登记/修改一个数据集：写入后几秒内即出现在顶部数据集下拉里。"""
+    if not body.key.strip():
+        raise ApiError(
+            code="DATASET_KEY_REQUIRED",
+            message="数据集编码没填。",
+            hint="用一个不与现有库重复的短编码，建议单个大写字母（如 C）。",
+        )
+    args = {
+        "key": body.key.strip().upper(),
+        "label": body.label.strip() or body.key.strip().upper(),
+        "domain": body.domain.strip(),
+        "engine": (body.engine.strip().upper() or body.key.strip().upper()),
+        "mdl_json": body.mdl_json,
+        "pg_dsn": _compose_dsn(body),
+        "enabled": body.enabled,
+        "actor": body.actor,
+    }
+    try:
+        data = await call("dataset_register", args)
+    except McpError as exc:
+        raise ApiError(
+            code="DATASET_REGISTER_FAILED",
+            message=str(exc),
+            hint="登记没成功。确认网关在线、元数据库可用后重试。",
+        )
+    if _tool_rejected(data):
+        raise ApiError(
+            code="DATASET_REGISTER_INVALID",
+            message=_tool_rejected(data) or "登记被拒绝",
+            hint="按提示补齐 MDL 或编码后重试；编码只允许大写字母、数字、下划线与横线。",
+        )
+    return sanitize(data)
+
+
+@app.delete(f"{API}/datasource/registry/{{key}}", tags=["数据源接入"])
+async def datasource_unregister(key: str, actor: str = "") -> Any:
+    """移除数据集登记。**不删业务库、不删任何数据**，只是不再出现在下拉里。"""
+    try:
+        data = await call("dataset_delete", {"key": key, "actor": actor})
+    except McpError as exc:
+        raise ApiError(
+            code="DATASET_DELETE_FAILED",
+            message=str(exc),
+            hint="移除失败。请稍后重试；业务库本身不受影响。",
+        )
+    return sanitize(data)
+
+
+# --------------------------------------------------------------------------
+# M11 · 口径维护
+#
+# 为什么口径要能在这里改
+# ----------------------
+# 口径（「不良率怎么算」「放款金额含不含冲正」）以前写在文件里，改一条要改 JSON、
+# 跑脚本、重建镜像。业务侧一句话说不清的口径，就这么长期停在"没人敢改"的状态。
+# 搬到界面上以后，改完点保存当场生效；改错了由同一套判据拦下来（与门禁同一份实现）。
+# --------------------------------------------------------------------------
+@app.get(f"{API}/metrics/{{dataset}}", tags=["口径维护"])
+async def metrics_get(dataset: str) -> Any:
+    """该数据集当前生效的口径：视图 + 口径 + 版本。"""
+    try:
+        data = await call("metric_list", {"dataset": dataset.strip().upper()})
+    except McpError as exc:
+        raise ApiError(
+            code="METRIC_UNAVAILABLE",
+            message=str(exc),
+            hint="网关未就绪或元数据库不可用；先确认后端状态，再回来刷新。",
+        )
+    if data.get("ok") is False:
+        raise ApiError(
+            code=data.get("code") or "METRIC_UNAVAILABLE",
+            message=data.get("error") or "读不到口径",
+            hint="确认该数据集已登记，且 MDL 已内联到登记表（数据源页可查）。",
+        )
+    return sanitize(data)
+
+
+class MetricSaveIn(BaseModel):
+    dataset: str = Field(default="C")
+    metrics: dict[str, Any] = Field(default_factory=dict, description="整份口径草稿：views + metrics")
+    dry_run: bool = Field(default=False, description="true=只校验不保存")
+    actor: str = Field(default="")
+
+
+@app.put(f"{API}/metrics", tags=["口径维护"])
+async def metrics_save(body: MetricSaveIn) -> Any:
+    """保存口径并即时生效。
+
+    校验不通过返回 422 与**逐条原因**：口径写错不会报错、只会算错，
+    所以宁可拦在保存这一步，也不能让它悄悄生效。
+    """
+    try:
+        data = await call(
+            "metric_save",
+            {
+                "dataset": body.dataset.strip().upper(),
+                "metrics": body.metrics,
+                "dry_run": body.dry_run,
+                "actor": body.actor,
+            },
+        )
+    except McpError as exc:
+        raise ApiError(
+            code="METRIC_SAVE_FAILED",
+            message=str(exc),
+            hint="保存没成功。确认网关与引擎都在线后重试；库里的旧口径仍然可用。",
+        )
+    if data.get("ok") is False:
+        problems = data.get("problems") or []
+        raise ApiError(
+            code=data.get("code") or "METRIC_INVALID",
+            message=(data.get("error") or "保存被拒绝"),
+            hint="\n".join(problems) if problems else "按提示改完再保存。",
+            extra={"problems": problems, "notice": data.get("notice") or ""},
+        )
+    return sanitize(data)
+
+
+class MetricPreviewIn(BaseModel):
+    dataset: str = Field(default="C")
+    question: str = Field(default="")
+    limit: int = Field(default=30, ge=1, le=200)
+
+
+@app.post(f"{API}/metrics/preview", tags=["口径维护"])
+async def metrics_preview(body: MetricPreviewIn) -> Any:
+    """用一句话试跑当前口径：命中哪条、生成什么 SQL、返回几行。"""
+    if not body.question.strip():
+        raise ApiError(
+            code="QUESTION_REQUIRED",
+            message="没有给试跑的问法。",
+            hint="写一句业务话术，例如「统计本月各贷款产品的放款金额」。",
+        )
+    try:
+        data = await call(
+            "metric_preview",
+            {"dataset": body.dataset.strip().upper(), "question": body.question.strip(),
+             "limit": body.limit},
+        )
+    except McpError as exc:
+        raise ApiError(
+            code="METRIC_PREVIEW_FAILED",
+            message=str(exc),
+            hint="试跑没成功。确认引擎在线、口径已保存后再试。",
+        )
+    return sanitize(data)
+
+
+# --------------------------------------------------------------------------
+# M8 · 菜单④ 系统设置 · 大模型连接
+#
+# 为什么把「配模型」做成产品能力而不是部署参数
+# --------------------------------------------
+# 私有化交付时，客户换模型（自建 vLLM / 甲方指定的供应商）不该走「改 compose +
+# 重建镜像 + 重启」——那是运维动作，且每次都要我们到场。做成界面之后，客户自己
+# 选供应商、填密钥、点「测试连接」确认通不通，十秒闭环。
+#
+# 安全边界（三条，别放宽）：
+#   1. 密钥**只进不出**：网关侧就只返回掩码，BFF 再加一层 sanitize，前端拿不到明文；
+#   2. 保存类接口必须带 `actor` 留痕（谁在什么时候把模型换成了哪个）；
+#   3. 测试连接只发一次最小请求、不落任何内容，避免「拿测试接口当免费模型用」。
+# --------------------------------------------------------------------------
+def _llm_view(raw: Any) -> Any:
+    """先 sanitize，再把「模型端点」按窄口补回（规则与理由见 `bff/llm_view.py`）。
+
+    为什么必须补：sanitize 会按键把 `*url*` 换成占位符，实测会让设置页的
+    「接口地址」输入框变空，用户改模型名时把端点一起丢掉。
+    """
+    return llm_view.view(raw, sanitize)
+
+
+class LlmSettingsIn(BaseModel):
+    provider: str = Field(default="", description="预设 key：deepseek/dashscope/zhipu/moonshot/openai/custom")
+    base_url: str = Field(default="", description="OpenAI 兼容根地址，如 https://api.deepseek.com/v1")
+    model: str = Field(default="", description="模型名，如 deepseek-chat")
+    # 密钥留空 = 保持原有不变（界面回显的是掩码，不可能把掩码当密钥提交回来）
+    api_key: str = Field(default="", description="留空表示不修改")
+    enabled: bool = Field(default=True)
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    timeout: int = Field(default=60, ge=5, le=600)
+    max_repair: int = Field(default=1, ge=0, le=3)
+    clear_credential: bool = Field(default=False, description="显式清空已存密钥")
+    reset: bool = Field(default=False, description="删除持久化配置，回落环境变量")
+    actor: str = Field(default="")
+
+
+class LlmTestIn(BaseModel):
+    provider: str = Field(default="")
+    base_url: str = Field(default="")
+    model: str = Field(default="")
+    api_key: str = Field(default="", description="留空则用已保存的密钥测")
+    timeout: int = Field(default=90, ge=3, le=300, description="秒；不传则用配置里的单次调用超时")
+
+
+@app.get(f"{API}/settings/llm", tags=["系统设置"])
+async def settings_llm_get() -> Any:
+    """当前大模型配置（掩码）、生效状态、供应商预设与最近变更。"""
+    try:
+        data = await call("llm_config_get", {})
+    except McpError as exc:
+        raise ApiError(
+            code="LLM_CONFIG_UNAVAILABLE",
+            message=str(exc),
+            hint="网关未就绪或元数据库不可用；请先看「后端状态」与网关 /healthz。",
+        )
+    return _llm_view(data)
+
+
+@app.post(f"{API}/settings/llm", tags=["系统设置"])
+async def settings_llm_save(body: LlmSettingsIn) -> Any:
+    """保存大模型配置：**写库即生效**，不需要重修镜像或重启服务。
+
+    校验不过会返回具体原因（缺地址 / 缺模型名 / 开了开关却没密钥），
+    不会落库半套配置——半套配置的症状是「看起来配好了但生成永远回落」。
+    """
+    try:
+        data = await call(
+            "llm_config_set",
+            {
+                "provider": body.provider,
+                "base_url": body.base_url,
+                "model": body.model,
+                "api_key": body.api_key,
+                "enabled": body.enabled,
+                "temperature": body.temperature,
+                "timeout": body.timeout,
+                "max_repair": body.max_repair,
+                "clear_credential": body.clear_credential,
+                "reset": body.reset,
+                "actor": body.actor,
+            },
+        )
+    except McpError as exc:
+        raise ApiError(
+            code="LLM_CONFIG_SAVE_FAILED",
+            message=str(exc),
+            hint="配置未写入。请确认元数据库可用，再重试保存。",
+        )
+    if _tool_rejected(data):
+        # 校验类拒绝要原样把三条原因带回去，前端才能逐条提示
+        errs = data.get("errors") if isinstance(data, dict) else None
+        raise ApiError(
+            code="LLM_CONFIG_INVALID",
+            message="；".join(errs) if errs else str(_tool_rejected(data)),
+            hint="按提示补齐后重新保存；配置未生效前，SQL 生成仍走确定性规划器。",
+        )
+    return _llm_view(data)
+
+
+@app.post(f"{API}/settings/llm/test", tags=["系统设置"])
+async def settings_llm_test(body: LlmTestIn) -> Any:
+    """用草稿配置试发一次请求：先测通，再保存。
+
+    返回 `used_saved_credential=true` 时表示这次用的是已保存的密钥而非本次输入——
+    前端必须如实转述，否则会出现「测通了、保存后不通」的困惑。
+    """
+    try:
+        data = await call(
+            "llm_config_test",
+            {
+                "provider": body.provider,
+                "base_url": body.base_url,
+                "model": body.model,
+                "api_key": body.api_key,
+                "timeout": body.timeout,
+            },
+        )
+    except McpError as exc:
+        raise ApiError(
+            code="LLM_TEST_FAILED",
+            message=str(exc),
+            hint="网关未就绪或请求超时；请先确认后端状态，再重试测试。",
+        )
+    return _llm_view(data)
+
+
+# --------------------------------------------------------------------------
+# M10 · 系统设置 · 知识库接入
+#
+# 为什么要有这一页
+# ----------------
+# 知识作用域原先只能改底座数据库（WeKnora 的 mcp_endpoints.knowledge_base_ids），
+# 换库=进后台改库表。业务侧既看不见"现在用哪个库"，也无法在换域时自己切换。
+# 做进界面之后：勾选 → 保存 → 下一次分析立即生效（无需重启）。
+#
+# 两层作用域必须都展示（只给一层会形成黑箱）：
+#   · 可见范围 = 底座 MCP 端点绑定的库，是**硬边界**，本页只能看不能改；
+#   · 生效范围 = 本页勾选的库，必须落在可见范围内。
+# --------------------------------------------------------------------------
+class KnowledgeBindIn(BaseModel):
+    kb_ids: list[str] = Field(default_factory=list, description="要生效的知识库 ID；空数组=不接知识库")
+    actor: str = Field(default="")
+    reset: bool = Field(default=False, description="删除持久化配置，回落环境变量")
+
+
+class KnowledgeTestIn(BaseModel):
+    kb_id: str = Field(default="", description="要试的知识库 ID；留空用当前生效范围")
+    question: str = Field(default="", description="试检索的问题；留空用一个中性问句")
+
+
+@app.get(f"{API}/settings/knowledge", tags=["系统设置"])
+async def settings_knowledge_get() -> Any:
+    """当前知识库接入配置 + 底座可见库清单。"""
+    try:
+        data = await call("knowledge_settings")
+    except McpError as exc:
+        raise ApiError(
+            code="KB_CONFIG_UNAVAILABLE",
+            message=str(exc),
+            hint="网关未就绪或知识底座不可达；先看首页「后端状态」，再到知识库平台确认服务在跑。",
+        )
+    return sanitize(data)
+
+
+@app.post(f"{API}/settings/knowledge", tags=["系统设置"])
+async def settings_knowledge_save(body: KnowledgeBindIn) -> Any:
+    """保存生效知识库。写库即生效，不重启。"""
+    try:
+        data = await call(
+            "knowledge_bind",
+            {"kb_ids": body.kb_ids, "actor": body.actor, "reset": body.reset},
+        )
+    except McpError as exc:
+        raise ApiError(
+            code="KB_CONFIG_SAVE_FAILED",
+            message=str(exc),
+            hint="配置没写入。确认元数据库可用后重试；未写入时检索仍按原配置执行。",
+        )
+    if _tool_rejected(data):
+        raise ApiError(
+            code="KB_CONFIG_INVALID",
+            message=_tool_rejected(data) or "保存被拒绝",
+            hint="检查所选库是否仍在底座的可见范围内。",
+        )
+    return sanitize(data)
+
+
+@app.post(f"{API}/settings/knowledge/test", tags=["系统设置"])
+async def settings_knowledge_test(body: KnowledgeTestIn) -> Any:
+    """用一条问题试检索：确认"这个库接进来了、里面确实有内容"。
+
+    只回报命中条数与来源文档名，不把整段原文回传——试一下不等于把知识库导出来。
+    """
+    question = body.question.strip() or "这个知识库主要讲了什么"
+    args: dict[str, Any] = {"question": question, "top_k": 3}
+    if body.kb_id.strip():
+        args["kb_id"] = body.kb_id.strip()
+    try:
+        data = await call("knowledge_search", args)
+    except McpError as exc:
+        raise ApiError(
+            code="KB_TEST_FAILED",
+            message=str(exc),
+            hint="检索请求没发出去。确认知识底座在线后重试。",
+        )
+    items = (data or {}).get("citations") or (data or {}).get("items") or []
+    return sanitize(
+        {
+            "ok": bool((data or {}).get("ok", True)),
+            "question": question,
+            "hits": len(items),
+            "sources": [
+                {
+                    "document_name": it.get("document_name"),
+                    "similarity": it.get("similarity"),
+                    "snippet": (it.get("snippet") or "")[:120],
+                }
+                for it in items[:3]
+            ],
+            "notice": (
+                "命中 %d 条，可以保存" % len(items) if items
+                else "一条都没命中：可能是库里还没有文档，或问题与文档用词差异太大"
+            ),
+        }
     )
 
 

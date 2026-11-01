@@ -3,6 +3,7 @@ from starlette.responses import JSONResponse
 from wren import WrenClient, WrenError
 import analysis as analysis_mod
 import attachments
+import clarify as clarify_mod
 import collect as collect_mod
 import db
 import demand as demand_mod
@@ -35,10 +36,17 @@ import urllib.request
 
 关于 LLM 归属（重要，勿误读）
 ----------------------------
-**网关侧不内置 LLM。** 语义分析在网关内以「证据编排 + 确定性规则」落地，结论一律带
-来源与置信度；需要自由生成的部分（如拗口需求的口语化改写）由**客户端 Agent** 承担。
-因此 M3 的验收与 30 题回放可以在任意 Agent（豆包 / Codex / WorkBuddy）上跑，
-不存在"必须先选定某个模型"这类前置条件。
+**网关可选调用大模型，但默认不调。** 两件事要分开看：
+
+1. **语义分析（M3）不依赖任何模型**：结论由「证据编排 + 确定性规则」产出，
+   一律带来源与置信度，可在任意 Agent（豆包 / Codex / WorkBuddy）上回放验收。
+2. **SQL 生成有一条可选的大模型旁路**（`gateway/llm.py` + `gateway/sqlgen_llm.py`）：
+   配置齐全（`llm_settings` 或 `LLM_*` 环境变量）才启用；启用后仍有闭集 prompt →
+   硬校验（含 L-REQ 要素覆盖）→ 修复闭环三道约束，门禁不过即回落确定性规划器。
+   **未配置时的行为与引入大模型之前逐字一致**——这是「可选」二字的唯一可信证明。
+
+配置入口在网关侧（`llm_config_*` 三工具，持久化到元数据库），前端「系统设置」调用它，
+于是换模型不必重建镜像；环境变量仍作为「没人在界面上配过」时的默认值。
 
 里程碑落点
 ----------
@@ -106,6 +114,27 @@ def _probe(dataset):
 # ---------------------------------------------------------------------------
 # HTTP 探活端点
 # ---------------------------------------------------------------------------
+def _llm_probe():
+    """大模型配置状态（**不参与 core_ok**）。
+
+    没配大模型是**正常状态**（走确定性规划器），不是故障。放进探活只是为了
+    让运维一眼看到「现在到底谁在生成 SQL」，以及配置从哪来（界面 / 环境变量）。
+    返回体里没有任何地址与密钥。
+    """
+    try:
+        import llm_settings
+
+        eff = llm_settings.effective()
+        return {
+            "ok": True,
+            "enabled": bool(eff.get("enabled")),
+            "source": eff.get("source"),
+            "note": llm_settings.status_line(),
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:160])}
+
+
 def _probe_components():
     """M2/M3 三个外部依赖的连通性：元数据库 / 附件存储 / 知识库。"""
     meta = db.healthy()
@@ -120,12 +149,13 @@ def _probe_components():
         "meta_db": meta,
         "attachments": attachments.health(),
         "knowledge": knowledge.health(),
+        "llm": _llm_probe(),
     }
 
 
 @mcp.custom_route("/healthz", methods=["GET"])
 async def healthz(_request):
-    datasets = [_probe(ds) for ds in registry.DATASETS.values()]
+    datasets = [_probe(ds) for ds in registry.all().values()]
     comps = _probe_components()
     # 判定口径：网关自身 + 语义层双库 + 元数据库 + 附件存储决定 ok/degraded；
     # 知识库（RAGFlow 独立栈）单独展示——它不可用时问数链路仍应可用，故不拖垮整体状态。
@@ -142,7 +172,7 @@ async def healthz(_request):
             "host": HOST,
             "port": PORT,
             "mcp_path": MCP_PATH,
-            "datasets_registered": sorted(registry.DATASETS),
+            "datasets_registered": sorted(registry.all()),
         },
         "datasets": datasets,
         "components": comps,
@@ -156,7 +186,7 @@ async def healthz(_request):
 @mcp.tool
 def gateway_health() -> dict:
     """网关健康检查：返回网关自检状态、各数据集 Wren 语义层连通性、M2 依赖组件连通性。"""
-    datasets = [_probe(ds) for ds in registry.DATASETS.values()]
+    datasets = [_probe(ds) for ds in registry.all().values()]
     comps = _probe_components()
     return {
         "status": "ok" if all(d["ok"] for d in datasets) else "degraded",
@@ -169,8 +199,105 @@ def gateway_health() -> dict:
 
 @mcp.tool
 def datasets() -> dict:
-    """列出已注册数据集及其语义层规模（模型数 / 字段数 / 关系数）。"""
-    return {"datasets": [ds.describe() for ds in registry.DATASETS.values()]}
+    """列出已注册数据集及其语义层规模（模型数 / 字段数 / 关系数）。
+
+    包含两部分：环境变量装配的（A/B）与前端「数据集登记」写入的运行期数据集。
+    """
+    rows = []
+    for ds in registry.all().values():
+        try:
+            rows.append(ds.describe())
+        except Exception as e:  # noqa: BLE001 —— MDL 读不到时如实报，不让整个清单挂掉
+            rows.append({"key": ds.key, "label": ds.label, "domain": ds.domain,
+                         "wren_endpoint": (ds.wren_url or "") + "/mcp",
+                         "error": "%s: %s" % (type(e).__name__, str(e)[:160])})
+    return {"datasets": rows, "env_keys": sorted(registry._ENV_KEYS)}
+
+
+@mcp.tool
+def dataset_register(
+    key: str,
+    label: str = "",
+    domain: str = "",
+    engine: str = "",
+    wren_url: str = "",
+    mdl_json: str = "",
+    mdl_path: str = "",
+    pg_dsn: str = "",
+    enabled: bool = True,
+    actor: str = "",
+) -> dict:
+    """登记（或修改）一个数据集：前端「取数通道 · 数据集登记」的落库入口。
+
+    `engine` 是引擎代号（A/B/C…），地址由网关按 compose 服务名约定解析，
+    也接受 `wren_url` 显式覆盖。MDL 优先用内联 JSON（`mdl_json`），
+    避免容器内文件权限问题；`mdl_path` 仅作兼容。
+    保存后 5 秒内生效，不用重建镜像或重启网关。
+    """
+    import dataset_store
+
+    try:
+        out = dataset_store.upsert(
+            {
+                "key": key, "label": label, "domain": domain, "engine": engine,
+                "wren_url": wren_url,
+                "mdl_json": mdl_json, "mdl_path": mdl_path, "pg_dsn": pg_dsn,
+                "enabled": enabled,
+            },
+            actor=actor,
+        )
+    except dataset_store.RegistryError as e:
+        return {"ok": False, "error": str(e), "stage": "validate"}
+    registry.refresh(force=True)
+    out["datasets"] = sorted(registry.all())
+    return out
+
+
+@mcp.tool
+def dataset_probe(
+    key: str = "",
+    engine: str = "",
+    wren_url: str = "",
+    mdl_json: str = "",
+    pg_dsn: str = "",
+) -> dict:
+    """接入前自检：PG 连通 / Wren 端点 / MDL 合法性 三条判据分开给结论。
+
+    未传的连接串或 MDL 会回落到该 `key` 已登记的配置（前端「重新探测」无需重填口令）。
+    注意：引擎侧 MDL 是否已装载，只能由 Wren 的 manifest 反查；
+    `models_match=false` 表示网关侧有语义层、引擎侧还没装载，此时 SQL 能生成但执行会失败。
+    """
+    import dataset_store
+
+    return dataset_store.probe({"key": key, "engine": engine, "wren_url": wren_url,
+                                "mdl_json": mdl_json, "pg_dsn": pg_dsn})
+
+
+@mcp.tool
+def dataset_registry() -> dict:
+    """列出「数据集登记」表里的运行期数据集（不含环境变量装配的 A/B）。
+
+    与 `datasets` 的差别：`datasets` 是**能用的**（含 A/B），本工具是**登记过的**，
+    供前端做增删改与状态比对。
+    """
+    import dataset_store
+
+    rows = dataset_store.list_rows()
+    return {"ok": True, "total": len(rows), "items": rows, "datasets": sorted(registry.all())}
+
+
+@mcp.tool
+def dataset_delete(key: str, actor: str = "") -> dict:
+    """移除一个数据集登记（不影响业务库本身，也不删任何数据）。"""
+    import dataset_store
+
+    try:
+        out = dataset_store.delete(key, actor=actor)
+    except dataset_store.RegistryError as e:
+        return {"ok": False, "error": str(e), "stage": "validate"}
+    registry.refresh(force=True)
+    out["datasets"] = sorted(registry.all())
+    return out
 
 
 @mcp.tool
@@ -227,6 +354,101 @@ def wren_query(sql: str, dataset: str = "B") -> dict:
         "columns": result.get("columns", []),
         "data": result.get("data", []),
         "dtypes": result.get("dtypes", {}),
+    }
+
+
+# --------------------------------------------------------------------------
+# 口径维护（M11）
+#
+# 为什么要这三个工具：口径是**数据**，写在文件里就只能靠人改文件 + 跑脚本，
+# 改错了不报错、只是算错。搬到界面上以后，「登记 → 校验 → 生效」必须是一次动作，
+# 否则界面保存的是草稿、真正跑的还是旧口径，这种"看着改了其实没改"最难查。
+# --------------------------------------------------------------------------
+@mcp.tool
+def metric_list(dataset: str = "C") -> dict:
+    """列出该数据集当前生效的口径（视图 + 口径 + 版本）。"""
+    import metric_store
+
+    try:
+        return metric_store.load(dataset)
+    except metric_store.MetricError as e:
+        return {"ok": False, "code": "METRIC_NOT_READY", "error": str(e)}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:240])}
+
+
+@mcp.tool
+def metric_save(
+    dataset: str = "C",
+    metrics: dict | None = None,
+    dry_run: bool = False,
+    actor: str = "",
+) -> dict:
+    """保存口径并即时生效：先校验，再热部署到引擎，最后落库。
+
+    顺序不可反：**部署成功才落库**。反过来会出现「库里是新口径、引擎还是旧的」，
+    这是最难查的一种状态——页面显示改了，跑出来的还是旧数。
+
+    `dry_run=True` 只校验不保存，用于「点保存前先看一眼有没有错」。
+    """
+    import metric_store
+
+    try:
+        return metric_store.save(dataset, metrics or {}, actor=actor, dry_run=dry_run)
+    except metric_store.MetricError as e:
+        return {"ok": False, "code": "METRIC_NOT_READY", "error": str(e)}
+    except Exception as e:  # noqa: BLE001
+        # 内部异常要与「校验没通过」分开：后者能逐条指出改哪里，前者不能，
+        # 混成同一个 code 会让用户对着空的问题列表反复点保存。
+        return {"ok": False, "code": "METRIC_INTERNAL",
+                "error": "%s: %s" % (type(e).__name__, str(e)[:240])}
+
+
+@mcp.tool
+def metric_preview(dataset: str = "C", question: str = "", limit: int = 30) -> dict:
+    """口径试跑：用一句话走一遍「命中口径 → 生成 SQL → 只读执行」，不动需求单。
+
+    单独做这个动作，是因为改完口径最想知道的是「这句话现在能不能出数」。
+    走需求五步也能验，但要建单、分析、确认，且会往业务表里塞测试数据。
+    """
+    import metric_store
+
+    nl = (question or "").strip()
+    if not nl:
+        return {"ok": False, "error": "请给一句话，才能试跑"}
+    try:
+        plat = registry.get(dataset)
+        import metric_planner
+
+        planned = metric_planner.plan(plat, nl)
+    except metric_store.MetricError as e:
+        return {"ok": False, "code": "METRIC_NOT_READY", "error": str(e)}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:240])}
+
+    if planned.get("blocked"):
+        return {"ok": False, "blocked": True, "reason": planned.get("reason") or "没有命中口径",
+                "guide": planned.get("guide") or "", "question": nl}
+
+    sql = (planned.get("sql") or "").strip()
+    if not sql:
+        return {"ok": False, "reason": "规划器没有产出 SQL", "question": nl}
+    # 试跑是给人看的，不设上限时一条趋势查询也能拉回几千行；只在没写 LIMIT 时补
+    if " limit " not in sql.lower():
+        sql = sql + " LIMIT %d" % max(1, min(int(limit or 30), 200))
+
+    run = wren_query(sql, dataset)
+    return {
+        "ok": bool(run.get("ok")),
+        "question": nl,
+        "metric": planned.get("metric"),
+        "metric_label": planned.get("metric_label"),
+        "engine": planned.get("engine"),
+        "sql": sql,
+        "row_count": run.get("row_count"),
+        "columns": run.get("columns") or [],
+        "rows": run.get("data") or [],
+        "error": run.get("error"),
     }
 
 
@@ -348,6 +570,20 @@ def demand_summarize(demand_id: str | None = None) -> dict:
 
 
 @mcp.tool
+def demand_purge(demand_ids: list[str], actor: str = "", dry_run: bool = False) -> dict:
+    """清理历史需求（含分析轮次 / 确认记录 / 结构化需求 / 取数记录 / 知识引用）。
+
+    只删**显式点名**的单号，没有"清空全部"的隐式语义；`dry_run=True` 只回报将删多少行。
+    适用：验收 / 联调之后清测试单——它们会污染"相似需求预检"和看板统计。
+    不适用：想保留单据只改状态——那用 demand_set_status。
+    """
+    try:
+        return demand_mod.purge(demand_ids, actor=actor or "admin", dry_run=dry_run)
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@mcp.tool
 def demand_set_status(
     demand_id: str, status: str, note: str | None = None, actor: str = ""
 ) -> dict:
@@ -361,8 +597,255 @@ def demand_set_status(
 
 
 # ---------------------------------------------------------------------------
+# M2 · 退回需求方补充（CR010：缺口处置第一顺位是退需求，不是补知识）
+# ---------------------------------------------------------------------------
+@mcp.tool
+def demand_clarify(
+    demand_id: str,
+    dataset: str = "B",
+    gap_kind: str = "",
+    gap_text: str = "",
+) -> dict:
+    """组装「退回需求方补充」包：待明确项 + 补充建议 + 已确认底座。
+
+    只读，不写库——供界面在真正退回之前先预览「要问需求方什么」。
+
+    产品定位：生成失败时，让需求提出人补一句话（分钟级、一个人）远比去知识库
+    补口径（小时/天级、跨部门）便宜。故本工具产出的每一条待明确项都带原文证据
+    (``anchor``)，并区分「必须回答」(required) 与「可选项」，不做无依据的追问。
+
+    `gap_kind` 传缺口类型（口径未建模 / 数据缺失 / 口径未定义 / 口径待上架）时，
+    会据此判定处置路径 ``route``：demand（退需求）/ knowledge（补知识）/ engineering（技术侧）。
+    """
+    try:
+        demand = demand_mod.get(demand_id)
+        req = _wired("requirement", "get", demand_id)
+        if isinstance(req, dict) and req.get("ok") is False:
+            req = None
+        return clarify_mod.build(
+            demand,
+            requirement=req,
+            dataset=dataset,
+            gap_kind=gap_kind,
+            gap_text=gap_text,
+        )
+    except demand_mod.DemandError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@mcp.tool
+def demand_return(
+    demand_id: str,
+    dataset: str = "B",
+    gap_kind: str = "",
+    gap_text: str = "",
+    items: list | None = None,
+    note: str | None = None,
+    actor: str = "",
+) -> dict:
+    """把需求退回给发起人补充（状态 → 待补充修改），并把待明确项留痕。
+
+    `items` 传界面勾选的待明确项；不传则按 `demand_clarify` 的全量生成。
+    退回不是打回重做：留痕里固化了「这次要补哪几项」，需求方补完即可重新分析。
+    """
+    try:
+        demand = demand_mod.get(demand_id)
+        req = _wired("requirement", "get", demand_id)
+        if isinstance(req, dict) and req.get("ok") is False:
+            req = None
+        pack = clarify_mod.build(
+            demand,
+            requirement=req,
+            dataset=dataset,
+            gap_kind=gap_kind,
+            gap_text=gap_text,
+        )
+        picked = [i for i in (items or []) if isinstance(i, dict)] or pack["items"]
+        demand_mod.set_status(
+            demand_id,
+            "待补充修改",
+            actor=actor or "analyst",
+            note=note or ("退回补充：%s" % pack["headline"]),
+        )
+        demand_mod._event(
+            demand_id,
+            "returned_for_clarify",
+            actor or "analyst",
+            {
+                "dataset": dataset,
+                "gap_kind": pack["gap_kind"],
+                "route": pack["route"],
+                "items": [
+                    {"id": i.get("id"), "slot": i.get("slot"),
+                     "question": i.get("question")}
+                    for i in picked
+                ],
+                "note": note,
+            },
+        )
+        pack["items"] = picked
+        pack["status"] = "待补充修改"
+        return pack
+    except demand_mod.DemandError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@mcp.tool
+def demand_supplement(
+    demand_id: str,
+    answers: list | None = None,
+    extra_description: str = "",
+    fields: dict | None = None,
+    actor: str = "",
+) -> dict:
+    """需求方补充完成后回填需求单，并把状态从「待补充修改」拨回「待分析」。
+
+    `answers` 形如 `[{"question": "…", "answer": "…"}]`，会拼成【需求补充】段落
+    **追加**到需求描述（不覆盖原文）；`fields` 用于直接改标题/时间范围/输出预期等。
+
+    回填后由调用方触发重新分析——本工具不自动重跑，避免在无人在场时消耗算力。
+    """
+    try:
+        demand = demand_mod.get(demand_id)
+        before = demand.get("status")
+        patch = dict(fields or {})
+        block = clarify_mod.compose_supplement(answers, extra_description)
+        if block:
+            patch["description"] = block
+        if not patch:
+            return {"ok": False, "error": "没有收到任何补充内容"}
+        updated = demand_mod.update(
+            demand_id, patch, actor=actor or "business",
+            note="退回补充后回填", append=True,
+        )
+        demand_mod._event(
+            demand_id,
+            "supplemented",
+            actor or "business",
+            {"answers": len(answers or []), "fields": sorted((fields or {}).keys())},
+        )
+        back_to = False
+        if before == "待补充修改":
+            updated = demand_mod.set_status(
+                demand_id, "待分析", actor=actor or "business",
+                note="补充完成，重新进入分析",
+            )
+            back_to = True
+        return {
+            "ok": True,
+            "demand_id": demand_id,
+            "status": updated.get("status"),
+            "status_from": before,
+            "requeued": back_to,
+            "description": updated.get("description"),
+            "next": "请重新执行分析（analysis_first_round）与生成（sql_generate）",
+        }
+    except demand_mod.DemandError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+# ---------------------------------------------------------------------------
 # M2 · 知识检索（RAGFlow 引用式召回）
 # ---------------------------------------------------------------------------
+@mcp.tool
+def knowledge_list_kbs() -> dict:
+    """列出知识底座上**全部可见知识库**（客户端选库入口）。
+
+    WeKnora 底座上有多个知识库时，客户端据此选择要操作的目标库 ID，
+    再把该 ID 传给 knowledge_search / knowledge_documents / knowledge_upload
+    的 `kb_id` 参数，实现业务域之间的逻辑隔离与引用授权。
+
+    返回的 `is_default` 标注了服务端 KNOWLEDGE_KB_IDS 配置的默认库；
+    `kb_id` 传空串时一律回落默认库，已有调用方零改动。
+    """
+    fn = getattr(knowledge, "list_kbs", None)
+    if fn is None:
+        return {"ok": False, "error": "当前知识后端未实现 list_kbs"}
+    try:
+        return fn()
+    except Exception as e:
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+
+
+@mcp.tool
+def knowledge_bind(kb_ids: list[str] | None = None, actor: str = "", reset: bool = False) -> dict:
+    """设置本次问答生效的知识库（前端「系统设置 · 知识库接入」的落库入口）。
+
+    两层作用域必须分清：
+    - **可见范围**（WeKnora MCP endpoint 绑定的库）是硬边界，本工具改不了；
+    - **生效范围**（本工具写的）只是在这条边界内挑几个库用。
+
+    传空列表 = 明确表示"不接知识库"（会写库，不会回落环境变量）；
+    `reset=True` 才删掉持久化配置、让环境变量重新生效。
+    """
+    import kb_settings
+
+    wanted = [str(x).strip() for x in (kb_ids or []) if str(x).strip()]
+    # 先拿可见范围做交叉校验：勾了底座看不见的库，保存"成功"但检索必然零命中，
+    # 这是最难查的一类静默失效。所以宁可在这里拒绝，也不让配置带病生效。
+    fn = getattr(knowledge, "list_kbs", None)
+    visible = None
+    if fn is not None:
+        try:
+            data = fn()
+            visible = data.get("kbs") or []
+        except Exception:  # noqa: BLE001 —— 底座不可达时不阻断保存，只做提示
+            visible = None
+    if visible is not None and wanted:
+        known = {kb.get("id") for kb in visible}
+        unknown = [k for k in wanted if k not in known]
+        if unknown:
+            return {
+                "ok": False,
+                "error": "这些知识库不在底座对该应用的可见范围内：%s" % "、".join(unknown),
+                "hint": "先在知识库平台把它们绑定到本应用的 MCP 端点，再回来勾选；"
+                        "未保存，原配置不变。",
+                "visible": visible,
+            }
+
+    try:
+        out = kb_settings.save(wanted, actor=actor, reset=reset)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300]),
+                "hint": "确认元数据库可用；配置未写入时检索仍按原配置执行"}
+    if visible is not None:
+        # 可见清单是在保存**之前**取的，里面的 is_active 还是旧状态；
+        # 用保存结果重算一遍，否则前端保存后会把"刚勾上的库"标成未生效。
+        active = set(out.get("kb_ids") or [])
+        out["visible"] = [
+            {**kb, "is_active": kb.get("id") in active} for kb in visible
+        ]
+    return out
+
+
+@mcp.tool
+def knowledge_settings() -> dict:
+    """当前知识库接入配置：生效的库、来源（界面 / 环境变量）、底座可见范围。"""
+    import kb_settings
+
+    try:
+        out = kb_settings.get_settings()
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
+    fn = getattr(knowledge, "list_kbs", None)
+    if fn is not None:
+        try:
+            data = fn()
+            out["visible"] = data.get("kbs") or []
+            out["endpoint"] = data.get("endpoint")
+            out["base"] = data.get("base")
+        except Exception as e:  # noqa: BLE001
+            out["visible"] = None
+            out["visible_error"] = "%s: %s" % (type(e).__name__, str(e)[:200])
+    return out
+
+
 @mcp.tool
 def knowledge_search(
     question: str,
@@ -371,6 +854,7 @@ def knowledge_search(
     vector_weight: float = 0.7,
     demand_id: str = "",
     round_no: int = 0,
+    kb_id: str = "",
 ) -> dict:
     """检索知识库（制度 / 口径 / 表样），返回**带来源的引用**。
 
@@ -379,11 +863,17 @@ def knowledge_search(
 
     参数说明（默认值经实测校准）：
     - `threshold` 相似度下限，**必须 >0**（传 0 会被服务端按 falsy 回退成 0.2）；
-    - `vector_weight` 向量权重，默认 0.7；官方默认 0.3 偏重关键词，中文长问句易漏召回。
+    - `vector_weight` 向量权重，默认 0.7；官方默认 0.3 偏重关键词，中文长问句易漏召回；
+    - `kb_id`（2026-10-30 末尾追加）指定知识库 ID（见 knowledge_list_kbs），
+      多库场景下实现业务域逻辑隔离；为空回落服务端默认配置。
     """
     try:
         out = knowledge.search(
-            question, top_k=top_k, threshold=threshold, vector_weight=vector_weight
+            question,
+            dataset_ids=[kb_id] if kb_id else None,
+            top_k=top_k,
+            threshold=threshold,
+            vector_weight=vector_weight,
         )
     except Exception as e:
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
@@ -409,10 +899,15 @@ def knowledge_health() -> dict:
 
 
 @mcp.tool
-def knowledge_documents(limit: int = 50) -> dict:
-    """列出知识库当前已入库文档（名称 / 解析状态 / 分块数）。"""
+def knowledge_documents(limit: int = 50, kb_id: str = "") -> dict:
+    """列出知识库当前已入库文档（名称 / 解析状态 / 分块数）。
+
+    `kb_id`（2026-10-30 末尾追加）指定知识库 ID；为空回落默认作用域。
+    """
     try:
-        return knowledge.list_documents(limit=limit)
+        return knowledge.list_documents(
+            limit=limit, dataset_ids=[kb_id] if kb_id else None
+        )
     except Exception as e:
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
@@ -423,6 +918,7 @@ def knowledge_upload(
     content_base64: str,
     content_type: str = "",
     actor: str = "",
+    kb_id: str = "",
 ) -> dict:
     """上传一份文档到知识库并触发解析（知识准入）。
 
@@ -437,6 +933,7 @@ def knowledge_upload(
                    走 base64 才能原样传pdf/docx）。
     content_type   MIME，可留空。
     actor          操作人，仅用于留痕。
+    kb_id          （2026-10-30 末尾追加）目标知识库 ID；为空入库默认库。
 
     准入范围：只放行文档类扩展名（md/txt/pdf/docx/xlsx/csv/html 等），
     单文件上限默认 32MB（`KNOWLEDGE_MAX_UPLOAD_MB`可调）。
@@ -456,7 +953,7 @@ def knowledge_upload(
                 "error": "content_base64 解码失败：%s: %s" % (type(e).__name__, str(e)[:160]),
             }
         result = knowledge.upload_document(
-            filename, raw, content_type=content_type, dataset_id=""
+            filename, raw, content_type=content_type, dataset_id=kb_id
         )
         if result.get("ok") and actor:
             _record_knowledge_event(actor, "knowledge_upload", filename[:200], result)
@@ -921,11 +1418,35 @@ def schema_candidates(demand_id: str, dataset: str = "B") -> dict:
     """M4-3 · 在 MDL 闭集内给出主题表 / 关联路径 / 时间字段候选。
 
     候选**只在语义层闭集内产生**，不连物理库猜字段；未命中时给 `miss_reason`，**不猜、不填**。
+    判定命中与否请读 `matched`（布尔），不要用「`miss_reason` 是否为空」推断——
+    `notes` 里装的是「上游槽位为空 / 覆盖率偏低」这类解释性说明，与命中与否无关。
     关联路径每条都能指回 `mdl.relationships` 的下标（可回溯）。
+
+    前置：该需求必须已经跑过需求分析、产出了结构化需求对象。缺前置时返回
+    `{ok:false, error, hint}`，其中 `hint` 是给业务方可执行的下一步（不含内部工具名）。
     """
+    # 先分两类前置缺失，别把两种不同的情况说成同一句：
+    #   ① 需求单本身不存在（例如选了本地缓存的旧单号）→ 应是"回列表重新选单"；
+    #   ② 需求存在但还没做分析 → 应是"先完成需求分析"。
+    # 早先两种都直接透传 requirement.get 的原始报错（还带内部工具名
+    # `requirement_structured`），业务方看不懂也不知道该点哪里（2026-10-30 实测）。
+    try:
+        demand_mod.get(demand_id)
+    except Exception:
+        return {
+            "ok": False,
+            "error": "需求单 %s 不存在，可能已被清理" % demand_id,
+            "hint": "回「需求链路」列表重新选择一条需求；若刚在别处新建，刷新后再试。",
+            "reason_code": "DEMAND_NOT_FOUND",
+        }
     req = _wired("requirement", "get", demand_id)
     if req.get("ok") is False:
-        return req
+        return {
+            "ok": False,
+            "error": "需求 %s 还没产出结构化需求对象（尚未完成需求分析）" % demand_id,
+            "hint": "先到「需求链路」把这条需求走到第 2 步「读懂你的需求」并完成，再回来生成候选。",
+            "reason_code": "REQUIREMENT_NOT_STRUCTURED",
+        }
     return _wired("sqlpack", "candidates", dataset, req)
 
 
@@ -993,9 +1514,10 @@ def sql_generate(demand_id: str, dataset: str = "B",
                  candidate_sql: str | list[str] | None = None) -> dict:
     """M5-2 · 生成 SQL 初稿（两段式第二段）。
 
-    `candidate_sql` 为调用方（客户端 Agent）产出的 SQL：非空则采用，为空则**回落确定性
-    规划器**。**网关侧不调用任何模型**——自由生成由客户端承担。生成后立即过门禁，
-    结果放在 `review` 字段。
+    `candidate_sql` 为调用方（客户端 Agent）产出的 SQL：非空则采用；为空时，若已配置
+    大模型（`LLM_BASE_URL/API_KEY/MODEL`）则走 `sqlgen_llm` 原生生成（门禁不过自动回落），
+    否则**回落确定性规划器**。生成后立即过门禁，结果放在 `review` 字段（`generator`
+    取值可能是 `client-agent` / `llm` / `deterministic-planner`）。
 
     M6-2：`candidate_sql` 可传**多条候选**（list[str]）。多条且差异过大时会 `hold`——
     不下发 SQL（`sql_draft` 置空）、只保留计划草稿供人工选定，返回 `hold` /
@@ -1346,9 +1868,120 @@ def demand_similar_precheck(
         return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:300])}
 
 
+@mcp.tool
+def llm_config_get() -> dict:
+    """读取当前大模型配置（**只回掩码，不回明文密钥**）+ 生效状态 + 供应商预设。
+
+    返回体关键字段：
+      · `source`：`db`（界面保存的）/ `env`（环境变量）/ `none`
+      · `effective`：是否真的会调用大模型；False 时 `missing` 说明还缺什么
+      · `has_credential` / `credential_masked`：凭据是否已设置、尾号（用于「确认填的是哪一把」）
+      · `providers`：可选供应商预设（前端下拉直接渲染，不在前端硬编码）
+      · `recent_changes`：最近若干次变更留痕（谁改的、改了什么、什么时候）
+    """
+    try:
+        import llm_settings
+
+        return {"ok": True, **llm_settings.get_settings()}
+    except ImportError as e:
+        return {"ok": False, "not_ready": True, "reason": "配置模块不可用：%s" % str(e)[:160]}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:240])}
+
+
+@mcp.tool
+def llm_config_set(
+    provider: str = "",
+    base_url: str = "",
+    model: str = "",
+    api_key: str = "",
+    enabled: bool = True,
+    temperature: float = 0.0,
+    timeout: int = 60,
+    max_repair: int = 1,
+    clear_credential: bool = False,
+    reset: bool = False,
+    actor: str = "",
+) -> dict:
+    """保存大模型配置（部分更新），写入元数据库后**立即生效**，无需重启。
+
+    参数约定（`gateway/llm_settings.save_settings` 有完整说明）：
+      · `api_key` 留空 = **保持原有密钥不变**（界面上回显的是掩码，不可能当密钥提交）；
+      · 要清空密钥 ⇒ `clear_credential=True`；
+      · 要退回环境变量配置 ⇒ `reset=True`（删除持久化行，不是留一条空配置）。
+
+    未配齐（地址 / 密钥 / 模型名）或开关打开却没有密钥 ⇒ 返回 `ok=False` 与具体 `errors`，
+    **不会落库半套配置**。
+    """
+    try:
+        import llm_settings
+    except ImportError as e:
+        return {"ok": False, "not_ready": True, "reason": "配置模块不可用：%s" % str(e)[:160]}
+    try:
+        if reset:
+            return llm_settings.reset_settings(actor=actor)
+        return llm_settings.save_settings(
+            {
+                "provider": provider,
+                "base_url": base_url,
+                "model": model,
+                "api_key": api_key,
+                "enabled": enabled,
+                "temperature": temperature,
+                "timeout": timeout,
+                "max_repair": max_repair,
+                "clear_credential": clear_credential,
+            },
+            actor=actor,
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:240])}
+
+
+@mcp.tool
+def llm_config_test(
+    provider: str = "",
+    base_url: str = "",
+    model: str = "",
+    api_key: str = "",
+    timeout: int = 0,
+) -> dict:
+    """用「界面上的这份草稿」发一次最小请求，验证地址 / 密钥 / 模型名是否都对。
+
+    与 `llm_config_set` 的分工：**先测后存**。填错任一项的症状都是「生成不出 SQL」，
+    真正的报错藏在重试之后；点一下测试，十秒内就能分清是谁的问题。
+
+    `timeout`：秒。**0 = 跟随配置里的「单次调用超时」**（默认 60）。
+    不设成固定值是有原因的：推理型模型答一句话也要二三十秒，
+    固定 20 秒会把「模型慢」误报成「地址不通」。
+
+    不传任何参数 ⇒ 测当前生效配置。传了参数 ⇒ 只测这份草稿，**不改动生效配置**
+    （并发场景下「为试一次就换了线上模型」是不可接受的副作用）。
+    返回 `used_saved_credential=True` 表示这次用的是库里已存的密钥而非本次输入，
+    前端要如实告诉用户，避免「测通了但保存后不通」的困惑。
+    """
+    try:
+        import llm_settings
+    except ImportError as e:
+        return {"ok": False, "not_ready": True, "reason": "配置模块不可用：%s" % str(e)[:160]}
+    try:
+        return llm_settings.test_connection(
+            {
+                "provider": provider,
+                "base_url": base_url,
+                "model": model,
+                "api_key": api_key,
+            },
+            timeout=timeout,
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:240])}
+
+
 def main():
     print("%s v%s 启动：http://%s:%d%s" % (GATEWAY_NAME, GATEWAY_VERSION, HOST, PORT, MCP_PATH))
     print("健康检查：http://127.0.0.1:%d/healthz" % PORT)
+
     # 建表（幂等）。此前只有 tools/collect_metadata.py 会调它，网关自身从不建表——
     # 于是「全新部署 + 首次调用」必然失败，且要等到第一次写库才暴露。放在启动时做掉。
     # 元数据库未就绪时不阻断启动（探活会把状态如实报成 degraded），只是打个警告。

@@ -37,6 +37,9 @@ export interface NavItem {
  * 导航资产（= 前端 need ↔ BFF scope 契约的静态投影）。
  * 业务术语按《UI 优化方案 v1.0》权威表：业务说法字典 / 经验库 / 取数通道 /
  * 复盘留痕 / 数据空间。
+ * 菜单「复盘留痕」已移除（2026-11-01，用户判定）：该页只是一张指路卡，
+ * 真正的审计回放常驻「出数与交付」页底部（AuditReplay），按需求进入更顺；
+ * 术语本身仍属权威表，仅菜单不再单列。
  */
 export const NAV_ITEMS: NavItem[] = [
   // 我要做的事：需求全链路
@@ -47,19 +50,13 @@ export const NAV_ITEMS: NavItem[] = [
     desc: '从提需求到出数交付的一条龙',
     access: { R1: 'full', R2: 'full', R3: 'readonly', R4: 'readonly' },
   },
-  // 系统里的资产
+  // 系统里的资产。菜单「经验库」（知识储备）已按 CR009 剔除：
+  // 知识收集/治理全部在 WeKnora 平台完成，Askoda 经 MCP 消费，客户端不设知识管理入口。
   {
     key: 'mdl',
     label: '业务说法字典',
     zone: 'assets',
     desc: '业务术语到库表字段的映射',
-    access: { R1: 'readonly', R2: 'readonly', R3: 'full', R4: 'readonly' },
-  },
-  {
-    key: 'knowledge',
-    label: '经验库',
-    zone: 'assets',
-    desc: '沉淀过的口径与判断经验',
     access: { R1: 'readonly', R2: 'readonly', R3: 'full', R4: 'readonly' },
   },
   {
@@ -69,19 +66,21 @@ export const NAV_ITEMS: NavItem[] = [
     desc: '已接入的数据源与表',
     access: { R1: 'readonly', R2: 'readonly', R3: 'full', R4: 'readonly' },
   },
-  // 治理与运营
   {
-    key: 'audit',
-    label: '复盘留痕',
-    zone: 'govern',
-    desc: '完整判断链回放，谁在何时改了什么',
-    access: { R1: 'hidden', R2: 'readonly', R3: 'readonly', R4: 'full' },
+    key: 'metrics',
+    label: '口径维护',
+    zone: 'assets',
+    desc: '业务口径怎么算：登记、校验、当场试一句',
+    // 口径是「怎么算」的约定，改错不会报错、只会算错 ⇒ 只给数据管家与管理员改。
+    // 分析师能看，业务方不看（他们关心的是结果对不对，不是公式怎么写）。
+    access: { R1: 'hidden', R2: 'readonly', R3: 'full', R4: 'full' },
   },
+  // 治理与运营
   {
     key: 'system',
     label: '系统设置',
     zone: 'govern',
-    desc: '数据空间与全局配置',
+    desc: '大模型连接与全局配置',
     access: { R1: 'hidden', R2: 'hidden', R3: 'readonly', R4: 'full' },
   },
 ]

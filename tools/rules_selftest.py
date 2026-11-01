@@ -350,6 +350,24 @@ def main():
         "TIME_FIELD_SUSPECT",
         ctx=CTX_B,
     )
+    # 10b. 别名不算「非标准时间列」（2026-10-23 实测误报）
+    #      现象：`date_trunc('month', order_date) AS 月份 … ORDER BY 月份`
+    #      被判成「用了非标准时间列 月份」，正确 SQL 白拿一个警告。
+    #      要求：按别名排序不报；但别名背后若真是装载列，仍然要报——
+    #      只判「别名」不判「别名背后的列」等于把检测力丢了。
+    all_ok &= assert_neg(
+        "ORDER BY 别名（date_trunc AS 月份）不该报",
+        "SELECT date_trunc('month', o.order_date) AS 月份, SUM(o.pay_amount) AS 销售额 "
+        "FROM dwd_order_di o GROUP BY 月份 ORDER BY 月份",
+        "TIME_FIELD_SUSPECT",
+        ctx=CTX_B,
+    )
+    all_ok &= assert_pos(
+        "别名背后是装载列（dw_insert_time AS 月份）仍要报",
+        "SELECT o.dw_insert_time AS 月份 FROM dwd_order_di o ORDER BY 月份",
+        "TIME_FIELD_SUSPECT",
+        ctx=CTX_B,
+    )
     # ----------------------------------------------------------------
     # 11. R7 ENUM_VALUE_INVALID — 枚举值校验（新增）
     # ----------------------------------------------------------------
@@ -375,6 +393,82 @@ def main():
         "grade IN ('金卡','钻石')（均合法）",
         "SELECT member_id FROM dim_member WHERE grade IN ('金卡', '钻石')",
         "ENUM_VALUE_INVALID",
+        ctx=CTX_B,
+    )
+
+    # ----------------------------------------------------------------
+    # 12. 子查询 / CTE 的「不该误报」与「仍要报」对照
+    #     （2026-10-23：同比/环比生成的 CTE SQL 触发了两条误报，修完后固化成判据）
+    # ----------------------------------------------------------------
+    # 12.1 GROUP_BY_INCONSISTENT —— 只判**同一层 SELECT 内部**的自洽性
+    #      ⚠️ 这里必须成对写：只写"不报"等于允许把规则整条关掉。
+    #      CTE 内部真缺列时，规则照旧要报（检测力不能丢）。
+    all_ok &= assert_neg(
+        "CTE 里 GROUP BY、外层无 GROUP BY（整套结果再读）⇒ 不该报",
+        """
+        WITH m AS (
+          SELECT s.store_name, date_trunc('month', o.order_date) AS 月份,
+                 SUM(o.pay_amount) AS 销售额
+          FROM dwd_order_di o JOIN dim_store s ON o.store_id = s.store_id
+          WHERE o.order_status = '已完成'
+          GROUP BY s.store_name, date_trunc('month', o.order_date)
+        )
+        SELECT m.store_name, m.月份, m.销售额 FROM m ORDER BY m.月份
+        """,
+        "GROUP_BY_INCONSISTENT",
+    )
+    all_ok &= assert_pos(
+        "CTE 内部**真的**缺列（只分组 store_id 却选了 stat_date）⇒ 仍要报",
+        """
+        WITH m AS (
+          SELECT store_id, stat_date, SUM(sales_amount) AS gmv
+          FROM dws_store_daily_agg GROUP BY store_id
+        )
+        SELECT m.store_id, m.gmv FROM m
+        """,
+        "GROUP_BY_INCONSISTENT",
+    )
+    # 12.2 ONE_TO_MANY_UNHANDLED —— 预聚合子查询可能出现在 **JOIN 里**，不只在 FROM
+    all_ok &= assert_neg(
+        "LEFT JOIN 的是预聚合子查询（已按 store_id 聚合）⇒ 不该判 1:N 放大",
+        """
+        SELECT s.store_name, x.gmv
+        FROM dim_store s
+        LEFT JOIN (
+          SELECT store_id, SUM(sales_amount) AS gmv
+          FROM dws_store_daily_agg GROUP BY store_id
+        ) x ON s.store_id = x.store_id
+        """,
+        "ONE_TO_MANY_UNHANDLED",
+        ctx=CTX_B,
+    )
+    # 12.3 TIME_FIELD_SUSPECT —— 别名带**派生表前缀**时也要展开
+    #      没展开的后果：把 `m.月份` 当成物理列判"非标准时间列"，
+    #      而每个月度 SQL 都会挨这一枪 ⇒ 警告淹没真问题。
+    all_ok &= assert_neg(
+        "ORDER BY m.月份（CTE 别名，指向 order_date）⇒ 不该报",
+        """
+        WITH m AS (
+          SELECT s.store_name, date_trunc('month', o.order_date) AS 月份,
+                 SUM(o.pay_amount) AS 销售额
+          FROM dwd_order_di o JOIN dim_store s ON o.store_id = s.store_id
+          GROUP BY s.store_name, date_trunc('month', o.order_date)
+        )
+        SELECT m.store_name, m.月份, m.销售额 FROM m ORDER BY m.月份
+        """,
+        "TIME_FIELD_SUSPECT",
+        ctx=CTX_B,
+    )
+    all_ok &= assert_pos(
+        "ORDER BY m.月份（CTE 别名，指向 dw_insert_time）⇒ 仍要报",
+        """
+        WITH m AS (
+          SELECT o.dw_insert_time AS 月份, SUM(o.pay_amount) AS 销售额
+          FROM dwd_order_di o GROUP BY o.dw_insert_time
+        )
+        SELECT m.月份, m.销售额 FROM m ORDER BY m.月份
+        """,
+        "TIME_FIELD_SUSPECT",
         ctx=CTX_B,
     )
 

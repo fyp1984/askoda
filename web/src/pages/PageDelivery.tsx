@@ -173,7 +173,7 @@ export default function PageDelivery({
 
         {exec ? (
           <Section title="执行结果" id="delivery-exec">
-            <p className="muted">{exec.execution_summary}</p>
+            <p className="muted"><RichText text={exec.execution_summary} /></p>
             <p>
               交付判定：
               {exec.deliverable ? (

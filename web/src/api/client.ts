@@ -11,12 +11,15 @@ export class ApiError extends Error {
   code: string
   hint: string
   status: number
+  /** 原始错误体（口径校验的逐条原因等结构化信息在这里，不进 message） */
+  body: Partial<ApiErrorBody> & Record<string, unknown>
   constructor(status: number, body: Partial<ApiErrorBody>) {
     super(body.message || `请求失败（HTTP ${status}）`)
     this.name = 'ApiError'
     this.status = status
     this.code = body.code || 'UNKNOWN'
     this.hint = body.hint || '请稍后重试；若持续失败，请联系运维。'
+    this.body = (body ?? {}) as Partial<ApiErrorBody> & Record<string, unknown>
   }
 }
 
@@ -54,6 +57,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const post = <T,>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) })
 
+const put = <T,>(path: string, body?: unknown) =>
+  request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) })
+
 export const api = {
   health: () => request<Record<string, unknown>>('/health'),
   tools: () => request<{ ok: boolean; count: number; tools: unknown[] }>('/tools'),
@@ -62,6 +68,42 @@ export const api = {
 
   similarPrecheck: (body: { title: string; description?: string; top?: number; threshold?: number }) =>
     post<SimilarPrecheckResp>('/demand/similar-precheck', body),
+
+  // ---- 退回需求方补充（CR010）----
+  // 缺口处置第一顺位是退需求而不是补知识：补知识是小时/天级的跨部门动作，
+  // 退需求是分钟级的一个人动作。这三个接口支撑「预览 → 退回 → 就地补充 → 回流」。
+  clarifyPack: (
+    demandId: string,
+    args: { dataset?: string; gap_kind?: string; gap_text?: string } = {},
+  ) => {
+    const q = new URLSearchParams()
+    q.set('dataset', args.dataset || 'B')
+    if (args.gap_kind) q.set('gap_kind', args.gap_kind)
+    if (args.gap_text) q.set('gap_text', args.gap_text)
+    return request<Record<string, unknown>>(
+      `/demand/${encodeURIComponent(demandId)}/clarify?${q.toString()}`,
+    )
+  },
+  returnDemand: (
+    demandId: string,
+    body: {
+      dataset?: string
+      gap_kind?: string
+      gap_text?: string
+      items?: { id?: string; slot?: string; question?: string; answer?: string }[]
+      note?: string
+      actor?: string
+    },
+  ) => post<Record<string, unknown>>(`/demand/${encodeURIComponent(demandId)}/return`, body),
+  supplementDemand: (
+    demandId: string,
+    body: {
+      answers?: { id?: string; slot?: string; question?: string; answer?: string }[]
+      extra_description?: string
+      fields?: Record<string, string>
+      actor?: string
+    },
+  ) => post<Record<string, unknown>>(`/demand/${encodeURIComponent(demandId)}/supplement`, body),
 
   createDemand: (body: Record<string, unknown>) => post<Record<string, unknown>>('/demand', body),
   demandList: (args: { status?: string; limit?: number; offset?: number } = {}) => {
@@ -123,29 +165,9 @@ export const api = {
   semanticCollect: (dataset: string, engine = 'native') =>
     post<Record<string, any>>('/semantic/collect', { dataset, engine }),
 
-  // ---- M8 菜单② 知识储备 ----
-  knowledgeHealth: () => request<Record<string, any>>('/knowledge/health'),
-  knowledgeDocuments: (limit = 50) => request<Record<string, any>>(`/knowledge/documents?limit=${limit}`),
-  knowledgeSearch: (body: { question: string; top_k?: number; threshold?: number; vector_weight?: number; demand_id?: string }) =>
-    post<KnowledgeSearchResp>('/knowledge/search', body),
-  knowledgeCitations: (args: { demand_id?: string; include_retired?: boolean; limit?: number } = {}) => {
-    const q = new URLSearchParams()
-    if (args.demand_id) q.set('demand_id', args.demand_id)
-    if (args.include_retired) q.set('include_retired', 'true')
-    q.set('limit', String(args.limit ?? 50))
-    return request<Record<string, any>>(`/knowledge/citations?${q.toString()}`)
-  },
-  // 知识准入：上传走 base64 JSON 而非 multipart——BFF 侧不引python-multipart（红线五）
-  knowledgeUpload: (body: { filename: string; content_base64: string; content_type?: string; actor?: string }) =>
-    post<Record<string, any>>('/knowledge/upload', body),
-  knowledgeStatus: (documentId = '', limit = 50) => {
-    const q = new URLSearchParams()
-    if (documentId) q.set('document_id', documentId)
-    q.set('limit', String(limit))
-    return request<Record<string, any>>(`/knowledge/status?${q.toString()}`)
-  },
-  knowledgeDelete: (body: { document_id: string; actor?: string }) =>
-    post<Record<string, any>>('/knowledge/delete', body),
+  // ---- 知识管理接口已按 CR009 整体剔除 ----
+  // 知识收集/治理全部在 WeKnora 知识库平台完成，Askoda 客户端不设上传/检索/资产入口；
+  // 分析链路对知识的调取走网关 MCP（服务端内部消费面），不经客户端 REST。
 
   // ---- M8 菜单③ 数据源接入 ----
   datasourceScan: (dataset: string, persist = true) =>
@@ -156,6 +178,42 @@ export const api = {
     request<Record<string, any>>(
       `/datasource/candidates?demand_id=${encodeURIComponent(demandId)}&dataset=${encodeURIComponent(dataset)}`,
     ),
+
+  // ---- 系统设置 · 大模型连接 ----
+  // 密钥只进不出：GET 回来的是掩码（credential_masked），提交时留空 = 不改动原值。
+  llmSettings: () => request<LlmSettings>('/settings/llm'),
+  saveLlmSettings: (body: LlmSettingsIn) => post<LlmSaveResp>('/settings/llm', body),
+  testLlm: (body: LlmTestIn) => post<LlmTestResp>('/settings/llm/test', body),
+
+  // ---- 口径维护（M11）----
+  // 口径是数据：读回来的是当前生效版本，保存走的是一次「校验 + 热部署 + 落库」。
+  metrics: (dataset: string) => request<MetricsResp>(`/metrics/${encodeURIComponent(dataset)}`),
+  saveMetrics: (body: { dataset: string; metrics: unknown; dry_run?: boolean; actor?: string }) =>
+    put<MetricSaveResp>('/metrics', body),
+  previewMetric: (body: { dataset: string; question: string; limit?: number }) =>
+    post<MetricPreviewResp>('/metrics/preview', body),
+
+  // ---- 系统设置 · 知识库接入（M10）----
+  knowledgeSettings: () => request<KnowledgeSettings>('/settings/knowledge'),
+  saveKnowledge: (body: { kb_ids: string[]; actor?: string; reset?: boolean }) =>
+    post<KnowledgeSettings>('/settings/knowledge', body),
+  testKnowledge: (body: { kb_id?: string; question?: string }) =>
+    post<KnowledgeTestResp>('/settings/knowledge/test', body),
+
+  // ---- 数据源接入 · 数据集登记（M10）----
+  datasetRegistry: () => request<DatasetRegistryResp>('/datasource/registry'),
+  probeDataset: (body: DatasetFormIn) => post<DatasetProbeResp>('/datasource/probe', body),
+  registerDataset: (body: DatasetFormIn & { key: string; label?: string; domain?: string }) =>
+    post<Record<string, any>>('/datasource/registry', body),
+  unregisterDataset: (key: string, actor = '') =>
+    request<Record<string, any>>(
+      `/datasource/registry/${encodeURIComponent(key)}?actor=${encodeURIComponent(actor)}`,
+      { method: 'DELETE' },
+    ),
+
+  // ---- 需求清理（M10）----
+  purgeDemands: (body: { demand_ids: string[]; actor?: string; dry_run?: boolean }) =>
+    post<PurgeResp>('/demand/purge', body),
 }
 
 // ---- M8 新增响应形状 ----
@@ -190,19 +248,7 @@ export type MdlResp = {
   tables?: MdlTable[]
 }
 
-export type KnowledgeSearchResp = {
-  ok?: boolean
-  question?: string
-  citations?: Array<{
-    document_name?: string
-    chunk_id?: string
-    similarity?: number
-    content?: string
-    positions?: unknown
-  }>
-  answer_context?: string
-  error?: string
-}
+// KnowledgeSearchResp 已随 CR009 客户端知识接口剔除而移除。
 
 // ---------------------------------------------------------------------------
 // 响应形状（跟随网关实盘返回；网关返回体未走强类型 schema，故在此集中声明）
@@ -402,4 +448,273 @@ export type SqlRunReplayResp = {
   versions: ReplayVersion[]
   replay: ReplaySnapshot | null
   notice?: string
+}
+
+// ---------------------------------------------------------------------------
+// 系统设置 · 大模型连接
+// ---------------------------------------------------------------------------
+/** 供应商预设（由后端下发，前端不硬编码；新增一家只需后端加一条）。 */
+export type LlmProvider = {
+  key: string
+  label: string
+  base_url: string
+  models: string[]
+  note?: string
+}
+
+export type LlmSettings = {
+  ok: boolean
+  /** 生效来源：db=界面保存的；env=环境变量；none */
+  source?: 'db' | 'env' | 'none'
+  provider?: string
+  base_url?: string
+  model?: string
+  /** 用户意图（开关原值） */
+  enabled?: boolean
+  /** 实际是否会调用大模型（开关打开 且 三项配齐） */
+  effective?: boolean
+  configured?: boolean
+  /** 还缺哪几项：base_url / api_key / model */
+  missing?: string[]
+  temperature?: number
+  timeout?: number
+  max_repair?: number
+  /** 库里是否已有持久化配置（有 = 环境变量不再生效） */
+  persisted?: boolean
+  updated_by?: string
+  updated_at?: string
+  /** 凭据只给「有没有」和「尾号」。缺字段时按「已保存但不回显」处理。 */
+  has_credential?: boolean
+  credential_masked?: string
+  env_configured?: boolean
+  env_model?: string
+  db_error?: string
+  providers?: LlmProvider[]
+  recent_changes?: Array<{
+    action: string
+    actor?: string
+    at?: string
+    credential_changed?: boolean
+    model?: string
+  }>
+}
+
+export type LlmSettingsIn = {
+  provider?: string
+  base_url?: string
+  model?: string
+  /** 留空 = 保持原有密钥不变 */
+  api_key?: string
+  enabled?: boolean
+  temperature?: number
+  timeout?: number
+  max_repair?: number
+  clear_credential?: boolean
+  reset?: boolean
+  actor?: string
+}
+
+export type LlmSaveResp = {
+  ok: boolean
+  changed?: string[]
+  warnings?: string[]
+  notice?: string
+  effective?: boolean
+  settings?: LlmSettings
+}
+
+export type LlmTestIn = {
+  provider?: string
+  base_url?: string
+  model?: string
+  /** 留空则用已保存的密钥测 */
+  api_key?: string
+  timeout?: number
+}
+
+export type LlmTestResp = {
+  ok: boolean
+  latency_ms?: number
+  reply?: string
+  model_reported?: string
+  /** true = 这次用的是库里已存的密钥，不是本次输入 */
+  used_saved_credential?: boolean
+  notice?: string
+  error?: string
+  config?: { base_url?: string; model?: string; credential_masked?: string }
+  /** 第一段探活（模型清单）的结论：用来区分「地址不通」和「模型太慢」 */
+  probe?: {
+    reachable?: boolean
+    status?: number
+    model_count?: number
+    /** true=清单里有；false=没有；null=清单为空或不认识，无法判断 */
+    model_listed?: boolean | null
+    /** 这段结论能否定案：false 表示该地址不提供模型清单，需靠生成结果判断 */
+    conclusive?: boolean
+    error?: string
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 知识库接入（M10）
+// ---------------------------------------------------------------------------
+export type KnowledgeBaseVisible = {
+  id: string
+  name: string
+  /** 本次问答实际是否使用（勾选状态以服务端为准，避免刷新后被本地状态覆盖） */
+  is_active?: boolean
+  /** 是否为环境变量里配的默认库（部署期决定，界面上只是标注） */
+  is_env_default?: boolean
+  description?: string
+  capabilities?: string[]
+}
+
+export type KnowledgeSettings = {
+  ok: boolean
+  kb_ids?: string[]
+  /** 生效来源：db=界面保存；env=环境变量；none=未接入 */
+  source?: 'db' | 'env' | 'none'
+  env_kb_ids?: string[]
+  persisted?: boolean
+  updated_by?: string
+  updated_at?: string
+  db_error?: string
+  /** 底座可见范围（硬边界）：不在这个列表里的库，勾了也搜不到 */
+  visible?: KnowledgeBaseVisible[] | null
+  visible_error?: string
+  base?: string
+  notice?: string
+}
+
+export type KnowledgeTestResp = {
+  ok: boolean
+  question?: string
+  hits: number
+  sources: Array<{ document_name?: string; similarity?: number; snippet?: string }>
+  notice?: string
+}
+
+// ---------------------------------------------------------------------------
+// 数据集登记（M10）
+// ---------------------------------------------------------------------------
+export type DatasetFormIn = {
+  host?: string
+  port?: number
+  dbname?: string
+  user?: string
+  password?: string
+  engine?: string
+  mdl_json?: string
+  actor?: string
+}
+
+export type RegisteredDataset = {
+  key: string
+  label?: string
+  domain?: string
+  engine?: string
+  /** 只回显库名，地址与口令不出网关 */
+  database?: string
+  models?: number
+  fields?: number
+  has_inline_mdl?: boolean
+  enabled?: boolean
+  updated_by?: string
+  updated_at?: string
+}
+
+export type DatasetRegistryResp = {
+  ok: boolean
+  registered: RegisteredDataset[]
+  usable: Array<{ key: string; label?: string; domain?: string; models?: number; fields?: number; error?: string }>
+  env_keys: string[]
+}
+
+export type DatasetProbeResp = {
+  ok: boolean
+  checks: Record<string, { ok: boolean; error?: string; hint?: string; [k: string]: any }>
+  notice?: string
+}
+
+// ---------------------------------------------------------------------------
+// 需求清理（M10）
+// ---------------------------------------------------------------------------
+export type PurgeResp = {
+  ok: boolean
+  dry_run?: boolean
+  deleted?: Record<string, number>
+  would_delete?: Record<string, number>
+  missing?: string[]
+  notice?: string
+}
+
+// ---------------------------------------------------------------------------
+// 口径维护（M11）
+// ---------------------------------------------------------------------------
+export type MetricView = {
+  name: string
+  columns?: string[]
+  comment?: string
+  /** 只有编辑草稿里才有完整语句；列表读回来是空的（视图由数据侧维护） */
+  statement?: string
+}
+
+export type MetricDef = {
+  key: string
+  label: string
+  aliases: string[]
+  view: string
+  expr: string
+  unit?: string
+  fmt?: string
+  /** snapshot=时点快照（取最新一期）；flow=区间流水（按自然月） */
+  time_mode: 'snapshot' | 'flow'
+  time_col: string
+  dims: string[]
+  definition?: string
+  caveats?: string
+  source?: string
+}
+
+export type MetricsResp = {
+  ok: boolean
+  dataset: string
+  /** 该数据集有没有接入口径登记；false ⇒ 空状态，不是故障 */
+  registered?: boolean
+  notice?: string
+  version: string
+  views: MetricView[]
+  metrics: MetricDef[]
+  models?: number
+  updated_by?: string
+  updated_at?: string
+}
+
+export type MetricSaveResp = {
+  ok: boolean
+  dataset: string
+  version: string
+  views: number
+  metrics: number
+  added: string[]
+  removed: string[]
+  dry_run?: boolean
+  notice?: string
+}
+
+export type MetricPreviewResp = {
+  ok: boolean
+  question: string
+  metric?: string
+  metric_label?: string
+  engine?: string
+  sql?: string
+  row_count?: number
+  columns?: string[]
+  /** 后端按「列名数组 + 行数组」返回；也兼容按列名取值的对象行 */
+  rows?: Array<Record<string, unknown> | unknown[]>
+  blocked?: boolean
+  reason?: string
+  guide?: string
+  error?: string
 }

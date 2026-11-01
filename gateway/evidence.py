@@ -159,6 +159,32 @@ def _term_variants(raw):
     return out
 
 
+# 表级中文名的后缀：去掉后得到「业务对象词」（会员维表 → 会员）。
+# 只取最长的一个后缀，避免「订单商品明细表」被连剥两层成「订单商品」再成「订单」——
+# 剥到哪一层是业务名的边界，多剥会把词义扩大，反而不精确。
+_TABLE_NAME_SUFFIXES = ("维表", "明细表", "汇总表", "记录表", "明细", "汇总", "表")
+
+
+def _table_label_variants(label):
+    """中文表名 → 词表词条（含去后缀的业务对象词）。
+
+    为什么需要：表名在库里是英文（`dim_member`），业务方说的是「会员」。
+    若词表只有字段名（会员姓名 / 会员等级），需求「统计会员的数量」命中不到任何
+    词条，主体槽位就会是空候选——下游字段、context_pack、SQL 全部连锁为空。
+    """
+    s = clean_label(label)
+    if not s or not re.search(r"[\u4e00-\u9fa5]", s):
+        return []
+    out = [s] if 2 <= len(s) <= 24 else []
+    for suf in _TABLE_NAME_SUFFIXES:
+        if s.endswith(suf) and len(s) > len(suf):
+            bare = s[: -len(suf)].strip()
+            if 2 <= len(bare) <= 12 and bare not in out:
+                out.append(bare)
+            break
+    return out
+
+
 # P1-14 · 口径表达式词条质量门槛
 #
 # 列的 description 里除了业务口径，还有大量**说明性套话**。把它们切开当词条会
@@ -442,20 +468,26 @@ def build_lexicon(dataset="B"):
         "SELECT table_name, table_label, grain, domain FROM table_docs WHERE dataset=%s",
         (dataset,),
     ):
-        terms.append(
-            {
-                "term": t["table_name"],
-                "kind": "table",
-                "canonical": t["table_name"],
-                "label": t["table_label"] or t["table_name"],
-                "table": t["table_name"],
-                "grain": t["grain"],
-                "domain": t["domain"],
-                "level": "P6",
-                "source": "table_docs",
-                "locator": t["table_name"],
-            }
-        )
+        label = t["table_label"] or t["table_name"]
+        # 一条表级词条要同时收：① 英文表名（Agent / 技术方会直接写）；
+        # ② 中文表名（业务方会说话）。中文名再派生「去后缀」的业务对象词——
+        # 「会员维表」→「会员」，否则需求里「统计会员的数量」命中不上任何词条，
+        # 主体槽位为空（2026-10-30 实测 DR-20261030-GJRN）。
+        for v in [t["table_name"]] + _table_label_variants(label):
+            terms.append(
+                {
+                    "term": v,
+                    "kind": "table",
+                    "canonical": t["table_name"],
+                    "label": label,
+                    "table": t["table_name"],
+                    "grain": t["grain"],
+                    "domain": t["domain"],
+                    "level": "P6",
+                    "source": "table_docs",
+                    "locator": t["table_name"],
+                }
+            )
 
     # 业务口语别名：这类词天然不在 schema 里——业务说「营业额」，字段叫「销售额」，
     # MDL 里永远查不到对应关系，只能人工维护。别名的 locator 仍指向真实字段，

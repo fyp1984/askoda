@@ -254,6 +254,17 @@ def seed_from_mdl(dataset_key):
         desc_parts = [
             c.get("description", "") for c in cols[:3] if c.get("description")
         ]
+        # 表级中文名：优先取 MDL 的 `description`（业务名，写法「会员维表；一名会员一行」），
+        # 取不到才退回「数据集 · 表名」。
+        #
+        # 为什么必须让 MDL 提供中文表名（2026-10-30 实测 DR-20261030-GJRN）：
+        # 中文领域词表是从 table_docs / column_docs 现读的（见 evidence.build_lexicon）。
+        # 表名只有英文 `dim_member` 时，词表里关于会员的条目只剩「会员姓名 / 会员等级 /
+        # 会员状态 / 会员ID」这类**字段名**——需求写「统计会员的数量」，一个都命中不上，
+        # 主体槽位空 → 字段槽位空 → context_pack 空 → SQL 生成为空串，
+        # 最终在 L1 门禁报「SQL 为空」。补上中文表名后「会员」才成为可用业务词条。
+        biz_label = (m.get("description") or "").split("；")[0].split(";")[0].strip()
+        table_label = biz_label or (ds.label + " · " + tname)
         db.execute(
             """
             INSERT INTO table_docs (dataset, table_name, table_label, domain, grain, description, source)
@@ -267,7 +278,7 @@ def seed_from_mdl(dataset_key):
             (
                 dataset_key,
                 tname,
-                ds.label + " · " + tname,
+                table_label,
                 ds.domain,
                 grain,
                 "字段摘要：" + "；".join(desc_parts)[:300],

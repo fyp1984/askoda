@@ -223,7 +223,10 @@ export default function PageSql({
             risks={sql!.generation_risks || []}
             block={(sql as any).generation_block}
             dataset={dataset}
+            demandId={demandId}
+            demandStatus={(status?.demand as any)?.status}
             onRetried={realign}
+            onReturned={onRefresh}
           />
         ) : null}
 
@@ -307,7 +310,7 @@ export default function PageSql({
 
         {exec ? (
           <Section title="结果集" id="sql-resultset">
-            <p className="muted">{exec.execution_summary}</p>
+            <p className="muted"><RichText text={exec.execution_summary} /></p>
             <p>
               交付判定：
               {exec.deliverable ? (

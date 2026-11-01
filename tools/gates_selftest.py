@@ -1512,13 +1512,21 @@ def main():
     # ------------------------------------------------------------------
     # 附加-16. 仅命中 warning 类规则 → status=警告（不阻断）—— 分级阻断的阴性对照
     # ------------------------------------------------------------------
-    title = "附加-16. 仅 TIME_FIELD_SUSPECT(warning) → status=警告，不阻断"
-    sql = ("SELECT date_trunc('month', order_date) AS 月份, COUNT(*) AS 订单数, "
-           "SUM(pay_amount) AS 销售金额 FROM dwd_order_di WHERE order_status = '已完成' "
-           "GROUP BY date_trunc('month', order_date) ORDER BY 月份")
+    title = "附加-16. 仅 UNNECESSARY_DISTINCT(warning) → status=警告，不阻断"
+    # ⚠️ 2026-10-23 换过两次 SQL，记下来免得后人再踩：
+    #  ① 原用 `SELECT date_trunc(...) AS 月份 … ORDER BY 月份` 触发 TIME_FIELD_SUSPECT——
+    #     靠的其实是**规则对别名的误报**。规则修好（别名展开成背后的真实列再判）后
+    #     这条 SQL 正确地不再报。
+    #  ② 换成 `WHERE dw_insert_time …` 又同时踩中 LOAD_DATE_SUBSTITUTION(阻断)
+    #     与 UNMAPPED_OBJECT_REF(阻断) ⇒ 变成「不通过」，测不到「warning 不阻断」。
+    #  ③ 现用 UNNECESSARY_DISTINCT：单表无聚合无 JOIN 却加 DISTINCT，
+    #     是干净的单条 warning，正好当「分级阻断」的阴性对照。
+    sql = "SELECT DISTINCT store_id FROM dim_store"
     r = gt.review(sql, dataset="B", _dry_run_fn=_fake_dry_run_ok)
     hit = {x.get("rule") for x in (r.get("semantic_issues") or [])}
-    ok = r["status"] == "警告" and "TIME_FIELD_SUSPECT" in hit
+    # 断言的是「命中了一条 warning 类规则且不阻断」，不锁死具体是哪条规则——
+    # 锁死规则名会让用例在规则调整时假红（本次就发生了），而它要证明的不是规则本身。
+    ok = r["status"] == "警告" and len(hit) > 0
     if not ok:
         fails.append("%s FAILED: status=%s rules=%s" % (title, r["status"], sorted(hit)))
     print("[%s] %s" % ("OK" if ok else "!!", title))

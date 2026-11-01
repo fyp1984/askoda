@@ -41,10 +41,10 @@ code, .mono, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, m
 .health { font-size: 12px; padding: 2px 8px; border-radius: 10px; }
 .health.ok { background: var(--ok-bg); color: var(--ok); }
 .health.bad { background: var(--danger-bg); color: var(--danger); }
-.did { background: #eef2f7; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+.did { background: var(--bg-panel-2); padding: 2px 8px; border-radius: 4px; font-size: 12px; }
 
 .tabs { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); padding-bottom: 10px; flex-wrap: wrap; }
-.tab { border: 1px solid var(--line); background: #fff; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.tab { border: 1px solid var(--line); background: var(--panel); padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
 .tab.active { background: var(--primary); border-color: var(--primary); color: #fff; }
 .badge-n, .badge-r { margin-left: 6px; border-radius: 9px; padding: 0 6px; font-size: 11px; color: #fff; }
 .badge-n { background: var(--warn); }
@@ -71,11 +71,25 @@ code, .mono, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, m
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .card-head h3 { margin: 0; font-size: var(--text-md); }
 .card-extra { display: flex; gap: 8px; flex-wrap: wrap; }
+/* 卡片正文里的独立勾选行（开关）。
+   不复用 .ds-pick：那个是顶部工具栏专用，带 margin-left:auto，
+   放进卡片正文会把勾选框挤到中间、说明文字甩到最右。 */
+.checkline {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin: var(--space-2) 0 0; font-size: 13px; color: var(--color-text-secondary);
+}
+.checkline > input[type="checkbox"] { flex: 0 0 auto; margin-top: 2px; }
+.checkline > span { flex: 1 1 auto; min-width: 0; line-height: 1.5; }
+
 .card-body { padding: 14px 16px; }
+
+/* 卡片副标题（Card 的 desc）：一句话交代这张卡在讲什么。
+   参数化前它是「声明了却没人渲染」的死参数 —— 顺手补上，别让接口对着空实现。 */
+.card-desc { margin: 0 0 10px; font-size: 12px; line-height: 1.6; }
 
 button.primary { background: var(--primary); color: #fff; border: 1px solid var(--primary); }
 button.primary:hover:not(:disabled) { background: var(--primary-d); }
-button { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 7px 13px; cursor: pointer; font-size: 13px; }
+button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 6px; padding: 7px 13px; cursor: pointer; font-size: 13px; }
 button:disabled { opacity: .5; cursor: not-allowed; }
 
 .form { display: flex; flex-direction: column; gap: 14px; }
@@ -95,10 +109,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .req { color: var(--danger); font-style: normal; margin-left: 6px; font-size: 11px; }
 .field input, .field textarea, .field select {
   border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font: inherit; width: 100%;
+  background: var(--panel); color: var(--text); /* 显式给底色：否则暗色下是浏览器默认白底黑字 */
   min-width: 0; /* grid/flex 子项默认 min-width:auto，会撑破容器 */
 }
 .field input:focus, .field textarea:focus, .field select:focus { outline: 2px solid rgba(31,95,208,.25); border-color: var(--primary); }
-.field input.invalid, .field textarea.invalid { border-color: var(--danger); background: #fffafa; }
+.field input.invalid, .field textarea.invalid { border-color: var(--danger); background: var(--danger-bg); }
 .field-err { color: var(--danger); font-size: 11px; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 
@@ -119,14 +134,14 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .errbox li { margin: 3px 0; }
 .errbox-title { color: var(--danger); font-weight: 600; }
 .errbox-code { margin-left: 8px; font-size: 11px; background: rgba(200,52,43,.12); padding: 1px 6px; border-radius: 4px; }
-.errbox-hint { margin-top: 4px; font-size: 12px; color: #8a2b24; }
+.errbox-hint { margin-top: 4px; font-size: 12px; color: var(--danger); }
 
 .warnbox { border: 1px solid #f0dca8; background: var(--warn-bg); border-radius: 6px; padding: 10px 12px; margin: 10px 0; }
 .warnbox-title { color: var(--warn); font-weight: 600; }
 .warnbox-list { margin: 6px 0 0; padding-left: 18px; }
 .warnbox-list li { margin-bottom: 4px; }
 .warnbox-msg { margin-left: 8px; color: var(--muted); }
-.warnbox-hint { margin-top: 4px; font-size: 12px; color: #7a5200; }
+.warnbox-hint { margin-top: 4px; font-size: 12px; color: var(--state-warning-text); }
 .sim { margin-left: 8px; font-size: 11px; color: var(--warn); }
 
 .loading { padding: 10px 0; color: var(--primary); font-size: 13px; }
@@ -223,7 +238,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: 6px; }
 table.grid { border-collapse: collapse; width: 100%; font-size: 12px; }
 table.grid th, table.grid td { border-bottom: 1px solid var(--line); padding: 7px 9px; text-align: left; vertical-align: top; }
-table.grid th { background: #f2f4f7; font-weight: 600; white-space: nowrap; }
+table.grid th { background: var(--bg-panel-2); font-weight: 600; white-space: nowrap; }
 table.grid tr:last-child td { border-bottom: none; }
 .row-p2 { background: #f4fbf7; }
 .row-ok td { background: #fbfdfc; }
@@ -273,7 +288,7 @@ table.grid td:first-child, table.grid th:first-child { white-space: nowrap; }
 .gate-layer-name { font-weight: var(--weight-semibold); color: var(--color-text); }
 .gate-layer-code { font-size: var(--text-xs); color: var(--color-text-muted); background: var(--bg-panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 6px; }
 
-.trace { display: flex; gap: 24px; flex-wrap: wrap; padding: 10px 12px; background: #f2f4f7; border-radius: 6px; margin-bottom: 10px; }
+.trace { display: flex; gap: 24px; flex-wrap: wrap; padding: 10px 12px; background: var(--bg-panel-2); border-radius: 6px; margin-bottom: 10px; }
 .trace-k { display: block; font-size: 11px; color: var(--muted); }
 
 .foot { margin-top: 24px; text-align: center; color: var(--muted); font-size: 12px; }
@@ -287,8 +302,8 @@ table.grid td:first-child, table.grid th:first-child { white-space: nowrap; }
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #fbfcfd;
-  color: #1a1a1a;
+  background: var(--bg-panel-2);
+  color: var(--text);
   resize: vertical;
 }
 .sqlinput:focus { outline: 2px solid #2f6fb0; outline-offset: 1px; }
@@ -300,8 +315,8 @@ table.grid td:first-child, table.grid th:first-child { white-space: nowrap; }
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #fff;
-  color: #1a1a1a;
+  background: var(--panel);
+  color: var(--text);
 }
 .textinput:focus { outline: 2px solid #2f6fb0; outline-offset: 1px; }
 
@@ -728,6 +743,16 @@ table.grid td:first-child, table.grid th:first-child { white-space: nowrap; }
 .sec-body { margin-top: 10px; }
 .sec-block.collapsed > .sec-body { display: none; }
 
+/* ── 审计回放：说明文字与「刷新」同排 ──
+   刷新按钮原本挂在卡片头上，但卡片改成默认折叠后，头部只剩折叠开关；
+   按钮跟着内容走，展开才出现，避免「收起来的卡片上还挂着一个能点出请求的按钮」。 */
+.audit-bar {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; margin-bottom: 10px;
+}
+.audit-bar > .muted { margin: 0; flex: 1 1 auto; min-width: 0; }
+.audit-bar > button { flex: 0 0 auto; }
+
 /* ── 槽位卡折叠（六槽位内每一项；红色框圈住的就是槽位名）── */
 .slot-toggle {
   display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0;
@@ -742,4 +767,125 @@ table.grid td:first-child, table.grid th:first-child { white-space: nowrap; }
 .slot-body { margin-top: 6px; }
 .slot.collapsed > .slot-body { display: none; }
 
+/* ── 缺口处置三档（CR010：退需求优先于补知识，按成本从低到高排）── */
+.routebox { margin: 4px 0 12px; display: grid; gap: 8px; }
+.routeitem {
+  border: 1px solid #e6e8eb; border-radius: 6px; padding: 10px 12px; background: #fcfcfd;
+}
+.routeitem.rec {
+  border-color: #9fc4ee; background: #f4f9ff;
+  box-shadow: inset 3px 0 0 #2f6fbf;
+}
+.routehead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.routeno { font-weight: 700; color: #2f6fbf; }
+.routename { font-size: 13.5px; font-weight: 700; color: #333; }
+.routetag { font-size: 11.5px; padding: 1px 7px; border-radius: 9px; font-weight: 700; }
+.routetag.fast { background: #e9f6ec; color: #2d7a45; }
+.routetag.slow { background: #fff4e5; color: #9a6212; }
+.routetag.hard { background: #f2f0fa; color: #5a4a9a; }
+.routestar {
+  margin-left: auto; font-size: 11.5px; font-weight: 700; color: #fff;
+  background: #2f6fbf; padding: 1px 8px; border-radius: 9px;
+}
+.routedesc { margin: 6px 0 0; font-size: 12.5px; color: #555; line-height: 1.7; }
+.routemeta { color: #8a8a8a; }
 
+/* 待明确项：一屏内可读完、可点选、可手写 */
+.claritbox { margin: 10px 0; border: 1px solid #e6e8eb; border-radius: 6px; overflow: hidden; }
+.clarithead {
+  padding: 8px 12px; background: #f7f8fa; font-size: 12.5px; font-weight: 700;
+  color: #444; display: flex; gap: 10px; align-items: center;
+}
+.claritmust { font-weight: 600; color: #a83a3a; font-size: 12px; }
+.clarit { padding: 10px 12px; border-top: 1px solid #f0f1f3; background: #fff; }
+.clarit.must { background: #fffdf7; }
+.claritq {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 13.5px; color: #222; font-weight: 600;
+}
+.claritslot {
+  flex: 0 0 auto; font-size: 11.5px; font-weight: 700; color: #23508f;
+  background: #eaf2fb; border-radius: 9px; padding: 1px 8px; white-space: nowrap;
+}
+.clarittag {
+  font-size: 11px; font-weight: 700; color: #b3261e; background: #fdecec;
+  border-radius: 8px; padding: 1px 6px; white-space: nowrap;
+}
+.claritwhy { margin-top: 5px; font-size: 12.5px; color: #7a7a7a; line-height: 1.6; }
+.claritopts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.optbtn {
+  font-size: 12.5px; padding: 4px 10px; border-radius: 14px;
+  border: 1px solid #d7dbe0; background: #fff; color: #333; cursor: pointer;
+}
+.optbtn:hover { border-color: #2f6fbf; color: #2f6fbf; }
+.optbtn.on { border-color: #2f6fbf; background: #eaf2fb; color: #23508f; font-weight: 700; }
+.optbtn.ghost { border-style: dashed; color: #7a7a7a; }
+.claritinput {
+  width: 100%; margin-top: 8px; padding: 6px 10px; font-size: 13px;
+  border: 1px solid #d7dbe0; border-radius: 6px; box-sizing: border-box;
+}
+.claritinput:focus { outline: 2px solid #cfe0f5; border-color: #2f6fbf; }
+.knownbox {
+  padding: 8px 12px; border-top: 1px solid #f0f1f3; background: #fbfbfc;
+  font-size: 12.5px; color: #666;
+}
+.knownbox summary { cursor: pointer; }
+.knownbox ul { margin: 6px 0 0; padding-left: 18px; }
+.knownbox li { margin: 3px 0; }
+
+/* 退回 / 补充动作条 */
+.returnbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0 4px; }
+.linklike {
+  border: none; background: none; color: #2f6fbf; font-size: 12.5px;
+  cursor: pointer; text-decoration: underline; padding: 0;
+}
+.supintro { font-size: 13px; color: #555; line-height: 1.7; margin-bottom: 8px; }
+.claritsupp { margin-top: 12px; }
+.claritsupp textarea {
+  width: 100%; font-size: 13px; padding: 8px 10px; border: 1px solid #d7dbe0;
+  border-radius: 6px; font-family: inherit; box-sizing: border-box;
+}
+
+/* 次要动作按钮（缺口不在需求侧时，退回退化为次要动作，避免劝人做无用功） */
+button.secondary {
+  background: #fff; color: #2f6fbf; border: 1px solid #9fc4ee;
+}
+button.secondary:hover:not(:disabled) { background: #f4f9ff; }
+
+/* 技术侧处置细节折叠（对业务方是噪音，收起来给排障的人看） */
+.donebox > summary {
+  cursor: pointer; font-size: 12.5px; font-weight: 700; color: #2d7a45;
+}
+
+
+/* ── 口径维护（M11）─────────────────────────────────────────────
+ * 表单网格：口径有十几个字段，两列排能在一屏内改完；
+ * 「讲清楚怎么算」这类长文本用 .wide 各占一整行。
+ * 颜色一律走令牌，暗色主题自动跟随。 */
+.formgrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+  margin: 6px 0 10px;
+}
+.formgrid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.formgrid label.wide { grid-column: 1 / -1; }
+.formgrid input,
+.formgrid select,
+.formgrid textarea {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--panel);
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.formgrid textarea { resize: vertical; }
+
+/* 校验原因逐条列（默认 ol 会带缩进，这里收紧一点） */
+.plainlist { margin: 2px 0; padding-left: 18px; }
+.plainlist li { margin: 2px 0; }
+
+/* 卡片右上角的长输入框（试跑问句） */
+.grow { flex: 1 1 320px; min-width: 220px; }

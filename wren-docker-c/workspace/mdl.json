@@ -1,0 +1,3561 @@
+{
+  "views": [
+    {
+      "name": "mt_putout_m",
+      "statement": "SELECT date_trunc('month', a.putoutdate) AS stat_month, a.businesstype AS prdno, a.accountingorgid AS org_no, c.customertype AS cust_type, SUM(a.businesssum) AS putout_amt, COUNT(*) AS putout_cnt FROM acct_loan a LEFT JOIN customer_info c ON c.customerid = a.customerid GROUP BY date_trunc('month', a.putoutdate), a.businesstype, a.accountingorgid, c.customertype"
+    },
+    {
+      "name": "mt_loan_snap",
+      "statement": "SELECT dp_load_dt AS stat_date, prdno, prdnm, acgorgno AS org_no, acgorgnm AS org_nm, blgbrchno AS branch_no, fivelvlcgycd_jg AS five_level, custtypbcgy AS cust_type, bsnsts, SUM(dblbal) AS loan_bal, SUM(coalesce(oduebal, 0)) AS overdue_bal, SUM(dblamt) AS loan_amt, COUNT(*) AS loan_cnt, COUNT(DISTINCT bnkincustno) AS cust_cnt FROM rpt_loan_dtl GROUP BY dp_load_dt, prdno, prdnm, acgorgno, acgorgnm, blgbrchno, fivelvlcgycd_jg, custtypbcgy, bsnsts"
+    }
+  ],
+  "models": [
+    {
+      "name": "dwd_lan_dbl_fcti",
+      "columns": [
+        {
+          "name": "dp_load_dt",
+          "type": "date",
+          "description": "数据日期；快照日期（分区字段）；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "syscgy",
+          "type": "varchar",
+          "description": "系统类别；业务系统类别码（101=信贷，304=助贷，101 之外的信用卡另处理）；码值：SYSCGY；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "dblno",
+          "type": "varchar",
+          "description": "借据号；数仓口径借据主键；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "dblamt",
+          "type": "numeric",
+          "description": "借据金额；借据发放金额"
+        },
+        {
+          "name": "dblbal",
+          "type": "numeric",
+          "description": "借据余额；借据当前余额"
+        },
+        {
+          "name": "prdno",
+          "type": "varchar",
+          "description": "产品编号"
+        },
+        {
+          "name": "loansts",
+          "type": "varchar",
+          "description": "贷款状态；贷款状态码；码值：LOANSTS"
+        },
+        {
+          "name": "fivelvlcgycd_jg",
+          "type": "varchar",
+          "description": "五级分类代码；五级分类字母码；码值：FIVELVLCGYCD_JG"
+        },
+        {
+          "name": "custnm",
+          "type": "varchar",
+          "description": "客户名称；借款人名称"
+        },
+        {
+          "name": "certno",
+          "type": "varchar",
+          "description": "证件号码；借款人证件号码"
+        },
+        {
+          "name": "bnkincustno",
+          "type": "varchar",
+          "description": "行内客户号"
+        },
+        {
+          "name": "wrtoffpnp",
+          "type": "numeric",
+          "description": "核销本金；核销本金金额"
+        },
+        {
+          "name": "wrtoffdt",
+          "type": "date",
+          "description": "核销日期"
+        },
+        {
+          "name": "oper",
+          "type": "varchar",
+          "description": "经办人；经办人工号"
+        },
+        {
+          "name": "cntrno",
+          "type": "varchar",
+          "description": "合同编号；所属合同编号"
+        }
+      ],
+      "primaryKey": "dp_load_dt",
+      "description": "贷款借据事实表；粒度：一行一条借据在某个快照日（DP_LOAD_DT）的事实；坑点：★ 数仓表必须带快照日条件",
+      "tableReference": {
+        "table": "dwd_lan_dbl_fcti",
+        "schema": "dwd",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "rpt_loan_dtl",
+      "columns": [
+        {
+          "name": "dblno",
+          "type": "varchar",
+          "description": "借据编号；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "cntrno",
+          "type": "varchar",
+          "description": "合同编号"
+        },
+        {
+          "name": "cntrseqno",
+          "type": "varchar",
+          "description": "合同流水号"
+        },
+        {
+          "name": "custno",
+          "type": "varchar",
+          "description": "客户编号"
+        },
+        {
+          "name": "bnkincustno",
+          "type": "varchar",
+          "description": "行内客户号"
+        },
+        {
+          "name": "custnm",
+          "type": "varchar",
+          "description": "客户名称"
+        },
+        {
+          "name": "certtyp",
+          "type": "varchar",
+          "description": "证件类型"
+        },
+        {
+          "name": "certno",
+          "type": "varchar",
+          "description": "证件号码"
+        },
+        {
+          "name": "custtypbcgy",
+          "type": "varchar",
+          "description": "客户类型大类"
+        },
+        {
+          "name": "custtypcgy",
+          "type": "varchar",
+          "description": "客户类型小类"
+        },
+        {
+          "name": "prdno",
+          "type": "varchar",
+          "description": "产品编号"
+        },
+        {
+          "name": "prdnm",
+          "type": "varchar",
+          "description": "产品名称"
+        },
+        {
+          "name": "cur",
+          "type": "varchar",
+          "description": "币种"
+        },
+        {
+          "name": "acgorgno",
+          "type": "varchar",
+          "description": "核算机构编号"
+        },
+        {
+          "name": "acgorgnm",
+          "type": "varchar",
+          "description": "核算机构名称"
+        },
+        {
+          "name": "blgbrchno",
+          "type": "varchar",
+          "description": "所属分行编号"
+        },
+        {
+          "name": "blgbrchnm",
+          "type": "varchar",
+          "description": "所属分行名称"
+        },
+        {
+          "name": "mngorgno",
+          "type": "varchar",
+          "description": "贷后管理机构编号"
+        },
+        {
+          "name": "mngorgnm",
+          "type": "varchar",
+          "description": "贷后管理机构名称"
+        },
+        {
+          "name": "orgjuriscd",
+          "type": "varchar",
+          "description": "机构辖区代码"
+        },
+        {
+          "name": "orgjurisnm",
+          "type": "varchar",
+          "description": "机构辖区名称"
+        },
+        {
+          "name": "greencrdtidx",
+          "type": "varchar",
+          "description": "绿色信贷指标"
+        },
+        {
+          "name": "greenproportion",
+          "type": "numeric",
+          "description": "绿色贷款所占比重"
+        },
+        {
+          "name": "setlacctno",
+          "type": "varchar",
+          "description": "结算账号"
+        },
+        {
+          "name": "loanacctno",
+          "type": "varchar",
+          "description": "贷款账号"
+        },
+        {
+          "name": "loancgylv1",
+          "type": "varchar",
+          "description": "贷款分类一级"
+        },
+        {
+          "name": "loancgylv2",
+          "type": "varchar",
+          "description": "贷款分类二级"
+        },
+        {
+          "name": "loancgylv3",
+          "type": "varchar",
+          "description": "贷款分类三级"
+        },
+        {
+          "name": "loancgylv4",
+          "type": "varchar",
+          "description": "贷款分类四级"
+        },
+        {
+          "name": "hsmrtgflg",
+          "type": "varchar",
+          "description": "住房按揭标志"
+        },
+        {
+          "name": "hpntyp",
+          "type": "varchar",
+          "description": "发生类型"
+        },
+        {
+          "name": "loandect",
+          "type": "varchar",
+          "description": "贷款投向"
+        },
+        {
+          "name": "loandectlv1",
+          "type": "varchar",
+          "description": "贷款投向一级"
+        },
+        {
+          "name": "loandectlv2",
+          "type": "varchar",
+          "description": "贷款投向二级"
+        },
+        {
+          "name": "loandectlv3",
+          "type": "varchar",
+          "description": "贷款投向三级"
+        },
+        {
+          "name": "loandectlv4",
+          "type": "varchar",
+          "description": "贷款投向四级"
+        },
+        {
+          "name": "loantyp",
+          "type": "varchar",
+          "description": "贷款类型"
+        },
+        {
+          "name": "loanuse",
+          "type": "varchar",
+          "description": "贷款用途"
+        },
+        {
+          "name": "loanterm",
+          "type": "varchar",
+          "description": "贷款期限"
+        },
+        {
+          "name": "loantermcgy",
+          "type": "varchar",
+          "description": "贷款期限分类"
+        },
+        {
+          "name": "grtmode",
+          "type": "varchar",
+          "description": "担保方式"
+        },
+        {
+          "name": "grtform",
+          "type": "varchar",
+          "description": "担保形式"
+        },
+        {
+          "name": "gnrnmgrp",
+          "type": "varchar",
+          "description": "担保人名称组"
+        },
+        {
+          "name": "grtynmgrp",
+          "type": "varchar",
+          "description": "担保物名称组"
+        },
+        {
+          "name": "addgrtmode",
+          "type": "varchar",
+          "description": "附加担保方式"
+        },
+        {
+          "name": "rpymodecd",
+          "type": "varchar",
+          "description": "还款方式代码"
+        },
+        {
+          "name": "rpymode",
+          "type": "varchar",
+          "description": "还款方式"
+        },
+        {
+          "name": "fivelvlcgy",
+          "type": "varchar",
+          "description": "五级分类"
+        },
+        {
+          "name": "fivelvlcgycd_jg",
+          "type": "varchar",
+          "description": "五级分类代码"
+        },
+        {
+          "name": "yrbgnfivelvlcgy",
+          "type": "varchar",
+          "description": "年初五级分类"
+        },
+        {
+          "name": "mobgnfivelvlcgy",
+          "type": "varchar",
+          "description": "月初五级分类"
+        },
+        {
+          "name": "operorgnm",
+          "type": "varchar",
+          "description": "经办机构名称"
+        },
+        {
+          "name": "bsnsts",
+          "type": "varchar",
+          "description": "业务状态"
+        },
+        {
+          "name": "dblsts",
+          "type": "varchar",
+          "description": "借据状态"
+        },
+        {
+          "name": "valtdt",
+          "type": "date",
+          "description": "起息日期"
+        },
+        {
+          "name": "expdt",
+          "type": "date",
+          "description": "到期日期"
+        },
+        {
+          "name": "actexpdt",
+          "type": "date",
+          "description": "实际到期日期"
+        },
+        {
+          "name": "cnlacctdt",
+          "type": "date",
+          "description": "销户日期"
+        },
+        {
+          "name": "loanwrtoffmemocd",
+          "type": "varchar",
+          "description": "贷款核销摘要代码"
+        },
+        {
+          "name": "loanrate",
+          "type": "numeric",
+          "description": "贷款利率"
+        },
+        {
+          "name": "cntramt",
+          "type": "numeric",
+          "description": "合同金额"
+        },
+        {
+          "name": "dblamt",
+          "type": "numeric",
+          "description": "借据金额"
+        },
+        {
+          "name": "dblbal",
+          "type": "numeric",
+          "description": "借据余额"
+        },
+        {
+          "name": "dblbalcnvtcny",
+          "type": "numeric",
+          "description": "借据余额折人民币"
+        },
+        {
+          "name": "oduebal",
+          "type": "numeric",
+          "description": "逾期余额"
+        },
+        {
+          "name": "oduedys",
+          "type": "varchar",
+          "description": "逾期天数"
+        },
+        {
+          "name": "pnpoduedys",
+          "type": "varchar",
+          "description": "本金逾期天数"
+        },
+        {
+          "name": "intoduedys",
+          "type": "varchar",
+          "description": "利息逾期天数"
+        },
+        {
+          "name": "maxoduedys",
+          "type": "varchar",
+          "description": "最大逾期天数"
+        },
+        {
+          "name": "onshtdbtintbal",
+          "type": "numeric",
+          "description": "表内欠息"
+        },
+        {
+          "name": "offshtdbtintbal",
+          "type": "numeric",
+          "description": "表外欠息"
+        },
+        {
+          "name": "pnpoduepnyint",
+          "type": "varchar",
+          "description": "本金罚息"
+        },
+        {
+          "name": "intoduepnyint",
+          "type": "varchar",
+          "description": "利息罚息"
+        },
+        {
+          "name": "entrbaddt",
+          "type": "date",
+          "description": "纳入不良时间"
+        },
+        {
+          "name": "twllvlcgycd",
+          "type": "varchar",
+          "description": "风险分类"
+        },
+        {
+          "name": "datadt",
+          "type": "date",
+          "description": "数据日期"
+        },
+        {
+          "name": "distributionkey",
+          "type": "varchar",
+          "description": "分桶键"
+        },
+        {
+          "name": "custtypscgy",
+          "type": "varchar",
+          "description": "客户类型小类"
+        },
+        {
+          "name": "oldbsnkind",
+          "type": "varchar",
+          "description": "老业务品种"
+        },
+        {
+          "name": "curcd",
+          "type": "varchar",
+          "description": "币种代码"
+        },
+        {
+          "name": "rgstaddrblgcntycd",
+          "type": "varchar",
+          "description": "注册地所属县代码"
+        },
+        {
+          "name": "rgstaddrblgcnty",
+          "type": "varchar",
+          "description": "注册地所属县"
+        },
+        {
+          "name": "operaddrblgcntycd",
+          "type": "varchar",
+          "description": "经营地所属县代码"
+        },
+        {
+          "name": "operaddrblgcnty",
+          "type": "varchar",
+          "description": "经营地所属县"
+        },
+        {
+          "name": "hsaddr",
+          "type": "varchar",
+          "description": "住宅地址"
+        },
+        {
+          "name": "hshldrgstaddr",
+          "type": "varchar",
+          "description": "户籍地址"
+        },
+        {
+          "name": "pecoprtloanflg",
+          "type": "varchar",
+          "description": "农民合作社贷款标志"
+        },
+        {
+          "name": "tholflg",
+          "type": "varchar",
+          "description": "两高一剩标志"
+        },
+        {
+          "name": "indscgy",
+          "type": "varchar",
+          "description": "行业分类"
+        },
+        {
+          "name": "indscgylv1",
+          "type": "varchar",
+          "description": "行业分类一级"
+        },
+        {
+          "name": "indscgylv2",
+          "type": "varchar",
+          "description": "行业分类二级"
+        },
+        {
+          "name": "indscgylv3",
+          "type": "varchar",
+          "description": "行业分类三级"
+        },
+        {
+          "name": "indscgylv4",
+          "type": "varchar",
+          "description": "行业分类四级"
+        },
+        {
+          "name": "entpscl",
+          "type": "varchar",
+          "description": "企业规模"
+        },
+        {
+          "name": "holdtyp",
+          "type": "varchar",
+          "description": "控股类型"
+        },
+        {
+          "name": "farmflgdesc",
+          "type": "varchar",
+          "description": "农户标志描述"
+        },
+        {
+          "name": "offsiteloanflg",
+          "type": "varchar",
+          "description": "异地贷款标志"
+        },
+        {
+          "name": "peprofcoprtloanflg",
+          "type": "varchar",
+          "description": "农民专业合作社贷款标志"
+        },
+        {
+          "name": "agtrloanflg",
+          "type": "varchar",
+          "description": "涉农贷款标志"
+        },
+        {
+          "name": "agtrloantyp",
+          "type": "varchar",
+          "description": "涉农贷款类型"
+        },
+        {
+          "name": "agtrloantyplv1",
+          "type": "varchar",
+          "description": "涉农贷款类型一级"
+        },
+        {
+          "name": "agtrloantyplv2",
+          "type": "varchar",
+          "description": "涉农贷款类型二级"
+        },
+        {
+          "name": "agtrloantyplv3",
+          "type": "varchar",
+          "description": "涉农贷款类型三级"
+        },
+        {
+          "name": "agtrloantyplv4",
+          "type": "varchar",
+          "description": "涉农贷款类型四级"
+        },
+        {
+          "name": "inofftabflgdbl",
+          "type": "varchar",
+          "description": "表内外标志借据"
+        },
+        {
+          "name": "inofftabflgcntr",
+          "type": "varchar",
+          "description": "表内外标志合同"
+        },
+        {
+          "name": "loantermcgycd",
+          "type": "varchar",
+          "description": "贷款期限分类代码"
+        },
+        {
+          "name": "csnrnm",
+          "type": "varchar",
+          "description": "委托人名称"
+        },
+        {
+          "name": "csnrattr",
+          "type": "varchar",
+          "description": "委托人性质"
+        },
+        {
+          "name": "csnrindscgy",
+          "type": "varchar",
+          "description": "委托人行业分类"
+        },
+        {
+          "name": "opertlrno",
+          "type": "varchar",
+          "description": "经办柜员编号"
+        },
+        {
+          "name": "operorgno",
+          "type": "varchar",
+          "description": "经办机构编号"
+        },
+        {
+          "name": "lgopnbnk",
+          "type": "varchar",
+          "description": "保函开立行"
+        },
+        {
+          "name": "lnafmngpsnno",
+          "type": "varchar",
+          "description": "贷后管理人员编号"
+        },
+        {
+          "name": "lnafmngpsnnm",
+          "type": "varchar",
+          "description": "贷后管理人员名称"
+        },
+        {
+          "name": "billtyp",
+          "type": "varchar",
+          "description": "票据类型"
+        },
+        {
+          "name": "billno",
+          "type": "varchar",
+          "description": "票据号码"
+        },
+        {
+          "name": "billsts",
+          "type": "varchar",
+          "description": "票据状态"
+        },
+        {
+          "name": "guarpct",
+          "type": "numeric",
+          "description": "保证金比例"
+        },
+        {
+          "name": "guarcur",
+          "type": "varchar",
+          "description": "保证金币种"
+        },
+        {
+          "name": "guaramt",
+          "type": "numeric",
+          "description": "保证金金额"
+        },
+        {
+          "name": "yraccmdblbal",
+          "type": "numeric",
+          "description": "年累计借据余额"
+        },
+        {
+          "name": "yrbgndblbal",
+          "type": "numeric",
+          "description": "年初借据余额"
+        },
+        {
+          "name": "accmdbtintbal",
+          "type": "numeric",
+          "description": "累计欠息余额"
+        },
+        {
+          "name": "drctsbsdintadj",
+          "type": "numeric",
+          "description": "直贴利息调整"
+        },
+        {
+          "name": "actocpscl",
+          "type": "numeric",
+          "description": "实际占用规模"
+        },
+        {
+          "name": "bsnlcnsno",
+          "type": "varchar",
+          "description": "营业执照号"
+        },
+        {
+          "name": "bsnlcnsno2",
+          "type": "varchar",
+          "description": "营业执照号2"
+        },
+        {
+          "name": "mngorgblgbrch",
+          "type": "varchar",
+          "description": "贷后管理机构所属分行名称"
+        },
+        {
+          "name": "focusedindustry",
+          "type": "varchar",
+          "description": "重点关注行业"
+        },
+        {
+          "name": "city",
+          "type": "varchar",
+          "description": "所在国家或地区"
+        },
+        {
+          "name": "dp_load_dt",
+          "type": "date",
+          "description": "数据日期（快照日）；按 01_表知识库 的粒度补入，02_字段知识库未列；非空",
+          "isPrimaryKey": true
+        }
+      ],
+      "primaryKey": "dblno",
+      "description": "贷款明细报表宽表；粒度：一行一条借据（多系统统一口径）；坑点：★ 数仓表必须带快照日条件；★ 数仓表必须带快照日条件；★ **本表无 SYSCGY 字段**（SYSCGY 仅存在于 DWD 层借据事实表/维表与贴源系统表），禁止套用 DWD 联合主键写法 → 会报 Invalid column reference（2026-09-11 实证）",
+      "tableReference": {
+        "table": "rpt_loan_dtl",
+        "schema": "dwm",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "acct_loan",
+      "columns": [
+        {
+          "name": "serialno",
+          "type": "varchar",
+          "description": "贷款账号；贷款的业务主键，唯一标识一笔贷款（借据级账务账户）；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "accountno",
+          "type": "varchar",
+          "description": "贷款文本账号"
+        },
+        {
+          "name": "contractserialno",
+          "type": "varchar",
+          "description": "关联合同号；该笔贷款对应的业务合同编号"
+        },
+        {
+          "name": "customerid",
+          "type": "varchar",
+          "description": "客户编号；该笔贷款所属客户的编号"
+        },
+        {
+          "name": "customername",
+          "type": "varchar",
+          "description": "客户名称"
+        },
+        {
+          "name": "businesstype",
+          "type": "varchar",
+          "description": "业务品种"
+        },
+        {
+          "name": "productid",
+          "type": "varchar",
+          "description": "产品编号"
+        },
+        {
+          "name": "specificid",
+          "type": "varchar",
+          "description": "特殊编号"
+        },
+        {
+          "name": "versionid",
+          "type": "varchar",
+          "description": "版本编号；固定V1.0"
+        },
+        {
+          "name": "currency",
+          "type": "varchar",
+          "description": "贷款币种；该笔贷款的计价币种；码值：CURRENCY"
+        },
+        {
+          "name": "businesssum",
+          "type": "numeric",
+          "description": "贷款金额；该笔贷款的发放金额（本金）"
+        },
+        {
+          "name": "putoutdate",
+          "type": "date",
+          "description": "贷款发放日期；该笔贷款的放款日期"
+        },
+        {
+          "name": "maturitydate",
+          "type": "date",
+          "description": "贷款到期日；该笔贷款的合同到期日"
+        },
+        {
+          "name": "originalmaturitydate",
+          "type": "date",
+          "description": "贷款原始到期日"
+        },
+        {
+          "name": "operateorgid",
+          "type": "varchar",
+          "description": "经办行号（用做异地支行标识）"
+        },
+        {
+          "name": "accountingorgid",
+          "type": "varchar",
+          "description": "贷款入账机构"
+        },
+        {
+          "name": "loanstatus",
+          "type": "varchar",
+          "description": "贷款状态；该笔贷款当前所处的生命周期状态；码值：LOANSTATUS"
+        },
+        {
+          "name": "finishdate",
+          "type": "date",
+          "description": "结清日期"
+        },
+        {
+          "name": "businessdate",
+          "type": "date",
+          "description": "贷款处理日期"
+        },
+        {
+          "name": "lockflag",
+          "type": "varchar",
+          "description": "锁定标识；贷款处理时锁定，防止进行其他更新操作"
+        },
+        {
+          "name": "overduedays",
+          "type": "integer",
+          "description": "逾期天数"
+        },
+        {
+          "name": "classifyresult",
+          "type": "varchar",
+          "description": "分类结果；该笔贷款当前的五级分类结果；码值：CLASSIFYRESULT"
+        },
+        {
+          "name": "putoutserialno",
+          "type": "varchar",
+          "description": "出账流水号；出账时的流水号business_putout.serialno"
+        },
+        {
+          "name": "approveserialno",
+          "type": "varchar",
+          "description": "审批流水号；审批时的流水号business_approve.serialno"
+        },
+        {
+          "name": "applyserialno",
+          "type": "varchar",
+          "description": "申请流水号；申请时的流水号business_apply.serialno"
+        },
+        {
+          "name": "businessstatus",
+          "type": "varchar",
+          "description": "业务状态；码值：BUSINESSSTATUS"
+        },
+        {
+          "name": "originalcorpuspaymethod",
+          "type": "varchar",
+          "description": "原始还款方式"
+        },
+        {
+          "name": "originalvouchtype",
+          "type": "varchar",
+          "description": "原始主要担保方式-放款时初始化，后续不能更改"
+        },
+        {
+          "name": "iterflag",
+          "type": "varchar",
+          "description": "是否国结业务-代码YesNo；码值：ITERFLAG"
+        },
+        {
+          "name": "principaloverduedays",
+          "type": "numeric",
+          "description": "本金逾期天数"
+        },
+        {
+          "name": "interestoverduedays",
+          "type": "numeric",
+          "description": "利息逾期天数"
+        },
+        {
+          "name": "haverecourse",
+          "type": "varchar",
+          "description": "保理有无追索权；保理业务是否有追索权"
+        },
+        {
+          "name": "wpdserialno",
+          "type": "varchar",
+          "description": "对方业务流水号；旺铺贷业务的流水号"
+        },
+        {
+          "name": "duebillserialno",
+          "type": "varchar",
+          "description": "借据号；BUSINESS_DUEBILL.SERIALNO 借据表,借据号"
+        },
+        {
+          "name": "normalbalance",
+          "type": "numeric",
+          "description": "正常贷款余额；当前时点该笔贷款处于正常状态的未偿本金余额"
+        },
+        {
+          "name": "odintebalance",
+          "type": "numeric",
+          "description": "欠息余额；已计提但尚未收回的利息余额"
+        },
+        {
+          "name": "overduebalance",
+          "type": "numeric",
+          "description": "逾期余额；当前时点该笔贷款已逾期部分的未偿本金余额"
+        },
+        {
+          "name": "compdintebalance",
+          "type": "numeric",
+          "description": "逾期本金罚息"
+        },
+        {
+          "name": "fineintebalance",
+          "type": "numeric",
+          "description": "逾期利息罚息"
+        },
+        {
+          "name": "subsidystatus",
+          "type": "varchar",
+          "description": "贴息状态；码值：SUBSIDYSTATUS"
+        },
+        {
+          "name": "transferflag",
+          "type": "varchar",
+          "description": "数据移植标志；老系统移植时，产生的标志"
+        },
+        {
+          "name": "stopcompdflag",
+          "type": "varchar",
+          "description": "停复利计算标识(1-停 2-不停)；码值：STOPCOMPDFLAG"
+        },
+        {
+          "name": "stopfineflag",
+          "type": "varchar",
+          "description": "停罚息计算标识(1-停 2-不停)；码值：STOPFINEFLAG"
+        },
+        {
+          "name": "payruletypeflag",
+          "type": "varchar",
+          "description": "还款顺序"
+        },
+        {
+          "name": "farmerscopeflag",
+          "type": "varchar",
+          "description": "农户小微贷款标志；码值：FARMERSCOPEFLAG"
+        },
+        {
+          "name": "isindz",
+          "type": "varchar",
+          "description": "是否执行过以物抵债交易；码值：ISINDZ"
+        }
+      ],
+      "primaryKey": "serialno",
+      "description": "贷款-贷款信息；粒度：一行一笔核算借据（账务账户）；坑点：★ 余额为当前快照，不可用于历史时点；多币种不可直接 SUM",
+      "tableReference": {
+        "table": "acct_loan",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "acct_payment_log",
+      "columns": [
+        {
+          "name": "relativeobjectno",
+          "type": "varchar",
+          "description": "还款主体对象编号；对应贷款的账务借据号"
+        },
+        {
+          "name": "actualpaydate",
+          "type": "date",
+          "description": "实际支付日期；实际还款日期"
+        },
+        {
+          "name": "actualpayprincipalamt",
+          "type": "numeric",
+          "description": "实还本金；本次实还本金"
+        },
+        {
+          "name": "actualpayinterestamt",
+          "type": "numeric",
+          "description": "实还利息；本次实还利息"
+        }
+      ],
+      "description": "贷款-还款日志；粒度：一行一条还款流水（一借据多条）；坑点：★ 一流水一行，须先按借据聚合",
+      "tableReference": {
+        "table": "acct_payment_log",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "acct_payment_schedule",
+      "columns": [
+        {
+          "name": "serialno",
+          "type": "varchar",
+          "description": "流水号；业务主键；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "parentserialno",
+          "type": "varchar",
+          "description": "父还款计划流水号；特殊还款时，要关联原有的流水号(SERIALNO)"
+        },
+        {
+          "name": "objecttype",
+          "type": "varchar",
+          "description": "还款日志关联对象类型；一般为jbo.acct.ACCT_LOAN；码值：OBJECTTYPE"
+        },
+        {
+          "name": "objectno",
+          "type": "varchar",
+          "description": "还款日志关联对象编号；一般为ACCT_LOAN.SERIALNO"
+        },
+        {
+          "name": "relativeobjecttype",
+          "type": "varchar",
+          "description": "还款主体对象类型；一般为jbo.acct.ACCT_LOAN"
+        },
+        {
+          "name": "relativeobjectno",
+          "type": "varchar",
+          "description": "还款主体对象编号；一般为ACCT_LOAN.SERIALNO"
+        },
+        {
+          "name": "periodno",
+          "type": "integer",
+          "description": "期次"
+        },
+        {
+          "name": "paydate",
+          "type": "date",
+          "description": "应还日期"
+        },
+        {
+          "name": "pstype",
+          "type": "varchar",
+          "description": "偿付类型；码值：PSTYPE"
+        },
+        {
+          "name": "payitemcode",
+          "type": "varchar",
+          "description": "还款项目"
+        },
+        {
+          "name": "payprincipalamt",
+          "type": "numeric",
+          "description": "应还本金；计划应还本金"
+        },
+        {
+          "name": "actualpayprincipalamt",
+          "type": "numeric",
+          "description": "实还本金；实际已还本金"
+        }
+      ],
+      "primaryKey": "serialno",
+      "description": "贷款-还款计划；粒度：一行一期还款计划（一借据多期）；坑点：★ 一期一行，按揭可达数百期，直接 JOIN 放大行数",
+      "tableReference": {
+        "table": "acct_payment_schedule",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "business_contract",
+      "columns": [
+        {
+          "name": "serialno",
+          "type": "varchar",
+          "description": "合同流水号；合同业务主键；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "artificialno",
+          "type": "varchar",
+          "description": "文本合同流水号；文本合同编号"
+        },
+        {
+          "name": "customerid",
+          "type": "varchar",
+          "description": "客户ID；合同所属客户"
+        },
+        {
+          "name": "businesstype",
+          "type": "varchar",
+          "description": "业务类型；合同业务品种码值；码值：资产业务品种"
+        },
+        {
+          "name": "businesssum",
+          "type": "numeric",
+          "description": "合同金额；合同约定的金额"
+        },
+        {
+          "name": "vouchtype",
+          "type": "varchar",
+          "description": "主要担保方式；合同的主要担保方式；码值：VouchType"
+        },
+        {
+          "name": "status",
+          "type": "varchar",
+          "description": "状态；合同状态（英文码）；码值：STATUS"
+        },
+        {
+          "name": "classifyresult",
+          "type": "varchar",
+          "description": "分类结果；合同上的分类结果；码值：CLASSIFYRESULT"
+        },
+        {
+          "name": "manageuserid",
+          "type": "varchar",
+          "description": "管户客户经理；合同的责任人（管户客户经理）"
+        },
+        {
+          "name": "manageorgid",
+          "type": "varchar",
+          "description": "管理机构；合同的贷后管理机构"
+        },
+        {
+          "name": "accountorgid",
+          "type": "varchar",
+          "description": "入账机构；合同的入账机构"
+        }
+      ],
+      "primaryKey": "serialno",
+      "description": "业务合同信息；粒度：一行一份业务合同（授信合同/业务合同）；坑点：★ 与借据为一对多，按合同统计时须先聚合借据侧，否则行数放大",
+      "tableReference": {
+        "table": "business_contract",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "business_duebill",
+      "columns": [
+        {
+          "name": "serialno",
+          "type": "varchar",
+          "description": "借据流水号；借据的业务主键，唯一标识一笔借据；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "relativeserialno2",
+          "type": "varchar",
+          "description": "关联合同流水号；该借据所属业务合同的流水号"
+        },
+        {
+          "name": "mfcustomerid",
+          "type": "varchar",
+          "description": "ECIF客户号；ECIF 系统客户编号"
+        },
+        {
+          "name": "customerid",
+          "type": "varchar",
+          "description": "客户id；借款人客户编号（信贷侧）"
+        },
+        {
+          "name": "businesstype",
+          "type": "varchar",
+          "description": "业务类型；该借据的业务品种码值；码值：资产业务品种"
+        },
+        {
+          "name": "businessstatus",
+          "type": "varchar",
+          "description": "业务形态；借据的业务形态（码值）；码值：BusinessStatus"
+        },
+        {
+          "name": "businesscurrency",
+          "type": "varchar",
+          "description": "币种；该借据的计价币种；码值：币种（XD999999）"
+        },
+        {
+          "name": "businesssum",
+          "type": "numeric",
+          "description": "借据金额；该借据的发放金额（本金）"
+        },
+        {
+          "name": "balance",
+          "type": "numeric",
+          "description": "贷款金额；该借据当前未偿余额（本金口径）"
+        },
+        {
+          "name": "normalbalance",
+          "type": "numeric",
+          "description": "正常余额；正常状态下未偿本金余额"
+        },
+        {
+          "name": "overduebalance",
+          "type": "numeric",
+          "description": "逾期金额；已逾期部分未偿本金余额"
+        },
+        {
+          "name": "putoutdate",
+          "type": "date",
+          "description": "放款日期；该借据的放款日期"
+        },
+        {
+          "name": "maturity",
+          "type": "date",
+          "description": "到期日期；合同约定的原始到期日"
+        },
+        {
+          "name": "actualmaturity",
+          "type": "date",
+          "description": "实际到期日期；展期后的实际到期日"
+        },
+        {
+          "name": "finishdate",
+          "type": "date",
+          "description": "结清日期；借据结清日期，为空表示未结清"
+        }
+      ],
+      "primaryKey": "serialno",
+      "description": "业务借据(账户)信息；粒度：一行一笔借据；坑点：★ 与担保/展期/票据直接 JOIN 会放大行数",
+      "tableReference": {
+        "table": "business_duebill",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "business_type",
+      "columns": [
+        {
+          "name": "typeno",
+          "type": "varchar",
+          "description": "业务码值；产品主键码值；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "typename",
+          "type": "varchar",
+          "description": "业务名称；产品名称"
+        },
+        {
+          "name": "isinuse",
+          "type": "varchar",
+          "description": "状态；产品是否在用"
+        }
+      ],
+      "primaryKey": "typeno",
+      "description": "资产业务品种表；粒度：一行一个资产业务品种",
+      "tableReference": {
+        "table": "business_type",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "classify_record",
+      "columns": [
+        {
+          "name": "objectno",
+          "type": "varchar",
+          "description": "对象编号；分类对象的编号"
+        },
+        {
+          "name": "classifyresult",
+          "type": "varchar",
+          "description": "分类结果；分类结果码值；码值：CLASSIFYRESULT"
+        }
+      ],
+      "description": "五级分类数据；粒度：一行一个分类对象的分类记录；坑点：★ 与 ACCT_LOAN.CLASSIFYRESULT 两套口径，待业务确认",
+      "tableReference": {
+        "table": "classify_record",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "code_library",
+      "columns": [
+        {
+          "name": "codeno",
+          "type": "varchar",
+          "description": "码值类型；码值集标识（等于字段名）；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "itemno",
+          "type": "varchar",
+          "description": "码值；码值编码；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "itemname",
+          "type": "varchar",
+          "description": "码值名称；码值对应的中文名称"
+        },
+        {
+          "name": "colname",
+          "type": "varchar",
+          "description": "码值对应的字段名（05_业务规则库 RULE_018 的标准查法要求）；按知识库规则补入"
+        },
+        {
+          "name": "coleditsource",
+          "type": "varchar",
+          "description": "码值编辑来源/可选值串（同上）；按知识库规则补入"
+        }
+      ],
+      "primaryKey": "codeno",
+      "description": "码值表；粒度：一行一个码值（CODENO+ITEMNO）；坑点：★ 码值标准查法：按 COLNAME 检索，取 coleditsource",
+      "tableReference": {
+        "table": "code_library",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "customer_fsrecord",
+      "columns": [
+        {
+          "name": "customerid",
+          "type": "varchar",
+          "description": "客户编号；信贷客户编号；非空"
+        },
+        {
+          "name": "recordno",
+          "type": "varchar",
+          "description": "记录号；业务主键；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "reportdate",
+          "type": "date",
+          "description": "报表截至日期；VARCHAR2(10)；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "reportscope",
+          "type": "varchar",
+          "description": "报表口径；码值：REPORTSCOPE"
+        }
+      ],
+      "primaryKey": "recordno",
+      "description": "客户财务报表记录；粒度：一行一个客户的一份财务报表记录",
+      "tableReference": {
+        "table": "customer_fsrecord",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "customer_info",
+      "columns": [
+        {
+          "name": "customerid",
+          "type": "varchar",
+          "description": "客户编号；业务主键 信贷客户编号 和核心客户编号ECIF客户编号一致；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "customername",
+          "type": "varchar",
+          "description": "客户名称"
+        },
+        {
+          "name": "customertype",
+          "type": "varchar",
+          "description": "客户类型；码值：CUSTOMERTYPE"
+        },
+        {
+          "name": "certtype",
+          "type": "varchar",
+          "description": "证件类型；码值：CERTTYPE"
+        },
+        {
+          "name": "certid",
+          "type": "varchar",
+          "description": "证件号"
+        },
+        {
+          "name": "customerpassword",
+          "type": "varchar",
+          "description": "客户口令"
+        },
+        {
+          "name": "inputorgid",
+          "type": "varchar",
+          "description": "登记机构；信贷机构号"
+        },
+        {
+          "name": "inputuserid",
+          "type": "varchar",
+          "description": "登记人"
+        },
+        {
+          "name": "inputdate",
+          "type": "date",
+          "description": "登记日期"
+        },
+        {
+          "name": "remark",
+          "type": "varchar",
+          "description": "备注"
+        },
+        {
+          "name": "mfcustomerid",
+          "type": "varchar",
+          "description": "核心客户号；ECIF系统客户编号"
+        },
+        {
+          "name": "status",
+          "type": "varchar",
+          "description": "认定状态；码值：STATUS"
+        },
+        {
+          "name": "belonggroupid",
+          "type": "varchar",
+          "description": "所属集团编号；集团客户使用：集团客户的客户编号"
+        },
+        {
+          "name": "channel",
+          "type": "varchar",
+          "description": "来源渠道"
+        },
+        {
+          "name": "loancardno",
+          "type": "varchar",
+          "description": "贷款卡编号"
+        },
+        {
+          "name": "customerscale",
+          "type": "varchar",
+          "description": "客户规模（区分中小企业）；码值：CUSTOMERSCALE"
+        },
+        {
+          "name": "nationcode",
+          "type": "varchar",
+          "description": "国籍"
+        },
+        {
+          "name": "forbidstatus",
+          "type": "varchar",
+          "description": "状态"
+        },
+        {
+          "name": "mfcustomername",
+          "type": "varchar",
+          "description": "核心客户名称；ECIF系统客户编号"
+        },
+        {
+          "name": "isbadcustomer",
+          "type": "varchar",
+          "description": "是否资产保全问题移交客户；码值：ISBADCUSTOMER"
+        },
+        {
+          "name": "riskalarmlevel",
+          "type": "varchar",
+          "description": "风险预警认定结果"
+        },
+        {
+          "name": "merno",
+          "type": "varchar",
+          "description": "旺铺贷商户ID"
+        },
+        {
+          "name": "custst",
+          "type": "varchar",
+          "description": "客户标志；码值：CUSTST"
+        },
+        {
+          "name": "mainframeorgid",
+          "type": "varchar",
+          "description": "开户机构；统一认证机构号"
+        }
+      ],
+      "primaryKey": "customerid",
+      "description": "客户基本信息；粒度：一行一个客户（含对公/对私/同业/集团，由 CUSTOMERTYPE 区分）；坑点：★ 客户资产类表（约40张）交叉 JOIN 会笛卡尔放大，一次最多关联一张",
+      "tableReference": {
+        "table": "customer_info",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "flow_task",
+      "columns": [
+        {
+          "name": "objectno",
+          "type": "varchar",
+          "description": "对象编号；流程对应的业务对象编号"
+        },
+        {
+          "name": "objecttype",
+          "type": "varchar",
+          "description": "对象类型；流程所属业务环节；码值：OBJECTTYPE"
+        },
+        {
+          "name": "phasename",
+          "type": "varchar",
+          "description": "阶段名称；流程阶段名称"
+        },
+        {
+          "name": "userid",
+          "type": "varchar",
+          "description": "当前处理人；该节点的处理人工号"
+        },
+        {
+          "name": "begintime",
+          "type": "date",
+          "description": "开始时间；该节点开始时间"
+        },
+        {
+          "name": "phaseaction",
+          "type": "varchar",
+          "description": "阶段动作；该节点执行的动作用"
+        }
+      ],
+      "description": "流程任务；粒度：一行一个流程节点（一借据/申请对应多行）；坑点：需要补充",
+      "tableReference": {
+        "table": "flow_task",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "guaranty_contract",
+      "columns": [
+        {
+          "name": "serialno",
+          "type": "varchar",
+          "description": "担保合同编号；担保合同主键；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "guarantorid",
+          "type": "varchar",
+          "description": "担保人ID；担保人（保证人）客户编号"
+        },
+        {
+          "name": "guarantorname",
+          "type": "varchar",
+          "description": "担保人名称"
+        },
+        {
+          "name": "contractstatus",
+          "type": "varchar",
+          "description": "合同状态；担保合同状态；码值：CONTRACTSTATUS"
+        },
+        {
+          "name": "guarantysum",
+          "type": "numeric",
+          "description": "担保总金额；担保合同担保总金额"
+        }
+      ],
+      "primaryKey": "serialno",
+      "description": "担保合同信息；粒度：一行一份担保合同；坑点：一个担保合同可对应多个担保物，直接 JOIN 放大担保金额",
+      "tableReference": {
+        "table": "guaranty_contract",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "guaranty_info",
+      "columns": [
+        {
+          "name": "guarantyid",
+          "type": "varchar",
+          "description": "质物编号；担保物主键；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "guarantystatus",
+          "type": "varchar",
+          "description": "状态；押品当前状态；码值：GuarantyStatus"
+        },
+        {
+          "name": "evalnetvalue",
+          "type": "numeric",
+          "description": "评估价值；押品评估净值"
+        },
+        {
+          "name": "guarantysum",
+          "type": "numeric",
+          "description": "本次担保金额；该押品本次担保的金额"
+        }
+      ],
+      "primaryKey": "guarantyid",
+      "description": "担保物信息表；粒度：一行一个抵质押物",
+      "tableReference": {
+        "table": "guaranty_info",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "guaranty_relative",
+      "columns": [
+        {
+          "name": "objecttype",
+          "type": "varchar",
+          "description": "关联对象类型；被担保对象类型；码值：OBJECTTYPE"
+        },
+        {
+          "name": "objectno",
+          "type": "varchar",
+          "description": "关联对象编号；被担保对象的编号（合同号/申请号/批复号）"
+        },
+        {
+          "name": "guarantyid",
+          "type": "varchar",
+          "description": "质物编号；担保物编号"
+        },
+        {
+          "name": "contractno",
+          "type": "varchar",
+          "description": "担保合同流水号；担保合同编号"
+        }
+      ],
+      "description": "担保关联表；粒度：一行一条担保关联关系；坑点：★ 必须限定 OBJECTTYPE，否则混入其他对象的担保关系",
+      "tableReference": {
+        "table": "guaranty_relative",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "odm_cms_cms_collateraltype_info",
+      "columns": [
+        {
+          "name": "data_dt",
+          "type": "date",
+          "description": "数据日期"
+        },
+        {
+          "name": "distribution_key",
+          "type": "varchar",
+          "description": "分桶键"
+        },
+        {
+          "name": "coltypeid",
+          "type": "varchar",
+          "description": "流水号"
+        },
+        {
+          "name": "guarantytype",
+          "type": "varchar",
+          "description": "押品类型编号"
+        },
+        {
+          "name": "guarantytypename",
+          "type": "varchar",
+          "description": "押品类型名称"
+        },
+        {
+          "name": "fathertypecd",
+          "type": "varchar",
+          "description": "父节点类型编号"
+        },
+        {
+          "name": "isleafnodes",
+          "type": "varchar",
+          "description": "是否叶子节点"
+        },
+        {
+          "name": "status",
+          "type": "varchar",
+          "description": "状态"
+        },
+        {
+          "name": "invaliddate",
+          "type": "date",
+          "description": "生效日期"
+        },
+        {
+          "name": "validdate",
+          "type": "date",
+          "description": "失效日期"
+        },
+        {
+          "name": "inputdate",
+          "type": "date",
+          "description": "登记日期"
+        },
+        {
+          "name": "updatedate",
+          "type": "date",
+          "description": "修改日期"
+        },
+        {
+          "name": "remark",
+          "type": "varchar",
+          "description": "备注"
+        },
+        {
+          "name": "inputuserid",
+          "type": "varchar",
+          "description": "登记人"
+        },
+        {
+          "name": "inputorgid",
+          "type": "varchar",
+          "description": "登记机构"
+        },
+        {
+          "name": "updateuserid",
+          "type": "varchar",
+          "description": "修改人"
+        },
+        {
+          "name": "updateorgid",
+          "type": "varchar",
+          "description": "修改机构"
+        },
+        {
+          "name": "attribute1",
+          "type": "varchar",
+          "description": "属性1"
+        }
+      ],
+      "description": "odm_cms_cms_collateraltype_info",
+      "tableReference": {
+        "table": "odm_cms_cms_collateraltype_info",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "odm_cms_guaranty_contract",
+      "columns": [
+        {
+          "name": "data_dt",
+          "type": "date",
+          "description": "数据日期"
+        },
+        {
+          "name": "distribution_key",
+          "type": "varchar",
+          "description": "分桶键"
+        },
+        {
+          "name": "serialno",
+          "type": "varchar",
+          "description": "担保信息编号"
+        },
+        {
+          "name": "contracttype",
+          "type": "varchar",
+          "description": "担保类型"
+        },
+        {
+          "name": "guarantytype",
+          "type": "varchar",
+          "description": "担保方式"
+        },
+        {
+          "name": "contractstatus",
+          "type": "varchar",
+          "description": "合同状态"
+        },
+        {
+          "name": "contractno",
+          "type": "varchar",
+          "description": "担保合同号"
+        },
+        {
+          "name": "signdate",
+          "type": "date",
+          "description": "合同签订日"
+        },
+        {
+          "name": "begindate",
+          "type": "date",
+          "description": "起始日期"
+        },
+        {
+          "name": "enddate",
+          "type": "date",
+          "description": "到期日期"
+        },
+        {
+          "name": "customerid",
+          "type": "varchar",
+          "description": "客户ID"
+        },
+        {
+          "name": "guarantorid",
+          "type": "varchar",
+          "description": "担保人ID"
+        },
+        {
+          "name": "guarantorname",
+          "type": "varchar",
+          "description": "担保人名称"
+        },
+        {
+          "name": "creditorgid",
+          "type": "varchar",
+          "description": "债权人机构代码"
+        },
+        {
+          "name": "creditorgname",
+          "type": "varchar",
+          "description": "债权人机构名称"
+        },
+        {
+          "name": "guarantycurrency",
+          "type": "varchar",
+          "description": "币种"
+        },
+        {
+          "name": "guarantyvalue",
+          "type": "numeric",
+          "description": "担保总金额"
+        },
+        {
+          "name": "guarantyinfo",
+          "type": "varchar",
+          "description": "担保物概况"
+        },
+        {
+          "name": "otherdescribe",
+          "type": "varchar",
+          "description": "其它特别约定"
+        },
+        {
+          "name": "checkguaranty",
+          "type": "varchar",
+          "description": "核保时间"
+        },
+        {
+          "name": "reception",
+          "type": "varchar",
+          "description": "接待人姓名"
+        },
+        {
+          "name": "receptionduty",
+          "type": "varchar",
+          "description": "接待人职务"
+        },
+        {
+          "name": "guaranryopinion",
+          "type": "varchar",
+          "description": "担保意愿"
+        },
+        {
+          "name": "checkguarantyman1",
+          "type": "varchar",
+          "description": "核保人"
+        },
+        {
+          "name": "checkguarantyman2",
+          "type": "varchar",
+          "description": "核保人(二)"
+        },
+        {
+          "name": "inputorgid",
+          "type": "varchar",
+          "description": "登记机构ID"
+        },
+        {
+          "name": "inputuserid",
+          "type": "varchar",
+          "description": "登记人ID"
+        },
+        {
+          "name": "inputdate",
+          "type": "date",
+          "description": "登记时间"
+        },
+        {
+          "name": "updateuserid",
+          "type": "varchar",
+          "description": "更新用户编号"
+        },
+        {
+          "name": "updatedate",
+          "type": "date",
+          "description": "更新时间"
+        },
+        {
+          "name": "remark",
+          "type": "varchar",
+          "description": "备注"
+        },
+        {
+          "name": "certtype",
+          "type": "varchar",
+          "description": "保证人证件类型"
+        },
+        {
+          "name": "certid",
+          "type": "varchar",
+          "description": "保证人证件号码"
+        },
+        {
+          "name": "othername",
+          "type": "varchar",
+          "description": "其他名称"
+        },
+        {
+          "name": "loancardno",
+          "type": "varchar",
+          "description": "保证人贷款卡编号"
+        },
+        {
+          "name": "guaranteeform",
+          "type": "varchar",
+          "description": "保证担保形式"
+        },
+        {
+          "name": "commondate",
+          "type": "date",
+          "description": "通用日期"
+        },
+        {
+          "name": "bailratio",
+          "type": "numeric",
+          "description": "保证金比例"
+        },
+        {
+          "name": "systrelation",
+          "type": "varchar",
+          "description": "保证人与借款人系统检测关系"
+        },
+        {
+          "name": "guaborelation",
+          "type": "varchar",
+          "description": "保证人与借款人关系"
+        },
+        {
+          "name": "gudanlication",
+          "type": "varchar",
+          "description": "保证资格"
+        },
+        {
+          "name": "guarability",
+          "type": "varchar",
+          "description": "保证能力"
+        },
+        {
+          "name": "guarandesire",
+          "type": "varchar",
+          "description": "保证意愿"
+        },
+        {
+          "name": "guarantysum",
+          "type": "numeric",
+          "description": "担保总金额"
+        },
+        {
+          "name": "maxrenewlimit",
+          "type": "numeric",
+          "description": "担保总金额"
+        },
+        {
+          "name": "guaranteeasset",
+          "type": "numeric",
+          "description": "保证人净资产"
+        },
+        {
+          "name": "closingdate",
+          "type": "date",
+          "description": "统计截止日期"
+        },
+        {
+          "name": "ownguarantysum",
+          "type": "numeric",
+          "description": "本行已对外担保总额"
+        },
+        {
+          "name": "otherguarantysum",
+          "type": "numeric",
+          "description": "他行已对外担保总额"
+        },
+        {
+          "name": "gjserialno",
+          "type": "varchar",
+          "description": "国结流水号"
+        },
+        {
+          "name": "dp_load_dt",
+          "type": "date",
+          "description": "范围分区字段"
+        }
+      ],
+      "description": "odm_cms_guaranty_contract",
+      "tableReference": {
+        "table": "odm_cms_guaranty_contract",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "odm_cms_guaranty_info",
+      "columns": [
+        {
+          "name": "data_dt",
+          "type": "date",
+          "description": "数据日期"
+        },
+        {
+          "name": "distribution_key",
+          "type": "varchar",
+          "description": "分桶键"
+        },
+        {
+          "name": "guarantyid",
+          "type": "varchar",
+          "description": "质物编号"
+        },
+        {
+          "name": "guarantytype",
+          "type": "varchar",
+          "description": "质物类型"
+        },
+        {
+          "name": "guarantystatus",
+          "type": "varchar",
+          "description": "担保物状态"
+        },
+        {
+          "name": "ownerid",
+          "type": "varchar",
+          "description": "出质人代码"
+        },
+        {
+          "name": "ownername",
+          "type": "varchar",
+          "description": "出质人名称"
+        },
+        {
+          "name": "ownertype",
+          "type": "varchar",
+          "description": "出质人类型"
+        },
+        {
+          "name": "rate",
+          "type": "numeric",
+          "description": "担保利率"
+        },
+        {
+          "name": "custguarantytype",
+          "type": "varchar",
+          "description": "客户担保物类型"
+        },
+        {
+          "name": "subjectno",
+          "type": "varchar",
+          "description": "科目编号"
+        },
+        {
+          "name": "relativeaccount",
+          "type": "varchar",
+          "description": "权利人账户账号"
+        },
+        {
+          "name": "guarantyrightid",
+          "type": "varchar",
+          "description": "票据号码"
+        },
+        {
+          "name": "otherguarantyright",
+          "type": "varchar",
+          "description": "他项权证号"
+        },
+        {
+          "name": "guarantyname",
+          "type": "varchar",
+          "description": "承兑行名称"
+        },
+        {
+          "name": "guarantysubtype",
+          "type": "varchar",
+          "description": "土地级别"
+        },
+        {
+          "name": "guarantyownway",
+          "type": "varchar",
+          "description": "存单支取方式"
+        },
+        {
+          "name": "guarantyusing",
+          "type": "varchar",
+          "description": "土地现状"
+        },
+        {
+          "name": "guarantylocation",
+          "type": "varchar",
+          "description": "债券代理发行机构"
+        },
+        {
+          "name": "guarantyamount",
+          "type": "numeric",
+          "description": "债券数量"
+        },
+        {
+          "name": "guarantyamount1",
+          "type": "numeric",
+          "description": "申请前一日基金收盘价"
+        },
+        {
+          "name": "guarantyamount2",
+          "type": "numeric",
+          "description": "质押基金份额"
+        },
+        {
+          "name": "guarantyresouce",
+          "type": "varchar",
+          "description": "债券发行单位"
+        },
+        {
+          "name": "guarantydate",
+          "type": "date",
+          "description": "签发日期"
+        },
+        {
+          "name": "begindate",
+          "type": "date",
+          "description": "开始日期"
+        },
+        {
+          "name": "ownertime",
+          "type": "date",
+          "description": "提单到期日期"
+        },
+        {
+          "name": "guarantydescript",
+          "type": "varchar",
+          "description": "抵押物说明"
+        },
+        {
+          "name": "aboutotherid1",
+          "type": "varchar",
+          "description": "车辆型号"
+        },
+        {
+          "name": "aboutotherid2",
+          "type": "varchar",
+          "description": "供应商"
+        },
+        {
+          "name": "aboutotherid3",
+          "type": "varchar",
+          "description": "车架号"
+        },
+        {
+          "name": "aboutotherid4",
+          "type": "varchar",
+          "description": "担保物其他相关号码4"
+        },
+        {
+          "name": "purpose",
+          "type": "varchar",
+          "description": "地上附着物名称"
+        },
+        {
+          "name": "aboutsum1",
+          "type": "numeric",
+          "description": "票面金额"
+        },
+        {
+          "name": "aboutsum2",
+          "type": "numeric",
+          "description": "担保本金债权金额"
+        },
+        {
+          "name": "aboutrate",
+          "type": "numeric",
+          "description": "质押基金份额占总额"
+        },
+        {
+          "name": "guarantyana",
+          "type": "varchar",
+          "description": "存放地点"
+        },
+        {
+          "name": "guarantyprice",
+          "type": "numeric",
+          "description": "车辆购入价值"
+        },
+        {
+          "name": "evalmethod",
+          "type": "varchar",
+          "description": "质物价值评估方式"
+        },
+        {
+          "name": "evalorgid",
+          "type": "varchar",
+          "description": "评估机构组织机构代码"
+        },
+        {
+          "name": "evalorgname",
+          "type": "varchar",
+          "description": "价值评估机构名称"
+        },
+        {
+          "name": "evaldate",
+          "type": "date",
+          "description": "价值评估时间"
+        },
+        {
+          "name": "evalnetvalue",
+          "type": "numeric",
+          "description": "质物金额"
+        },
+        {
+          "name": "confirmvalue",
+          "type": "numeric",
+          "description": "质押金额"
+        },
+        {
+          "name": "guarantyrate",
+          "type": "numeric",
+          "description": "抵质押率"
+        },
+        {
+          "name": "thirdparty1",
+          "type": "varchar",
+          "description": "车辆类型"
+        },
+        {
+          "name": "thirdparty2",
+          "type": "varchar",
+          "description": "币种"
+        },
+        {
+          "name": "thirdparty3",
+          "type": "varchar",
+          "description": "车辆品牌"
+        },
+        {
+          "name": "guarantydescribe1",
+          "type": "varchar",
+          "description": "开证行国家地区"
+        },
+        {
+          "name": "guarantydescribe2",
+          "type": "varchar",
+          "description": "保兑行名称"
+        },
+        {
+          "name": "guarantydescribe3",
+          "type": "varchar",
+          "description": "保兑行所在国家和地区"
+        },
+        {
+          "name": "flag1",
+          "type": "varchar",
+          "description": "是否记名债券"
+        },
+        {
+          "name": "flag2",
+          "type": "varchar",
+          "description": "是否需要办理止付"
+        },
+        {
+          "name": "flag3",
+          "type": "varchar",
+          "description": "是否有当年车船使用税证"
+        },
+        {
+          "name": "flag4",
+          "type": "varchar",
+          "description": "年检是否正常"
+        },
+        {
+          "name": "guarantyregno",
+          "type": "varchar",
+          "description": "抵押登记编号"
+        },
+        {
+          "name": "guarantyregorg",
+          "type": "varchar",
+          "description": "抵押登记机关"
+        },
+        {
+          "name": "guarantyregdate",
+          "type": "date",
+          "description": "抵押登记日期"
+        },
+        {
+          "name": "guarantywodate",
+          "type": "date",
+          "description": "抵押登记注销日期"
+        },
+        {
+          "name": "insurecertno",
+          "type": "varchar",
+          "description": "抵押物保险单编号"
+        },
+        {
+          "name": "otherassumpsit",
+          "type": "varchar",
+          "description": "其它特别约定"
+        },
+        {
+          "name": "inputorgid",
+          "type": "varchar",
+          "description": "登记机构"
+        },
+        {
+          "name": "inputuserid",
+          "type": "varchar",
+          "description": "登记人"
+        },
+        {
+          "name": "inputdate",
+          "type": "date",
+          "description": "登记日期"
+        },
+        {
+          "name": "updateuserid",
+          "type": "varchar",
+          "description": "更新用户编号"
+        },
+        {
+          "name": "updatedate",
+          "type": "date",
+          "description": "更新日期"
+        },
+        {
+          "name": "remark",
+          "type": "varchar",
+          "description": "备注"
+        },
+        {
+          "name": "sapvouchtype",
+          "type": "varchar",
+          "description": "SAP抵质押物类型"
+        },
+        {
+          "name": "certtype",
+          "type": "varchar",
+          "description": "出质人证件类型"
+        },
+        {
+          "name": "certid",
+          "type": "varchar",
+          "description": "出质人证件号码"
+        },
+        {
+          "name": "loancardno",
+          "type": "varchar",
+          "description": "出质人贷款卡号"
+        },
+        {
+          "name": "guarantycurrency",
+          "type": "varchar",
+          "description": "质押币种"
+        },
+        {
+          "name": "evalcurrency",
+          "type": "varchar",
+          "description": "质物币种"
+        },
+        {
+          "name": "guarantyjointlyid",
+          "type": "varchar",
+          "description": "抵押物共有权人ID"
+        },
+        {
+          "name": "guarantyjointlyname",
+          "type": "varchar",
+          "description": "抵押物共有权人名称"
+        },
+        {
+          "name": "ownerplustime",
+          "type": "date",
+          "description": "房屋剩余使用年限"
+        },
+        {
+          "name": "leasestatus",
+          "type": "varchar",
+          "description": "出质人贷款卡号"
+        },
+        {
+          "name": "pledgestatus",
+          "type": "varchar",
+          "description": "房屋抵押状况"
+        },
+        {
+          "name": "pledgeotherid",
+          "type": "varchar",
+          "description": "已抵押他项编号"
+        },
+        {
+          "name": "guarantybuydate",
+          "type": "date",
+          "description": "房屋购置年份"
+        },
+        {
+          "name": "aboutyenootherid1",
+          "type": "varchar",
+          "description": "有无土地使用权证书"
+        },
+        {
+          "name": "insurenddate",
+          "type": "date",
+          "description": "保单到期日"
+        },
+        {
+          "name": "insuremoney",
+          "type": "numeric",
+          "description": "投保金额"
+        },
+        {
+          "name": "insurestartdate",
+          "type": "date",
+          "description": "保单起始日"
+        },
+        {
+          "name": "insurepeople",
+          "type": "varchar",
+          "description": "保险人"
+        },
+        {
+          "name": "insurefavoree",
+          "type": "varchar",
+          "description": "保单受益人"
+        },
+        {
+          "name": "theinsureuser",
+          "type": "varchar",
+          "description": "被保险人"
+        },
+        {
+          "name": "unitpricevalue",
+          "type": "numeric",
+          "description": "抵押物认定单价"
+        },
+        {
+          "name": "confirmtime",
+          "type": "date",
+          "description": "价值认定有效期"
+        },
+        {
+          "name": "marketunitprice",
+          "type": "numeric",
+          "description": "市场单价"
+        },
+        {
+          "name": "maxguaprobabity",
+          "type": "numeric",
+          "description": "最高抵押率"
+        },
+        {
+          "name": "maxguarantmoney",
+          "type": "numeric",
+          "description": "最高可抵押金额"
+        },
+        {
+          "name": "ortherguarantmoney",
+          "type": "numeric",
+          "description": "他行已抵押总金额"
+        },
+        {
+          "name": "guarantyvalue",
+          "type": "numeric",
+          "description": "担保总价值"
+        },
+        {
+          "name": "guarantyfreezevalue",
+          "type": "numeric",
+          "description": "我行在途冻结抵押金额"
+        },
+        {
+          "name": "guarantypresentvalue",
+          "type": "numeric",
+          "description": "本次抵押金额"
+        },
+        {
+          "name": "insurerstatus",
+          "type": "varchar",
+          "description": "是否投保"
+        },
+        {
+          "name": "enddate",
+          "type": "date",
+          "description": "到期日期"
+        },
+        {
+          "name": "amount7",
+          "type": "numeric",
+          "description": "账面净值"
+        },
+        {
+          "name": "reevaldate",
+          "type": "date",
+          "description": "抵押物重估时间"
+        },
+        {
+          "name": "reevalvalue",
+          "type": "numeric",
+          "description": "抵押物重估金额"
+        },
+        {
+          "name": "guarantydescribe5",
+          "type": "varchar",
+          "description": "船籍港"
+        },
+        {
+          "name": "guarantydescribe6",
+          "type": "varchar",
+          "description": "航线"
+        },
+        {
+          "name": "freezedate",
+          "type": "date",
+          "description": "冻结时间"
+        },
+        {
+          "name": "guarantyamount3",
+          "type": "numeric",
+          "description": "每股补仓线比率"
+        },
+        {
+          "name": "guarantyamount4",
+          "type": "numeric",
+          "description": "每股补仓线"
+        },
+        {
+          "name": "guarantyamount5",
+          "type": "numeric",
+          "description": "每股平仓线比率"
+        },
+        {
+          "name": "guarantyamount6",
+          "type": "numeric",
+          "description": "每股平仓线"
+        },
+        {
+          "name": "updateorgid",
+          "type": "varchar",
+          "description": "更新机构ID"
+        },
+        {
+          "name": "attachmenttype",
+          "type": "varchar",
+          "description": "地上附着物类型"
+        },
+        {
+          "name": "grouconfirmvalue",
+          "type": "numeric",
+          "description": "土地认定价值"
+        },
+        {
+          "name": "attaconfirmvalue",
+          "type": "numeric",
+          "description": "地上附着物认定价值"
+        },
+        {
+          "name": "firstselldate",
+          "type": "date",
+          "description": "国家首次出让该地块时间"
+        },
+        {
+          "name": "interestbalance",
+          "type": "numeric",
+          "description": "业务欠息总额"
+        },
+        {
+          "name": "balance",
+          "type": "numeric",
+          "description": "业务合同余额"
+        },
+        {
+          "name": "insuretype",
+          "type": "varchar",
+          "description": "投保险种"
+        },
+        {
+          "name": "guarantydescribe4",
+          "type": "varchar",
+          "description": "已投入工程款"
+        },
+        {
+          "name": "guarantyamount7",
+          "type": "numeric",
+          "description": "股票质押数量"
+        },
+        {
+          "name": "sendflag",
+          "type": "varchar",
+          "description": "发送标志"
+        },
+        {
+          "name": "billtype",
+          "type": "varchar",
+          "description": "票据类型"
+        },
+        {
+          "name": "passflag",
+          "type": "varchar",
+          "description": "人行是否通过标志（电票系统返回）"
+        },
+        {
+          "name": "staplecapitalgoodflag",
+          "type": "varchar",
+          "description": "动产质押大宗生产资料标志"
+        },
+        {
+          "name": "capitalgoodindustrytype",
+          "type": "varchar",
+          "description": "大宗生产资料所属行业"
+        },
+        {
+          "name": "bondcreditrating",
+          "type": "varchar",
+          "description": "公司债券信用等级"
+        },
+        {
+          "name": "artificialno",
+          "type": "varchar",
+          "description": "文本合同编号"
+        },
+        {
+          "name": "assetstatus",
+          "type": "varchar",
+          "description": "押品状态（核算）"
+        },
+        {
+          "name": "guarantysum",
+          "type": "numeric",
+          "description": "抵押物本次担保金额"
+        },
+        {
+          "name": "storerequire",
+          "type": "varchar",
+          "description": "仓储物损耗标准"
+        },
+        {
+          "name": "accountorgid",
+          "type": "varchar",
+          "description": "记账机构"
+        },
+        {
+          "name": "isfirstline",
+          "type": "varchar",
+          "description": "是否第一顺位"
+        },
+        {
+          "name": "priorityamt",
+          "type": "numeric",
+          "description": "优先受偿权数额"
+        },
+        {
+          "name": "evaluatecycle",
+          "type": "varchar",
+          "description": "估值周期"
+        },
+        {
+          "name": "gjserialno",
+          "type": "varchar",
+          "description": "国结流水号"
+        },
+        {
+          "name": "dp_load_dt",
+          "type": "date",
+          "description": "范围分区字段"
+        },
+        {
+          "name": "ismainguarantytype",
+          "type": "varchar",
+          "description": "是否为主担保方式"
+        },
+        {
+          "name": "isaddguarantytype",
+          "type": "varchar",
+          "description": "是否为追加/补充担保"
+        },
+        {
+          "name": "guarantyevalmethod",
+          "type": "varchar",
+          "description": "确定担保物价值的评估方法"
+        }
+      ],
+      "description": "odm_cms_guaranty_info",
+      "tableReference": {
+        "table": "odm_cms_guaranty_info",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "odm_cms_guaranty_relative",
+      "columns": [
+        {
+          "name": "data_dt",
+          "type": "date",
+          "description": "数据日期"
+        },
+        {
+          "name": "distribution_key",
+          "type": "varchar",
+          "description": "分桶键"
+        },
+        {
+          "name": "objecttype",
+          "type": "varchar",
+          "description": "担保关联对象类型"
+        },
+        {
+          "name": "objectno",
+          "type": "varchar",
+          "description": "担保关联对象编号"
+        },
+        {
+          "name": "contractno",
+          "type": "varchar",
+          "description": "担保合同流水号字段"
+        },
+        {
+          "name": "guarantyid",
+          "type": "varchar",
+          "description": "抵质押物编号"
+        },
+        {
+          "name": "channel",
+          "type": "varchar",
+          "description": "关联关系来源渠道"
+        },
+        {
+          "name": "status",
+          "type": "varchar",
+          "description": "有效标志"
+        },
+        {
+          "name": "othersrightid",
+          "type": "varchar",
+          "description": "他项权证号"
+        },
+        {
+          "name": "guarantysum",
+          "type": "numeric",
+          "description": "担保债权金额"
+        },
+        {
+          "name": "payorder",
+          "type": "varchar",
+          "description": "受偿次序"
+        },
+        {
+          "name": "type",
+          "type": "varchar",
+          "description": "数据来源类型"
+        },
+        {
+          "name": "relationstatus",
+          "type": "varchar",
+          "description": "关联有效标志"
+        },
+        {
+          "name": "describea",
+          "type": "varchar",
+          "description": "描述"
+        },
+        {
+          "name": "loadstatus",
+          "type": "varchar",
+          "description": "押品出入库状态"
+        },
+        {
+          "name": "maxguaprobabity",
+          "type": "numeric",
+          "description": "最高抵押率"
+        },
+        {
+          "name": "maxguarantmoney",
+          "type": "numeric",
+          "description": "最高可抵押金额"
+        },
+        {
+          "name": "dp_load_dt",
+          "type": "date",
+          "description": "范围分区字段"
+        }
+      ],
+      "description": "odm_cms_guaranty_relative",
+      "tableReference": {
+        "table": "odm_cms_guaranty_relative",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "org_info",
+      "columns": [
+        {
+          "name": "orgid",
+          "type": "varchar",
+          "description": "机构号；机构主键；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "orgname",
+          "type": "varchar",
+          "description": "机构名称"
+        },
+        {
+          "name": "mainframeorgid",
+          "type": "varchar",
+          "description": "核心机构号；核心系统机构号"
+        },
+        {
+          "name": "orglevel",
+          "type": "varchar",
+          "description": "机构等级；机构层级"
+        },
+        {
+          "name": "belongarea",
+          "type": "varchar",
+          "description": "所属地区；机构所属地区码值；码值：BelongArea"
+        }
+      ],
+      "primaryKey": "orgid",
+      "description": "机构表；粒度：一行一个机构",
+      "tableReference": {
+        "table": "org_info",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "rpt_mrtgplg_dtl",
+      "columns": [
+        {
+          "name": "datadt",
+          "type": "date",
+          "description": "数据日期"
+        },
+        {
+          "name": "distributionkey",
+          "type": "varchar",
+          "description": "分桶键"
+        },
+        {
+          "name": "orgno",
+          "type": "varchar",
+          "description": "机构编号"
+        },
+        {
+          "name": "uporgno",
+          "type": "varchar",
+          "description": "上级机构编号"
+        },
+        {
+          "name": "uporgnm",
+          "type": "varchar",
+          "description": "上级机构名称"
+        },
+        {
+          "name": "dblno",
+          "type": "varchar",
+          "description": "借据编号"
+        },
+        {
+          "name": "cntrno",
+          "type": "varchar",
+          "description": "合同编号"
+        },
+        {
+          "name": "cur",
+          "type": "varchar",
+          "description": "币种"
+        },
+        {
+          "name": "curnm",
+          "type": "varchar",
+          "description": "币种名称"
+        },
+        {
+          "name": "custno",
+          "type": "varchar",
+          "description": "客户编号"
+        },
+        {
+          "name": "custnm",
+          "type": "varchar",
+          "description": "客户名称"
+        },
+        {
+          "name": "custtyp",
+          "type": "varchar",
+          "description": "客户类型"
+        },
+        {
+          "name": "entpscl",
+          "type": "varchar",
+          "description": "企业规模"
+        },
+        {
+          "name": "indscgylv1",
+          "type": "varchar",
+          "description": "行业分类一级"
+        },
+        {
+          "name": "indscgylv2",
+          "type": "varchar",
+          "description": "行业分类二级"
+        },
+        {
+          "name": "indscgylv3",
+          "type": "varchar",
+          "description": "行业分类三级"
+        },
+        {
+          "name": "indscgylv4",
+          "type": "varchar",
+          "description": "行业分类四级"
+        },
+        {
+          "name": "rgstaddr",
+          "type": "varchar",
+          "description": "注册地址"
+        },
+        {
+          "name": "prdno",
+          "type": "varchar",
+          "description": "产品编号"
+        },
+        {
+          "name": "prdnm",
+          "type": "varchar",
+          "description": "产品名称"
+        },
+        {
+          "name": "loantyp",
+          "type": "varchar",
+          "description": "贷款类型"
+        },
+        {
+          "name": "loandect",
+          "type": "varchar",
+          "description": "贷款投向"
+        },
+        {
+          "name": "loanuse",
+          "type": "varchar",
+          "description": "贷款用途"
+        },
+        {
+          "name": "loanterm",
+          "type": "varchar",
+          "description": "贷款期限"
+        },
+        {
+          "name": "fivelvlcgycd",
+          "type": "varchar",
+          "description": "五级分类代码"
+        },
+        {
+          "name": "grtmode",
+          "type": "varchar",
+          "description": "担保方式"
+        },
+        {
+          "name": "grtytyp",
+          "type": "varchar",
+          "description": "担保物类型"
+        },
+        {
+          "name": "grtyno",
+          "type": "varchar",
+          "description": "担保物编号"
+        },
+        {
+          "name": "grtynm",
+          "type": "varchar",
+          "description": "担保物名称"
+        },
+        {
+          "name": "grtyestn",
+          "type": "varchar",
+          "description": "担保物估值"
+        },
+        {
+          "name": "hstyp",
+          "type": "varchar",
+          "description": "房产类型"
+        },
+        {
+          "name": "grtysts",
+          "type": "varchar",
+          "description": "担保物状态"
+        },
+        {
+          "name": "dblamt",
+          "type": "numeric",
+          "description": "借据金额"
+        },
+        {
+          "name": "dblbal",
+          "type": "numeric",
+          "description": "借据余额"
+        },
+        {
+          "name": "loanrate",
+          "type": "numeric",
+          "description": "贷款利率"
+        },
+        {
+          "name": "valtdt",
+          "type": "date",
+          "description": "起息日期"
+        },
+        {
+          "name": "expdt",
+          "type": "date",
+          "description": "到期日期"
+        },
+        {
+          "name": "loansts",
+          "type": "varchar",
+          "description": "贷款状态"
+        },
+        {
+          "name": "dblamtcnvtcny",
+          "type": "numeric",
+          "description": "借据金额折人民币"
+        },
+        {
+          "name": "dp_load_dt",
+          "type": "date",
+          "description": "范围分区字段"
+        }
+      ],
+      "description": "rpt_mrtgplg_dtl",
+      "tableReference": {
+        "table": "rpt_mrtgplg_dtl",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "samecustomer_relative",
+      "columns": [
+        {
+          "name": "certenddate",
+          "type": "date",
+          "description": "证件到期日"
+        },
+        {
+          "name": "rltvtypeid",
+          "type": "varchar",
+          "description": "客户关联关系"
+        }
+      ],
+      "description": "同业客户关联信息；坑点：贴源下发",
+      "tableReference": {
+        "table": "samecustomer_relative",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    },
+    {
+      "name": "user_info",
+      "columns": [
+        {
+          "name": "userid",
+          "type": "varchar",
+          "description": "用户号；用户（客户经理）主键；非空",
+          "isPrimaryKey": true
+        },
+        {
+          "name": "username",
+          "type": "varchar",
+          "description": "用户名称；用户姓名"
+        }
+      ],
+      "primaryKey": "userid",
+      "description": "用户信息表；粒度：一行一个用户（客户经理）",
+      "tableReference": {
+        "table": "user_info",
+        "schema": "public",
+        "catalog": "credit"
+      }
+    }
+  ],
+  "schema": "public",
+  "catalog": "credit",
+  "dataSource": "postgres",
+  "relationships": [
+    {
+      "name": "acct_loan_customer_info",
+      "models": [
+        "acct_loan",
+        "customer_info"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "acct_loan.customerid = customer_info.customerid"
+    },
+    {
+      "name": "business_contract_customer_info",
+      "models": [
+        "business_contract",
+        "customer_info"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "business_contract.customerid = customer_info.customerid"
+    },
+    {
+      "name": "business_duebill_customer_info",
+      "models": [
+        "business_duebill",
+        "customer_info"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "business_duebill.customerid = customer_info.customerid"
+    },
+    {
+      "name": "customer_info_org_info",
+      "models": [
+        "customer_info",
+        "org_info"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "customer_info.inputorgid = org_info.orgid"
+    },
+    {
+      "name": "customer_fsrecord_customer_info",
+      "models": [
+        "customer_fsrecord",
+        "customer_info"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "customer_fsrecord.customerid = customer_info.customerid"
+    },
+    {
+      "name": "guaranty_contract_guaranty_info",
+      "models": [
+        "guaranty_contract",
+        "guaranty_info"
+      ],
+      "joinType": "ONE_TO_ONE",
+      "condition": "guaranty_contract.serialno = guaranty_info.guarantyid"
+    },
+    {
+      "name": "guaranty_relative_guaranty_contract",
+      "models": [
+        "guaranty_relative",
+        "guaranty_contract"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "guaranty_relative.contractno = guaranty_contract.serialno"
+    },
+    {
+      "name": "guaranty_relative_guaranty_info",
+      "models": [
+        "guaranty_relative",
+        "guaranty_info"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "guaranty_relative.guarantyid = guaranty_info.guarantyid"
+    },
+    {
+      "name": "acct_loan_business_type",
+      "models": [
+        "acct_loan",
+        "business_type"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "acct_loan.businesstype = business_type.typeno"
+    },
+    {
+      "name": "acct_payment_schedule_acct_loan",
+      "models": [
+        "acct_payment_schedule",
+        "acct_loan"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "acct_payment_schedule.relativeobjectno = acct_loan.serialno"
+    },
+    {
+      "name": "acct_payment_log_acct_loan",
+      "models": [
+        "acct_payment_log",
+        "acct_loan"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "acct_payment_log.relativeobjectno = acct_loan.serialno"
+    },
+    {
+      "name": "business_duebill_business_contract",
+      "models": [
+        "business_duebill",
+        "business_contract"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "business_duebill.relativeserialno2 = business_contract.serialno"
+    },
+    {
+      "name": "classify_record_business_contract",
+      "models": [
+        "classify_record",
+        "business_contract"
+      ],
+      "joinType": "MANY_TO_ONE",
+      "condition": "classify_record.objectno = business_contract.serialno"
+    }
+  ],
+  "x_askoda_metrics": {
+    "dataset": "C",
+    "version": "3",
+    "views": {
+      "mt_putout_m": {
+        "columns": [
+          "stat_month",
+          "prdno",
+          "org_no",
+          "cust_type",
+          "putout_amt",
+          "putout_cnt"
+        ],
+        "comment": "放款流量口径层：一行 = 放款月 × 产品 × 机构 × 客户类型。放款金额是流量，按区间累加；与余额类指标不能混用同一种时间条件。"
+      },
+      "mt_loan_snap": {
+        "columns": [
+          "stat_date",
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "five_level",
+          "cust_type",
+          "bsnsts",
+          "loan_bal",
+          "overdue_bal",
+          "loan_amt",
+          "loan_cnt",
+          "cust_cnt"
+        ],
+        "comment": "贷款快照口径层：一行 = 数据日期 × 产品 × 机构 × 五级分类 × 客户类型 × 业务状态。余额类指标一律走这里，且必须限定单一 stat_date（两个快照日相加会把金额翻倍且不报错）。"
+      }
+    },
+    "metrics": [
+      {
+        "key": "loan_balance",
+        "label": "贷款余额",
+        "aliases": [
+          "贷款余额",
+          "余额",
+          "贷款规模",
+          "未偿余额",
+          "存量"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(loan_bal)",
+        "unit": "元",
+        "fmt": "num",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "five_level",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "所选快照日、口径范围内借据的未偿本金余额合计（DBLBAL 求和）。未结清与已逾期借据都计入，与账务表 ACCT_LOAN 的（正常余额 + 逾期余额）同源同算式。",
+        "caveats": "余额是时点量：必须限定单一数据日期，跨日期相加没有业务含义。",
+        "source": "知识库·贷款借据事实表 DWD_LAN_DBL_FCTI.DBLBAL；知识库 Q1 五级分类以余额口径推导"
+      },
+      {
+        "key": "loan_cnt",
+        "label": "贷款笔数",
+        "aliases": [
+          "贷款笔数",
+          "笔数",
+          "借据笔数",
+          "贷款户数"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(loan_cnt)",
+        "unit": "笔",
+        "fmt": "num",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "five_level",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "所选快照日在贷借据笔数。快照层每借据一行，故按产品/机构汇总时可安全相加。",
+        "caveats": "「户数」不等于笔数：一个客户可有多笔借据，要户数请用「有贷户数」。",
+        "source": "知识库·贷款借据事实表 主键 (DP_LOAD_DT, SYSCGY, DBLNO)"
+      },
+      {
+        "key": "cust_cnt",
+        "label": "有贷户数",
+        "aliases": [
+          "有贷户数",
+          "客户数",
+          "户数",
+          "贷款客户数"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(cust_cnt)",
+        "unit": "户",
+        "fmt": "num",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "five_level",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "所选快照日有在贷借据的行内客户数。按维度相加会重复计数同一客户，跨维度合计请以不带维度的那一行为准。",
+        "caveats": "同一客户在多产品下各计一次，总额按维度相加会偏大。",
+        "source": "知识库·贷款明细宽表 BNKINCUSTNO（行内客户号）"
+      },
+      {
+        "key": "overdue_balance",
+        "label": "逾期余额",
+        "aliases": [
+          "逾期余额",
+          "逾期金额",
+          "逾期贷款余额"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(overdue_bal)",
+        "unit": "元",
+        "fmt": "num",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "five_level",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "所选快照日已逾期部分的未偿本金余额合计（ODUEBAL 求和）。正常部分不计入。",
+        "caveats": "逾期余额 ≠ 不良余额：逾期按「是否到期未还」判定，不良按五级分类（次级+可疑+损失）判定。",
+        "source": "知识库·贷款明细宽表 ODUEBAL；知识库 Q3 逾期口径"
+      },
+      {
+        "key": "npl_balance",
+        "label": "不良贷款余额",
+        "aliases": [
+          "不良贷款余额",
+          "不良余额",
+          "不良贷款",
+          "不良"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(CASE WHEN five_level IN ('S', 'D', 'L') THEN loan_bal ELSE 0 END)",
+        "unit": "元",
+        "fmt": "num",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "five_level",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "五级分类为次级(S)、可疑(D)、损失(L)的借据余额合计。不良 = 次级 + 可疑 + 损失，不是「逾期 90 天以上」的同义词。",
+        "caveats": "口径来自知识库 Q1：不良按分类字母码判定，不按逾期天数反推；两者在本库可能不一致。",
+        "source": "知识库 Q1 五级分类；字母码 FIVELVLCGYCD_JG ∈ {S, D, L}"
+      },
+      {
+        "key": "npl_ratio",
+        "label": "不良率",
+        "aliases": [
+          "不良率",
+          "不良贷款率",
+          "不良比例"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(CASE WHEN five_level IN ('S', 'D', 'L') THEN loan_bal ELSE 0 END) / NULLIF(SUM(loan_bal), 0)",
+        "unit": "%",
+        "fmt": "pct",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "不良贷款余额 ÷ 各项贷款余额，分子分母取同一快照日。分母为 0 时返回空值，不返回 0——0 会被读成「没有不良」，而事实是「没有贷款」。",
+        "caveats": "分子分母必须同一快照日；按维度分组时是「组内不良率」，不是全行不良率。",
+        "source": "监管口径：不良贷款率 = 不良贷款余额 / 各项贷款余额"
+      },
+      {
+        "key": "overdue_ratio",
+        "label": "逾期率",
+        "aliases": [
+          "逾期率",
+          "逾期贷款率",
+          "逾期比例"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(overdue_bal) / NULLIF(SUM(loan_bal), 0)",
+        "unit": "%",
+        "fmt": "pct",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "逾期余额 ÷ 各项贷款余额，同一快照日。",
+        "caveats": "与不良率不同口径，两个数不相等是正常的。",
+        "source": "知识库 Q3 逾期口径"
+      },
+      {
+        "key": "putout_amt",
+        "label": "放款金额",
+        "aliases": [
+          "放款金额",
+          "发放金额",
+          "放款额",
+          "新增贷款",
+          "投放金额"
+        ],
+        "view": "mt_putout_m",
+        "expr": "SUM(putout_amt)",
+        "unit": "元",
+        "fmt": "num",
+        "time_mode": "flow",
+        "time_col": "stat_month",
+        "dims": [
+          "prdno",
+          "org_no",
+          "cust_type"
+        ],
+        "definition": "所选区间内商业性借据的发放金额合计（按 PUTOUTDATE 落月）。放款是流量：区间内逐笔相加，跨月累加成立。",
+        "caveats": "放款金额按放款日归月，与「期末余额」不是同一时间口径；两者放在一条 SQL 里比会得出错误结论。",
+        "source": "知识库·业务借据 BUSINESS_DUEBILL.BUSINESSSUM / 账务放款日 ACCT_LOAN.PUTOUTDATE"
+      },
+      {
+        "key": "putout_cnt",
+        "label": "放款笔数",
+        "aliases": [
+          "放款笔数",
+          "发放笔数",
+          "新增笔数"
+        ],
+        "view": "mt_putout_m",
+        "expr": "SUM(putout_cnt)",
+        "unit": "笔",
+        "fmt": "num",
+        "time_mode": "flow",
+        "time_col": "stat_month",
+        "dims": [
+          "prdno",
+          "org_no",
+          "cust_type"
+        ],
+        "definition": "所选区间内发放的借据笔数。",
+        "caveats": "按放款日统计，与「在贷笔数」不同。",
+        "source": "知识库·业务借据"
+      },
+      {
+        "key": "avg_putout_amt",
+        "label": "笔均放款金额",
+        "aliases": [
+          "笔均放款",
+          "单笔放款金额",
+          "笔均金额"
+        ],
+        "view": "mt_putout_m",
+        "expr": "SUM(putout_amt) / NULLIF(SUM(putout_cnt), 0)",
+        "unit": "元",
+        "fmt": "num",
+        "time_mode": "flow",
+        "time_col": "stat_month",
+        "dims": [
+          "prdno",
+          "org_no",
+          "cust_type"
+        ],
+        "definition": "放款金额 ÷ 放款笔数，区间内同一口径相除。",
+        "caveats": "是派生指标，不是一张表；先汇总再相除，不要对每行相除后求平均。",
+        "source": "派生：putout_amt / putout_cnt"
+      }
+    ]
+  }
+}

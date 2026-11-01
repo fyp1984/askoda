@@ -273,6 +273,26 @@ def build_mdl_index(dataset: str) -> dict:
                 if tref:
                     time_cols.add(_norm_sql_name(tref) + "." + n_cn)
         model_cols[mname] = cols
+
+    # 口径视图（MDL.x_askoda_metrics.views）也是可引用的合法对象。
+    # 不登记它们，L1「引用未登记对象」会把每一条口径 SQL 都判红——
+    # 而那种红是假红：视图由引擎展开，业务上完全合法（2026-11-01 接入 C 库时踩过）。
+    _reg_views = (mdl.get("x_askoda_metrics") or {}).get("views") or {}
+    for _vn, _vmeta in _reg_views.items():
+        _v = _norm_sql_name(_vn)
+        all_tables.add(_v)
+        for _c in ((_vmeta or {}).get("columns") or []):
+            _cn = _norm_sql_name(_c)
+            all_columns.add(_cn)
+            all_columns.add(_v + "." + _cn)
+    # 口径登记里声明的时间列也是「合法时间列」：否则 TIME_FIELD_SUSPECT 会把
+    # 每个口径的时间条件都报成警告（stat_month 这类视图列不在物理模型列里）。
+    for _m in ((mdl.get("x_askoda_metrics") or {}).get("metrics") or []):
+        _tc = _m.get("time_col")
+        if _tc:
+            _tcn = _norm_sql_name(_tc)
+            time_cols.add(_tcn)
+            time_cols.add(_norm_sql_name(_m.get("view") or "") + "." + _tcn)
     return {
         "models": out_models,
         "tables": out_tables,
@@ -361,46 +381,56 @@ def _ev_select_star(ast_stmt, ctx):
 # ----------------------------
 def _ev_group_by_inconsistent(ast_stmt, ctx):
     out = []
-    if not isinstance(ast_stmt, (exp.Select, exp.With)):
-        # 非查询根跳过（WITH 内部会递归到各 Select）
-        pass
-    gb_expressions = list(ast_stmt.find_all(exp.Group))
-    if not gb_expressions:
-        return out
-    select_proj = list(ast_stmt.expressions) if hasattr(ast_stmt, "expressions") else []
-    alias_map = _select_alias_map(ast_stmt)
-    gb_keys = set()
-    for ge in gb_expressions:
-        for e in ge.expressions:
+    # 🔴 判的是「**同一个 SELECT 内部**自洽性」，所以要逐层判，不能只看根、也不能跨层混判。
+    #
+    #   走过的两个坑（都实测过，别退回去）：
+    #     ① 原实现 `ast_stmt.find_all(exp.Group)` ⇒ 把**子查询里的** GROUP BY 抓上来，
+    #        再拿**外层**的非聚合列去比 ⇒ 必然"缺列"。
+    #        实测两例：`… FROM (SELECT … GROUP BY …) t WHERE t.名次=1`、门店指标组合的
+    #        LEFT JOIN 子查询 —— 都是完全合法的 SQL，却被判成聚合没写全。
+    #     ② 只改成 `ast_stmt.args.get("group")`（只看根）⇒ 误报没了，但**CTE 内部
+    #        真正的缺列也一起看不见了**（根是外层 SELECT、没有 GROUP BY ⇒ 直接 return）。
+    #        误报换成漏报，更糟：错的 SQL 从此静默通过。
+    #   ⇒ 正解：遍历每个 Select，**只处理自带 GROUP BY 的那些**，各按自己的投影判。
+    #     外层没有 GROUP BY 的自动跳过（它本就是"整套结果再筛一行"）；
+    #     CTE / 子查询里真有 GROUP BY 的，照样按它自己的列判——检测力不丢。
+    select_nodes = [s for s in ast_stmt.find_all(exp.Select)] \
+        if hasattr(ast_stmt, "find_all") else []
+    for sel in select_nodes:
+        gb_node = sel.args.get("group")
+        if gb_node is None:
+            continue
+        select_proj = list(sel.expressions)
+        alias_map = _select_alias_map(sel)
+        gb_keys = set()
+        for e in gb_node.expressions:
             k = _canonical_key(e, alias_map, select_proj)
             if k:
                 gb_keys.add(k)
-    non_agg_keys = []
-    non_agg_snippets = []
-    for expr in select_proj:
-        if isinstance(expr, exp.Star):
-            continue
-        has_agg = any(isinstance(a, exp.AggFunc) for a in expr.walk())
-        inner = expr.this if isinstance(expr, exp.Alias) else expr
-        is_literal = isinstance(inner, exp.Literal)
-        if not has_agg and not is_literal:
-            k = _canonical_key(expr, alias_map, select_proj)
-            if k:
-                non_agg_keys.append(k)
-                snippet = expr.sql(dialect="postgres").strip()
-                non_agg_snippets.append(snippet[:120])
-    missing = [c for c in non_agg_keys if c not in gb_keys]
-    if missing:
-        gb_snippets = []
-        for ge in gb_expressions:
-            for e in ge.expressions:
-                gb_snippets.append(e.sql(dialect="postgres").strip())
-        out.append({
-            "rule": "GROUP_BY_INCONSISTENT",
-            "snippet": ("GROUP BY 列: " + ", ".join(gb_snippets)
-                        + " / SELECT 非聚合列: " + ", ".join(non_agg_snippets)),
-            "detail": "SELECT 中的非聚合列 [%s] 未全部出现在 GROUP BY 中（规范化键比较），可能导致结果不确定" % ", ".join(missing),
-        })
+        non_agg_keys = []
+        non_agg_snippets = []
+        for expr in select_proj:
+            if isinstance(expr, exp.Star):
+                continue
+            has_agg = any(isinstance(a, exp.AggFunc) for a in expr.walk())
+            inner = expr.this if isinstance(expr, exp.Alias) else expr
+            is_literal = isinstance(inner, exp.Literal)
+            if not has_agg and not is_literal:
+                k = _canonical_key(expr, alias_map, select_proj)
+                if k:
+                    non_agg_keys.append(k)
+                    snippet = expr.sql(dialect="postgres").strip()
+                    non_agg_snippets.append(snippet[:120])
+        missing = [c for c in non_agg_keys if c not in gb_keys]
+        if missing:
+            gb_snippets = [e.sql(dialect="postgres").strip()
+                           for e in gb_node.expressions]
+            out.append({
+                "rule": "GROUP_BY_INCONSISTENT",
+                "snippet": ("GROUP BY 列: " + ", ".join(gb_snippets)
+                            + " / SELECT 非聚合列: " + ", ".join(non_agg_snippets)),
+                "detail": "SELECT 中的非聚合列 [%s] 未全部出现在 GROUP BY 中（规范化键比较），可能导致结果不确定" % ", ".join(missing),
+            })
     return out
 
 
@@ -592,8 +622,16 @@ def _ev_one_to_many_unhandled(ast_stmt, ctx):
         return out
     has_distinct = isinstance(ast_stmt, exp.Select) and ast_stmt.args.get("distinct") is not None
     has_preagg = False
-    for f in ast_stmt.find_all(exp.From):
-        for sub in f.find_all(exp.Subquery):
+    # ⚠️ 预聚合子查询可能在 FROM 里，也可能在 **JOIN 里**（2026-10-23 实测漏判）：
+    #   原实现只扫 `exp.From`，于是
+    #     `FROM dim_store s LEFT JOIN (SELECT store_id, COUNT(*) … GROUP BY store_id) x0 …`
+    #   这种"每个指标先各自按门店聚合、再对齐"的写法**没被认成预聚合**
+    #   ⇒ 一路走到"一对多未处理"被判**阻断**。
+    #   可它恰恰是处理一对多的标准解法：join 的一侧已经压到键粒度，不会放大行数。
+    #   ⇒ 扫范围扩到 From + Join 两侧的子查询。
+    _scopes = list(ast_stmt.find_all(exp.From)) + list(ast_stmt.find_all(exp.Join))
+    for scope in _scopes:
+        for sub in scope.find_all(exp.Subquery):
             inner = getattr(sub, "this", None)
             if isinstance(inner, exp.Select) and any(isinstance(a, exp.AggFunc) for a in inner.walk()):
                 has_preagg = True
@@ -1111,10 +1149,63 @@ def _ev_time_field_suspect(ast_stmt, ctx):
     if not time_cols:
         return out
     # 收集 WHERE/HAVING/GROUP BY/ORDER BY 里的 Column
+    #
+    # ⚠️ 别名必须先展开（2026-10-23 实测误报）：
+    #   `SELECT date_trunc('month', o.order_date) AS 月份 … ORDER BY 月份`
+    #   会被判成「用了非标准时间列 月份」——但「月份」根本不是物理列，是别名，
+    #   ORDER BY 里按别名排序是标准写法。这类误报会让正确 SQL 拿一个警告，
+    #   而「警告多了就没人看警告」比不报更糟。
+    #   ⇒ 处理方式是**展开而不是忽略**：拿别名背后的表达式继续判。
+    #     这样 `SELECT o.dw_insert_time AS 月份 … ORDER BY 月份` 仍然会被抓出来
+    #     （真正的问题列是 dw_insert_time），检测力一点没丢。
+    _aliases = {}
+    try:
+        for _sel in ast_stmt.find_all(exp.Select):
+            for _proj in _sel.expressions:
+                if isinstance(_proj, exp.Alias):
+                    _aliases[(_proj.alias or "").lower()] = _proj.this
+    except Exception:  # noqa: BLE001  解析异常不阻断规则
+        _aliases = {}
+
+    # ⚠️ 带前缀的别名也要展开（2026-10-23 第二次实测误报）：
+    #   上一步只处理了 `ORDER BY 月份`（无前缀），而 CTE / 子查询里的写法是
+    #   `ORDER BY m.月份` —— 带了派生表前缀，于是 `not _tbl` 不成立、跳过展开，
+    #   最后把「m.月份」当成物理列判成"非标准时间列"。
+    #   判据：**前缀不是 MDL 里的真实表/模型名 ⇒ 那是 CTE 名或子查询别名**，
+    #   它后面的列名只可能是投影别名，必须继续展开。
+    #   这样 `SELECT o.dw_insert_time AS 月份 … ORDER BY t.月份` 仍会被抓出来
+    #   （展开后真正的问题是 dw_insert_time），检测力不丢。
+    _real_tbls = set()
+    try:
+        for _t in ((mdl_index or {}).get("all_tables") or set()):
+            _real_tbls.add(_norm_sql_name(_t))
+        for _mn in ((mdl_index or {}).get("models") or {}):
+            _real_tbls.add(_norm_sql_name(_mn))
+    except Exception:  # noqa: BLE001  拿不到就退化为"一律展开"
+        _real_tbls = set()
+
     target_cols = []
     for clause in list(ast_stmt.find_all(exp.Where)) + list(ast_stmt.find_all(exp.Having)) \
             + list(ast_stmt.find_all(exp.Group)) + list(ast_stmt.find_all(exp.Ordered)):
         for col in clause.find_all(exp.Column):
+            _tbl_tok = col.args.get("table")
+            _tbl = (
+                (_tbl_tok.name if isinstance(_tbl_tok, exp.Identifier) else str(_tbl_tok)) or ""
+                if _tbl_tok is not None
+                else ""
+            )
+            _name = ""
+            if col.this is not None:
+                _name = (col.this.name if isinstance(col.this, exp.Identifier) else str(col.this)) or ""
+            # 无前缀 ⇒ 可能是别名；有前缀但前缀不是真实表 ⇒ 一定是派生表别名。
+            _alias_scope = (not _tbl) or (_norm_sql_name(_tbl) not in _real_tbls)
+            if _alias_scope and _name and _name.lower() in _aliases:
+                _expr = _aliases[_name.lower()]
+                _inner = list(_expr.find_all(exp.Column))
+                if _inner:
+                    target_cols.extend(_inner)
+                # 别名背后没有列（纯常量/字面量）⇒ 无物理列可判，跳过
+                continue
             target_cols.append(col)
     import re as _re
     time_like = _re.compile(

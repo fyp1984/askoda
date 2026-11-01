@@ -835,6 +835,15 @@ def _gateway_health_probe(report_list):
         ec = 9
         se = "探活异常：%s: %s" % (type(e).__name__, e)
 
+    # T04 超时回归（MCP 层）：探活必须快速返回。
+    # 60s 是 MCP 客户端常见的默认超时；一旦探活要等满它，说明网关侧或某个下游在阻塞，
+    # 而不是「网络慢」——这两种情况的处置完全不同，所以必须在这里分开判。
+    _probe_secs = time.time() - start
+    so_frags.append("[探活耗时] %.2fs" % _probe_secs)
+    if ec == 0 and _probe_secs > 30.0:
+        ec = 5
+        se = "MCP 探活耗时 %.1fs（>30s）：网关或下游存在阻塞，别当成网络抖动" % _probe_secs
+
     tail = ("\n".join(so_frags) + "\n" + se).strip()
     report_list.append({
         "layer": "G3",

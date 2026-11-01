@@ -272,7 +272,10 @@ def execute_readonly(sql, dataset="B", demand_id=None, requirement_version=None,
                     suspicious_signals.append(d[:200])
                 break
     if row_count == 0 and not suspicious_signals:
-        suspicious_signals.append("结果集为空（0 行），请检查过滤条件或时间范围")
+        suspicious_signals.append(
+            "结果集为空（0 行）：可能是过滤条件/时间范围过窄，"
+            "也可能该期间业务上确实没有数据（先去掉时间条件核对整表范围）"
+        )
     suspicious_signals = list(dict.fromkeys(suspicious_signals))  # 保序去重
 
     # M6-2 F5：行数/列数/信号 -> deliverable + 原因

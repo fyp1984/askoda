@@ -404,6 +404,25 @@ class SlotMapper(object):
         slot = self.slots.get(m3_key) or {}
         return [c for c in (slot.get("candidates") or []) if isinstance(c, dict)]
 
+    def _p2_answer_texts(self):
+        """证据包里 P2（业务确认）的答复正文，拼成一段可选文本。
+
+        为什么从证据包取而不是从 slots 取：M3 候选经证据包转手后只保留了
+        `value / granularity_class` 这类字段，`level` 与 `source` 会丢；
+        而「业务到底确认了什么」只能从 P2 条目读原文，不能靠候选元数据推断。
+        """
+        items = (self.bundle.get("by_level") or {}).get("P2") or []
+        out = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            for k in ("answer", "content"):
+                v = str(it.get(k) or "").strip()
+                if v:
+                    out.append(v)
+                    break
+        return out
+
     def _slot_label(self, obj_field):
         """槽位中文名（M3 的 SLOT_LABELS，与界面口径一致）。"""
         m3_key = requirement_mod.SLOT_MAP.get(obj_field)
@@ -833,11 +852,43 @@ class SlotMapper(object):
 
         if obj_field == "granularity":
             # 粒度只认**需求原文里说的**那一条（元数据登记的表行定义不是需求方要的粒度）
+            #
+            # ⚠️ 但「原文里出现粒度词」不等于「粒度数必须体现在 GROUP BY」：
+            #   「会员运营**月度**例会需要看各门店新增会员数」里的「月度」描述的是**例会节奏**，
+            #   而业务答复已明确「一行 = 一家门店在 2026 年 1 月的新增会员数」——
+            #   此时再按原文粒度词要求 SQL 必须 GROUP BY 月份，就是拿背景描述当口径，
+            #   会把这个**判定成假阳性**：正确的按门店汇总 SQL 被判红（实测已发生）。
+            #   处置方向是「前移判据」：业务**已确认**颗粒度 ⇒ 原文粒度词降为 may_omit
+            #   （仍列在要素清单里、仍写明成因，只是不再阻断）。阈值与契约均未改动。
+            confirmed = [
+                c for c in cands
+                if str(c.get("level") or "") == "confirmed"
+                or "business_confirmation" in (c.get("hit_by") or [])
+                or str(c.get("source") or "").startswith("P2")
+            ]
+            confirmed_text = " ".join(
+                [str(c.get("value") or "") for c in confirmed] + self._p2_answer_texts()
+            ).strip()
+            qids = [str(c.get("question_id") or "").strip() for c in confirmed]
+            qids = [q for q in qids if q]
+            # M3 候选经证据包转手后会丢掉 level/source（实测：granularity 只有
+            # value + granularity_class 到手），故「是否已确认」不能只看候选元数据，
+            # 还要看证据包里是否存在 P2 业务确认正文——有，就说明业务已就颗粒度过话。
+            has_business_confirm = bool(confirmed) or bool(confirmed_text)
+            base_note = "业务已确认颗粒度%s，原文粒度词不再硬要求" % (
+                "（%s）" % "、".join(qids[:3]) if qids else "")
             for c in cands:
                 cls = c.get("granularity_class")
                 if not cls:
                     continue
                 name = semantics_mod.GRANULARITY_CLASS_LABELS.get(cls, cls)
+                words = semantics_mod.GRANULARITY_TEXT_PATTERNS.get(cls, ())
+                # 只认**多字**粒度词：「2026 年 1 月」里的单字「月」是日期写法，不是
+                # 「按月汇总」的表态；用单字判会把降级条件永久锁死（实测踩过）。
+                words = [w for w in words if len(w) > 1] or list(words)
+                # 答复里**再次强调**了该粒度 ⇒ 照旧硬要求，只降级「原文提到、答复未再提」的
+                speak_again = any(w and w in confirmed_text for w in words)
+                note = base_note if (has_business_confirm and not speak_again) else None
                 out.append(self._element(
                     obj_field=obj_field,
                     element=name,
@@ -846,6 +897,7 @@ class SlotMapper(object):
                     matcher="%s:%s" % (MATCHER_KIND_TIME_GRANULARITY, cls),
                     source="demand_text",
                     cls=cls,
+                    cause_override=note,
                 ))
             if not out:
                 out.append(self._slot_level_element(obj_field, label))
@@ -883,16 +935,22 @@ class SlotMapper(object):
         return "%s:%s" % (kind, name)
 
     def _element(self, obj_field, element, anchors, confidence, matcher,
-                 source, cls=None):
+                 source, cls=None, cause_override=None):
         """造一条"有原文依据"的要素，并定它的 polarity。
 
         豁免按**元素级**判（见 :meth:`_exempt_pattern_for`）：粒度候选要把
         自己的 ``cls`` 传进来，「不限月度」才只豁免月度而不豁免日度。
+
+        ``cause_override``：上游已给出「不作硬要求」的明确成因时直接采用
+        （当前唯一用法见「业务已确认颗粒度」——见 :meth:`_elements_of_slot`）。
         """
         sent = self._sentence_of(anchors)
         exempt = self._exempt_in_sentence(obj_field, sent, element=element,
                                           cls=cls)
-        if exempt:
+        if cause_override:
+            polarity = POLARITY_MAY_OMIT
+            cause = cause_override
+        elif exempt:
             polarity = POLARITY_MAY_OMIT
             cause = "业务方显式豁免 %s" % element
         else:
@@ -1563,15 +1621,17 @@ def _assert_base_granularity_intact(reqcov, snap):
         % (MATCHER_KIND_TIME_GRANULARITY,
            getattr(fn, "__module__", "?"), getattr(fn, "__name__", "?"))
     )
-    # 🔴 **留下两处痕迹**（抛异常可能被调用方降级成静默跳过，见下）：
+    # 🔴 **留下两处痕迹**（异常本身可能被调用方降级，痕迹是第二道保险）：
     #   ① 模块级列表：可被同进程内的调用方/自证查询（不依赖日志）；
     #   ② stderr 告警：即使异常被 except 吞掉，**日志里仍有明确痕迹**。
-    # ⚠️ 为什么要两处：守卫的意图是"判据被静默废掉这件事**不能静默**"，
-    #   但当前调用点（``gates.py`` 的 ``_requirement_check``）把
-    #   ``ensure_instance_matchers()`` 放在 **try 块内** ⇒ 这里的 RuntimeError
-    #   会被那个 except 捕获 ⇒ 退化成 ``_skipped("要素清单构造失败…")``
-    #   ⇒ **L-REQ 静默 skipped、门禁不红** —— 守卫的"响亮失败"被降级成了"静默跳过"。
-    #   ⇒ 抛异常这一侧不足以保证"不能静默"，必须另有痕迹。
+    # ⚠️ 为什么要两处：守卫的意图是"判据被静默废掉这件事**不能静默**"。
+    #   当前唯一调用点（``gates.py`` 的 ``_requirement_check``）已单独接住
+    #   ``RuntimeError``：blocking 模式判红（不交付）、report-only 模式显式报警，
+    #   **不会**退化成 ``_skipped``（2026-10-23 实测：覆盖 matcher 后 review
+    #   的 status 直接变「不通过」，L-REQ 层 ok=False、skipped=False）。
+    #   但**新调用方**未必这么写 —— 所以抛异常之外仍要留痕迹：
+    #   万一将来有人把 ``ensure_instance_matchers()`` 塞进一个笼统的
+    #   ``except Exception`` 里，这两处痕迹就是唯一的线索。
     GRANULARITY_GUARD_FAILURES.append(msg)
     sys.stderr.write(
         "\n[reqelem] 🔴 粒度 matcher 守卫触发：%s\n"

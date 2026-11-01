@@ -132,6 +132,38 @@ services:
       - ./wren-docker-b/workspace:/workspace
 
   # ------------------------------------------------------------------
+  # 模拟库 C · 企业信贷域（M10 新增）
+  #
+  # 为什么单开一个引擎而不是复用 A/B：Wren 引擎的连接信息是**启动期**从
+  # connection_info.json 读的，一个引擎只连一个库。要接第三个业务库就必须有
+  # 第三个引擎——这是引擎的机制，不是我们的设计选择。
+  #
+  # 首次启动时 mdL 为空（models: []），属正常：业务库建好、MDL 生成后再装载。
+  # 装载动作 = 覆盖本目录的 mdl.json + 重启本容器（`docker restart wren-mcp-c`），
+  # 之后在前端「取数通道 · 数据集登记」里登记 C 即可出现在数据集下拉里。
+  # ------------------------------------------------------------------
+  wren-mcp-c:
+    image: ghcr.io/canner/wren-engine-ibis:latest
+    container_name: wren-mcp-c
+    restart: unless-stopped
+    environment:
+      ENABLE_MCP_SERVER: "true"
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "9000"
+      WREN_URL: localhost:8000
+      WEB_UI_ENABLED: "false"
+      CONNECTION_INFO_FILE: /workspace/connection_info.json
+      MDL_PATH: /workspace/mdl.json
+      MDL_WORKSPACE: /workspace
+    ports:
+      - "9004:9000"
+      - "9005:9001"
+      - "18003:8000"
+    volumes:
+      - ./wren-docker-c/workspace:/workspace
+
+  # ------------------------------------------------------------------
   # 服务端网关（MCP 服务端 · 双库接入 · 只读执行）
   # ------------------------------------------------------------------
   gateway:
@@ -152,6 +184,8 @@ services:
         condition: service_started
       wren-mcp-b:
         condition: service_started
+      wren-mcp-c:
+        condition: service_started
       assistant-postgres:
         condition: service_healthy
     extra_hosts:
@@ -169,8 +203,14 @@ services:
       # 容器内走服务名，不经宿主机回环
       WREN_A_URL: "http://wren-mcp-a:9000"
       WREN_B_URL: "http://wren-mcp-b:9000"
+      # M10：信贷域引擎。前端「数据集登记」只填代号 C，地址由网关按这个变量解析，
+      # 浏览器里永远不出现内网地址（R2）。
+      WREN_C_URL: "http://wren-mcp-c:9000"
       MDL_A_PATH: "/app/mdl/a.json"
       MDL_B_PATH: "/app/mdl/b.json"
+      # M11：口径热部署后要写回引擎的启动文件（见下方 volumes 注释）。
+      # 不配也能跑，只是保存时会在界面提示「引擎重启会回滚」。
+      ASKODA_ENGINE_WORKSPACE_C: "/app/engine-workspace-c"
       # --- M2 新增 ---
       # 网关自有元数据库（需求单 / 元数据字典 / 流转留痕）
       # compose 内部用服务名连元数据库；${COMPOSE_ASSISTANT_DB_DSN:-默认} 允许生产覆盖。
@@ -180,6 +220,8 @@ services:
       # 元数据采集用的数据源直连串（仅采集结构，查询一律走语义层）
       WREN_PG_A_DSN: "${COMPOSE_WREN_PG_A_DSN:-postgresql://test:test@host.docker.internal:15432/test}"
       WREN_PG_B_DSN: "${COMPOSE_WREN_PG_B_DSN:-postgresql://test:test@host.docker.internal:15432/retail}"
+      # M10：信贷域（库不存在时采集步骤会明确报错，不影响 A/B）
+      WREN_PG_C_DSN: "${COMPOSE_WREN_PG_C_DSN:-postgresql://test:test@host.docker.internal:15432/credit}"
       # 附件对象存储：2026-10-15 起改用 **EKOS 统一对象存储**（ekos-minio，EKOS 冻结端口 19000/19001）。
       # 走 host.docker.internal 而非服务名：ekos-minio 属 EKOS 的 compose 项目（网络不同，
       # 本工程不接入它的网络，避免编排耦合）；与 WREN_PG_* / KNOWLEDGE_API_URL 同一口径。
@@ -194,6 +236,28 @@ services:
       KNOWLEDGE_API_URL: "${KNOWLEDGE_API_URL:-http://host.docker.internal:19380/api/v1}"
       KNOWLEDGE_API_KEY: "${KNOWLEDGE_API_KEY:-}"
       KNOWLEDGE_DATASET_ID: "${KNOWLEDGE_DATASET_ID:-}"
+      # ── 知识底座可切换（2026-10-30 · MCP 统一接入）────────────────
+      # KNOWLEDGE_BACKEND=ragflow       → RAGFlow REST 直连（默认，历史行为）
+      # KNOWLEDGE_BACKEND=mcp-weknora   → 经 MCP 接入 WeKnora（CR008 产品架构）
+      #   KNOWLEDGE_MCP_URL    如 http://host.docker.internal:18180/mcp/{endpoint_id}
+      #   KNOWLEDGE_MCP_TOKEN  WeKnora MCP endpoint 的 mcp_* token
+      #   KNOWLEDGE_MCP_PROVIDER  weknora（默认）/ ragflow
+      #   KNOWLEDGE_DATASET_ID 复用为 knowledge_base_id（逗号分隔多个）
+      KNOWLEDGE_BACKEND: "${KNOWLEDGE_BACKEND:-ragflow}"
+      KNOWLEDGE_MCP_URL: "${KNOWLEDGE_MCP_URL:-}"
+      KNOWLEDGE_MCP_TOKEN: "${KNOWLEDGE_MCP_TOKEN:-}"
+      KNOWLEDGE_MCP_PROVIDER: "${KNOWLEDGE_MCP_PROVIDER:-weknora}"
+      KNOWLEDGE_KB_IDS: "${KNOWLEDGE_KB_IDS:-}"
+      # ── 大模型原生 SQL 生成（可选）────────────────────────────────
+      # 三项（BASE_URL/API_KEY/MODEL）齐全即启用；不配则保持确定性规划器，
+      # 与历史行为完全一致。兼容 OpenAI / DeepSeek / DashScope(qwen) 等
+      # OpenAI 兼容端点（路径 .../chat/completions）。LLM_ENABLED=0 可强制关闭。
+      LLM_BASE_URL: "${LLM_BASE_URL:-}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_MODEL: "${LLM_MODEL:-}"
+      LLM_ENABLED: "${LLM_ENABLED:-auto}"
+      LLM_TIMEOUT: "${LLM_TIMEOUT:-60}"
+      LLM_MAX_REPAIR: "${LLM_MAX_REPAIR:-1}"
     ports:
       # 宿主机 18080（8080 已被本项目 demo-server 长期占用）
       - "${GATEWAY_HOST_PORT:-18080}:8080"
@@ -205,6 +269,13 @@ services:
     #   换库只换镜像内文件 + 注册项，不改网关代码；改 MDL 需 rebuild（~2s）。
     # 另：wren-mcp-a/b 仍挂 ./wren-docker*/workspace:/workspace —— 它们的
     #   connection_info.json 需要随时改指向（接真实库时热改），不能进镜像。
+    volumes:
+      # 唯一的例外（M11 · 2026-11-01）：口径保存后的**写回**通道。
+      # 引擎启动读的是 /workspace/mdl.json，deploy_manifest 只改进程内存；
+      # 不写回文件 ⇒ 引擎一重启，界面刚改的口径会静默回滚，且全程无报错。
+      # 只写 mdl.json 一个文件；目录缺失/不可写时保存照常成功，但界面会明确提示
+      # 「引擎重启后会回滚成旧口径」——不提示比不写更糟。
+      - ./wren-docker-c/workspace:/app/engine-workspace-c
 
   # ------------------------------------------------------------------
   # BFF（Backend for Frontend）· 前端产物同源托管
@@ -236,6 +307,11 @@ services:
       ASKODA_BFF_PORT: "18081"
       ASKODA_SERVE_STATIC: "1"
       ASKODA_MCP_TIMEOUT: "180"
+      # 数据集登记（前端「数据源」页）用的默认库位置。
+      # ★ 为什么不能在前端填：架构红线 A2 规定业务用户面前不出现开源组件内部地址，
+      #   所以主机地址只能由部署侧给一份默认值，页面上只让填库名/端口。
+      ASKODA_DB_HOST: "${ASKODA_DB_HOST:-host.docker.internal}"
+      ASKODA_DB_PORT: "${ASKODA_DB_PORT:-15432}"
     ports:
       # 宿主机 18081：前端入口 http://127.0.0.1:18081/
       # ★ 绑127.0.0.1 而非 0.0.0.0 —— 当前**没有任何入站鉴权与多租户隔离**

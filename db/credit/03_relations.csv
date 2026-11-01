@@ -1,0 +1,14 @@
+left_table,left_column,right_table,right_column,join_type
+public.acct_loan,customerid,public.customer_info,customerid,MANY_TO_ONE
+public.business_contract,customerid,public.customer_info,customerid,MANY_TO_ONE
+public.business_duebill,customerid,public.customer_info,customerid,MANY_TO_ONE
+public.customer_info,inputorgid,public.org_info,orgid,MANY_TO_ONE
+public.customer_fsrecord,customerid,public.customer_info,customerid,MANY_TO_ONE
+public.guaranty_contract,serialno,public.guaranty_info,guarantyid,ONE_TO_ONE
+public.guaranty_relative,contractno,public.guaranty_contract,serialno,MANY_TO_ONE
+public.guaranty_relative,guarantyid,public.guaranty_info,guarantyid,MANY_TO_ONE
+public.acct_loan,businesstype,public.business_type,typeno,MANY_TO_ONE
+public.acct_payment_schedule,relativeobjectno,public.acct_loan,serialno,MANY_TO_ONE
+public.acct_payment_log,relativeobjectno,public.acct_loan,serialno,MANY_TO_ONE
+public.business_duebill,relativeserialno2,public.business_contract,serialno,MANY_TO_ONE
+public.classify_record,objectno,public.business_contract,serialno,MANY_TO_ONE

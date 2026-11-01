@@ -317,6 +317,50 @@ def test_sqlrun_wiring():
     return ok
 
 
+def test_missing_requirement_reason():
+    """主证 3：取不到结构化需求时，L-REQ 的 detail 必须说**真原因**。
+
+    背景（实测踩过）：`sql_generate` 早先把「取不到」压成 `None` 递给门禁，
+    门禁只能说一句「调用方未传 demand_id」。可调用方明明传了——真实原因是
+    这条需求还没合成结构化需求。于是排障的人会去查接线，白烧一轮。
+
+    ⇒ 本用例同时锁两件事：
+      ① `_requirement_for_gate` 把 requirement.get 的 error 原样带出来；
+      ② 门禁的 detail 里出现这个原因，且**不再出现**那句指错方向的旧文案。
+    """
+    print()
+    print("=" * 72)
+    print("5. 主证：取不到结构化需求 ⇒ detail 说真原因（不许再赖调用方没传）")
+    print("=" * 72)
+    ok = True
+    why = "尚未合成结构化需求（先跑 requirement_structured）"
+
+    orig_get = _requirement_mod.get
+
+    def _fake_get(demand_id, version=None):
+        return {"ok": False, "error": why}
+
+    try:
+        _requirement_mod.get = _fake_get
+        got, reason = sqlgen_mod._requirement_for_gate("DR-NO-STRUCT")
+    finally:
+        _requirement_mod.get = orig_get
+
+    print("  _requirement_for_gate ⇒ 需求=%r 原因=%r" % (got, reason))
+    ok &= (got is None) or _fails("取不到需求时第一个返回值应为 None")
+    ok &= (reason == why) or _fails("原因没原样带出来，实际 %r" % reason)
+
+    layer = gt._requirement_check({"ok": False, "error": reason}, SQL_NO_MONTH)
+    detail = (layer or {}).get("detail") or ""
+    print("  L-REQ.detail ⇒ %s" % detail[:160])
+    ok &= bool((layer or {}).get("skipped")) or _fails("取不到需求时 L-REQ 应为 skipped")
+    ok &= ("结构化需求不可用" in detail) or _fails("detail 没点明「结构化需求不可用」")
+    ok &= (why in detail) or _fails("detail 没带上真原因（%s）" % why)
+    ok &= ("调用方未传 demand_id" not in detail) or _fails(
+        "detail 仍在赖「调用方未传 demand_id」——这是指错方向的旧文案")
+    return ok
+
+
 def test_call_sites_source():
     """源码级自证：三处 gates.review 调用都带 requirement= 与 sql。"""
     print()
@@ -341,7 +385,8 @@ def main():
         ("1. review 直接对照", test_review_direct()),
         ("2. sqlgen 接线", test_sqlgen_wiring()),
         ("3. sqlrun 接线", test_sqlrun_wiring()),
-        ("4. 三处调用点源码自证", test_call_sites_source()),
+        ("4. 取不到需求时的原因文案", test_missing_requirement_reason()),
+        ("5. 三处调用点源码自证", test_call_sites_source()),
     ]
     print()
     print("=" * 72)

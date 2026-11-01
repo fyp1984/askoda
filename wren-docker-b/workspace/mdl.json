@@ -43,7 +43,8 @@
           "type": "varchar",
           "description": "订单状态；枚举：已完成 / 已退款"
         }
-      ]
+      ],
+      "description": "订单表；一笔订单一行"
     },
     {
       "name": "dwd_order_detail_di",
@@ -95,7 +96,8 @@
           "type": "numeric",
           "description": "销售金额（元）=数量×单价；口径：订单金额=SUM(sales_amount)，退款单除外"
         }
-      ]
+      ],
+      "description": "订单商品明细表；一个订单行（订单中一个 SKU）一行"
     },
     {
       "name": "dim_store",
@@ -132,7 +134,8 @@
           "type": "date",
           "description": "开业日期"
         }
-      ]
+      ],
+      "description": "门店维表；一家门店一行"
     },
     {
       "name": "dws_store_daily_agg",
@@ -184,7 +187,8 @@
           "type": "varchar",
           "description": "日期类型；枚举：工作日 / 周末 / 节假日"
         }
-      ]
+      ],
+      "description": "门店日汇总表；一家门店一天一行"
     },
     {
       "name": "ads_coupon_order_di",
@@ -226,7 +230,8 @@
           "type": "date",
           "description": "核销日期"
         }
-      ]
+      ],
+      "description": "券核销记录表；一次券核销一行"
     },
     {
       "name": "dim_member",
@@ -268,7 +273,8 @@
           "type": "integer",
           "description": "归属门店（关联 dim_store）"
         }
-      ]
+      ],
+      "description": "会员维表；一名会员一行"
     },
     {
       "name": "ads_member_grade_change_wi",
@@ -300,7 +306,8 @@
           "type": "varchar",
           "description": "异动类型；枚举：升级 / 降级"
         }
-      ]
+      ],
+      "description": "会员等级异动表；一名会员一个月的一次等级变动一行"
     },
     {
       "name": "ads_member_repurchase_di",
@@ -336,7 +343,8 @@
           "type": "integer",
           "description": "当月订单数"
         }
-      ]
+      ],
+      "description": "会员复购月度汇总表；一名会员一个月一行"
     }
   ],
   "relationships": [

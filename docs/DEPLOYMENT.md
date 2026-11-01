@@ -631,7 +631,7 @@ bash tools/init_first_run.sh --all# 含知识文档 + 业务口径
 ## 相关文档
 
 - [README](../README.md) — 这个系统是干什么的
-- [MCP 工具参考](MCP_TOOLS.md) — 48 个工具怎么调
+- [MCP 工具参考](MCP_TOOLS.md) — 65 个工具怎么调
 - [验证与自证](VERIFICATION.md) — 门禁体系详解
 - [外部依赖与限制](DEPENDENCIES.md) — embedding 等依赖详解
 - [演示指引](DEMO_GUIDE.md) — 完整的九步演示流程

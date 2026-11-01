@@ -16,15 +16,15 @@
     },
     {
       "path": "wren-docker-b/workspace/mdl.json",
-      "sha256_prefix": "56eb7a9aaf072425",
-      "expected_bytes": 11939,
-      "note": "B 库语义层清单；R1 已覆盖，登记作纵深防御"
+      "sha256_prefix": "c842ea9fb9e36799",
+      "expected_bytes": 12521,
+      "note": "B 库语义层清单（8 模型 / 10 关系，含中文 description）。2026-10-30 按历史版本恢复并补中文 label 后**重新冻结**：此前「换业务域前清场」把 models 置空，导致主体/字段/口径全线取空、生成链路报「口径未建模」。"
     },
     {
       "path": "wren-docker/workspace/mdl.json",
       "sha256_prefix": "e86818354208c44a",
       "expected_bytes": 3976,
-      "note": "A 库语义层清单；R1 已覆盖，登记作纵深防御"
+      "note": "A 库（test）语义层清单：6 模型 / 5 关系。2026-10-30 从 git db755d5^ 原样恢复并**重新冻结**——「换业务域前清场」把 A/B 两库都置空，A 库并未换域，属误伤。"
     }
   ]
 }

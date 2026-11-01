@@ -1,0 +1,525 @@
+# -*- coding: utf-8 -*-
+"""大模型原生 SQL 生成（需求 → SQL），带「生成→校验→修复」闭环与确定性回退。
+
+为什么需要它
+------------
+原设计把自由生成放在「客户端 Agent」，网关侧硬性不调模型（见 sqlgen.py 头注释）。
+但本产品面向真实业务：复杂需求（多表 JOIN / 时间过滤 / 排序 / 派生指标）必须能响应，
+否则"答非所问"只能被拦、不能被答。产品本身即对接大模型 ⇒ 由网关侧调用模型辅助生成，
+是产品化 + 工业化的正确落点。本模块即该能力。
+
+**默认无配置即禁用**：`is_enabled()` 为假时不进入本模块，行为与既有确定性链路完全等价。
+
+质量保障（不让模型"自由发挥"）
+------------------------------
+① 闭集约束：只允许引用 MDL 可见模型/列 / 已建模关系；prompt 给全量 schema + 关系 + 口径。
+② 结构化输出：要求模型返回 JSON（sql / explanation / objects / confidence）。
+③ 硬校验：只读关键字白名单 → sqlglot 解析 → 五层门禁（含 L-REQ 需求要素覆盖）。
+④ 修复闭环：门禁不过则把错误回喂模型再修（最多 `LLM_MAX_REPAIR` 次）；
+   仍不过则**不下发**，交回确定性规划器（宁可不答，绝不答错）。
+⑤ 可观测：attempts / notes / risks 全程留痕，生成器标 `generator="llm"`。
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+
+import llm
+import planner
+import registry
+
+try:  # 口径拆分（中文名 / 括号内口径）。metadata 是网关内模块，正常可导入。
+    import metadata as _metadata
+except Exception:  # noqa: BLE001
+    _metadata = None
+
+
+def _get_dataset(dataset):
+    """接受数据集 key 或 Dataset 对象，统一返回 Dataset。"""
+    if isinstance(dataset, str):
+        return registry.get(dataset)
+    return dataset
+
+
+def _split_label(desc):
+    """把 MDL description 拆成 (中文名, 口径)；失败就原样返回。"""
+    if not desc:
+        return "", ""
+    if _metadata is not None and hasattr(_metadata, "split_label_caliber"):
+        try:
+            label, caliber = _metadata.split_label_caliber(desc)
+            return (label or "", caliber or "")
+        except Exception:  # noqa: BLE001
+            pass
+    return str(desc), ""
+
+
+def is_enabled():
+    """是否启用 LLM 原生生成：模型客户端可用即可。"""
+    try:
+        return bool(llm.is_enabled())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# ---------------------------------------------------------------------------
+# 上下文：把 MDL 语义层渲染成 prompt 可读的 schema + 关系 + 口径
+# ---------------------------------------------------------------------------
+def build_schema_context(dataset):
+    """渲染数据集 schema / 关系，供模型在闭集内选表选列。"""
+    ds = _get_dataset(dataset)
+    mdl = getattr(ds, "mdl", {}) or {}
+    lines = []
+    lines.append("数据集：%s · %s" % (ds.key, getattr(ds, "label", "")))
+    if getattr(ds, "domain", ""):
+        lines.append("业务域：%s" % ds.domain)
+    lines.append("方言：PostgreSQL（仅允许 SELECT / WITH 只读查询；表名/列名必须与下方完全一致）")
+    lines.append("")
+    lines.append("## 可用模型（只允许引用以下模型与其列）")
+    for m in mdl.get("models", []) or []:
+        mname = m.get("name") or ""
+        tbl = (m.get("tableReference") or {}).get("table") or mname
+        pk = m.get("primaryKey") or ""
+        head = "### %s（物理表 %s%s）" % (mname, tbl, ("，主键 " + str(pk)) if pk else "")
+        lines.append(head)
+        for c in m.get("columns", []) or []:
+            label, caliber = _split_label(c.get("description"))
+            bits = ["- %s %s" % (c.get("name"), c.get("type") or "")]
+            if label:
+                bits.append("中文名：%s" % label)
+            if caliber:
+                bits.append("口径：%s" % caliber)
+            if c.get("isPrimaryKey"):
+                bits.append("主键")
+            lines.append("，".join(bits))
+    rels = mdl.get("relationships", []) or []
+    if rels:
+        lines.append("")
+        lines.append("## 可用关系（JOIN 只能用以下已建模条件，不得自行编造关联）")
+        for r in rels:
+            models = r.get("models") or []
+            lines.append(
+                "- %s  ⟶  %s（%s）"
+                % (
+                    " ⋈ ".join(models),
+                    r.get("name") or "",
+                    r.get("condition") or "",
+                )
+            )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Prompt 构建（纯函数，离线可测）
+# ---------------------------------------------------------------------------
+SYSTEM_PROMPT = (
+    "你是企业级 Text-to-SQL 引擎，面向真实业务取数。硬性要求：\n"
+    "1) 只使用【可用模型】中列出的表与列，列名、表名必须逐字一致，禁止编造字段或关联；\n"
+    "2) 只用 SELECT 或 WITH 只读语句，禁止任何写操作、DDL、多语句；\n"
+    "3) 严格满足需求里的每一个要素：筛选条件、时间范围、聚合口径、分组维度、排序方向、TopN；\n"
+    "   若需求含排序（如「降序」）必须体现在 ORDER BY，含时间范围必须体现在 WHERE；\n"
+    "4) 若需求要求的要素在语义层确实无法满足，请在 explanation 中说明缺失点，sql 输出空字符串；\n"
+    "5) 只输出一个 JSON 对象，不要输出多余文字，格式：\n"
+    '{"sql": "<SQL 或空串>", "explanation": "<一句话说明怎么满足需求>", '
+    '"objects": [{"type":"model|column","name":"<引用到的对象>"}], '
+    '"confidence": <0~1 的数字>}\n'
+    "6) **口径已给定时不得自行发明**：若给了「业务已确认口径」「颗粒度」「时间口径」，\n"
+    "   必须照此取数；不得另行定义指标（例如把「新增会员」改写成「此前无记录的会员」这类\n"
+    "   自创口径），也不得凭空追加未要求的过滤条件（如会员状态、活跃度）；\n"
+    "7) **标识符只用 ASCII**：表别名、列别名一律用小写字母/数字/下划线（如 store_name、\n"
+    "   new_member_cnt），禁止把中文当别名或标识符——中文只出现在 explanation 里；\n"
+    "   关键字与标识符之间必须有空格（`ORDER BY cnt DESC` 而不是 `ORDER BYcnt`），\n"
+    "   否则 SQL 无法解析。"
+)
+
+
+def _structured_hint(structured):
+    """把结构化需求（六槽位 + 业务确认）压成几行提示，帮助模型对齐要素。
+
+    键名对齐（踩坑记录）：`requirement.py` 实际产出的字段是
+    `subject / granularity / time_semantics / data_scope / output_fields / residual_risks`，
+    而本函数早期按 `granularity_definition / time_scope / scope_conditions / risk_points`
+    去取——两边对不上，于是**六个槽位里有四个被静默丢掉**，其中恰是最关键的两个
+    （颗粒度、时间口径）。实测后果：模型拿不到「按会员注册日期、按门店汇总」这类
+    已确认口径，只能自行发明「新增会员」的定义（曾生成
+    `NOT EXISTS(ads_member_repurchase_di ...)` 这种看似成立、实则答非所问的 SQL）。
+
+    因此这里**同时认两套键名**（历史键保留，避免其他调用方/测试用例失效），
+    并补上 `confirmed_facts`（业务确认原文，优先级最高）与 `aggregation_rules`。
+    """
+    if not isinstance(structured, dict):
+        return ""
+    parts = []
+    seen_labels = set()
+
+    def _val(x):
+        if isinstance(x, dict):
+            return x.get("value")
+        return x
+
+    def _clean(v):
+        s = str(_val(v) if not isinstance(v, list) else v).strip()
+        return "" if ("无候选结论" in s or s in ("None", "null")) else s
+
+    def _add(label, v):
+        if label in seen_labels:
+            return
+        s = _clean(v)
+        if s:
+            seen_labels.add(label)
+            parts.append("· %s：%s" % (label, s))
+
+    # 顺序即优先级：先给主体/颗粒度/时间/范围（决定 SQL 骨架），再给字段与风险。
+    # 同一 label 的两个键名按先后命中，第一个非空者生效，避免重复刷屏。
+    for key, label in (
+        ("subject", "分析主体"),
+        ("granularity", "颗粒度"),
+        ("granularity_definition", "颗粒度"),
+        ("time_semantics", "时间口径"),
+        ("time_scope", "时间口径"),
+        ("data_scope", "范围条件"),
+        ("scope_conditions", "范围条件"),
+        ("output_fields", "输出字段"),
+        ("aggregation_rules", "聚合规则"),
+        ("residual_risks", "风险点"),
+        ("risk_points", "风险点"),
+    ):
+        v = structured.get(key)
+        if isinstance(v, list):
+            vals = [_clean(x) for x in v]
+            vals = [x for x in vals if x]
+            if vals and label not in seen_labels:
+                seen_labels.add(label)
+                parts.append("· %s：%s" % (label, "；".join(vals)))
+        else:
+            _add(label, v)
+
+    # 业务确认是「已被人拍过板」的口径，比需求原文更硬：单列一段，明确要求必须满足。
+    facts = structured.get("confirmed_facts")
+    if isinstance(facts, list):
+        lines = []
+        for f in facts[:8]:
+            if not isinstance(f, dict):
+                continue
+            q = str(f.get("question") or "").strip()
+            a = str(f.get("answer") or "").strip()
+            if not a or "无候选结论" in a:
+                continue
+            lines.append("- %s → %s" % (q, a) if q else "- %s" % a)
+        if lines:
+            parts.append("· 业务已确认口径（**必须逐条满足**）：\n" + "\n".join(lines))
+
+    if not parts:
+        return ""
+    return "已结构化的需求要素（应逐项满足）：\n" + "\n".join(parts)
+
+
+def build_generation_messages(dataset, requirement_text, structured=None, knowledge=None):
+    """构建首轮生成消息。knowledge 为可选的知识/口径片段（list[str]）。"""
+    ds = _get_dataset(dataset)
+    schema_ctx = build_schema_context(ds)
+    user_parts = [schema_ctx, "", "## 业务需求", (requirement_text or "").strip() or "（需求为空）"]
+    hint = _structured_hint(structured)
+    if hint:
+        user_parts += ["", hint]
+    if knowledge:
+        k_text = "\n".join("- %s" % str(k)[:400] for k in knowledge[:6] if k)
+        if k_text:
+            user_parts += ["", "## 可参考的业务口径 / 知识（优先据此取口径）", k_text]
+    user_parts += [
+        "",
+        "请输出 JSON：sql / explanation / objects / confidence。"
+        "sql 必须只读、只引用上方表列、完整满足所有需求要素。",
+    ]
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": "\n".join(user_parts)},
+    ]
+
+
+def build_repair_messages(dataset, requirement_text, bad_sql, error, structured=None):
+    """把上一轮的门禁错误回喂模型，要求其在闭集内修正。"""
+    ds = _get_dataset(dataset)
+    schema_ctx = build_schema_context(ds)
+    user = (
+        "%s\n\n## 业务需求\n%s\n\n"
+        "## 上一版 SQL（未通过校验）\n%s\n\n"
+        "## 校验反馈（必须修正这些问题）\n%s\n\n"
+        "请在语义层闭集内修正，只输出 JSON（sql/explanation/objects/confidence）。"
+        "若确实无法在闭集内满足，sql 返回空串并在 explanation 说明缺口。"
+        % (schema_ctx, (requirement_text or "").strip(), bad_sql or "（空）", error or "未通过")
+    )
+    hint = _structured_hint(structured)
+    if hint:
+        user += "\n\n" + hint
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user},
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 响应解析（纯函数，离线可测）
+# ---------------------------------------------------------------------------
+def _strip_fences(text):
+    t = (text or "").strip()
+    # ```json ... ``` / ```sql ... ``` / ``` ... ```
+    m = re.search(r"```(?:json|sql)?\s*(.*?)```", t, re.S | re.I)
+    if m:
+        return m.group(1).strip()
+    return t
+
+
+def _normalize_identifier_spacing(sql):
+    """在「关键词/标识符」与中文之间补空格，**只动空白，不动任何字面量与引号内容**。
+
+    为什么需要：本地小模型（实测 deepseek-r1:7b）会写出
+    `... GROUP BY member_name ORDER BY新增会员数 DESC` 这种关键词与中文别名粘连的 SQL，
+    sqlglot 直接 `Invalid expression / Unexpected token` 判语法错——于是一个本可用的
+    候选被误判成「模型不可用」，掩盖了真正的语义问题。
+
+    只处理引号外的边界：
+      · 前一个字符是 ASCII 字母/数字/下划线/右括号，当前是中文 ⇒ 插空格；
+      · 前一个是中文，当前是 ASCII 字母/数字/下划线 ⇒ 插空格。
+    单引号字符串（含 '' 转义）与双引号标识符内部原样保留——`'2026年1月'` 不会被拆开。
+    """
+    s = sql or ""
+    out = []
+    quote = ""  # ""（无） | "'" | '"'
+    prev = ""
+    for ch in s:
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                quote = ""
+            prev = ch
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            prev = ch
+            continue
+        is_ascii_word = ch.isascii() and (ch.isalnum() or ch in "_")
+        is_cjk = "\u4e00" <= ch <= "\u9fff"
+        prev_ascii = prev.isascii() and (prev.isalnum() or prev in "_") or prev == ")"
+        prev_cjk = "\u4e00" <= prev <= "\u9fff"
+        if (is_cjk and prev_ascii) or (is_ascii_word and prev_cjk):
+            if out and out[-1] != " ":
+                out.append(" ")
+        out.append(ch)
+        prev = ch
+    text = "".join(out)
+    # ASCII 与 ASCII 粘连（`ORDER BYcnt`）无法靠字符类别判断，只对已知多词关键字补一次。
+    # 只补空格，不改任何标识符本身。
+    text = re.sub(
+        r"\b(ORDER\s+BY|GROUP\s+BY|UNION\s+ALL|PARTITION\s+BY)(?=[A-Za-z_0-9])",
+        lambda m: m.group(1) + " ",
+        text,
+        flags=re.I,
+    )
+    return text
+
+
+def parse_generation_response(text):
+    """从模型输出里抽取 {sql, explanation, objects, confidence, parse_ok}。
+
+    兼容三种形态：纯 JSON、代码围栏包裹的 JSON/SQL、裸 SQL。
+    """
+    raw = (text or "").strip()
+    body = _strip_fences(raw)
+    out = {"sql": "", "explanation": "", "objects": [], "confidence": None,
+           "parse_ok": False, "raw": raw[:2000]}
+    # 1) 直接 JSON
+    try:
+        data = json.loads(body)
+        if isinstance(data, dict):
+            return _from_obj(data, out)
+    except Exception:  # noqa: BLE001
+        pass
+    # 2) 文本里夹带的第一个 {...}
+    i, j = body.find("{"), body.rfind("}")
+    if 0 <= i < j:
+        try:
+            data = json.loads(body[i:j + 1])
+            if isinstance(data, dict):
+                return _from_obj(data, out)
+        except Exception:  # noqa: BLE001
+            pass
+    # 3) 裸 SQL
+    cand = body.strip().rstrip(";").strip()
+    if re.match(r"^(select|with)\b", cand, re.I):
+        out["sql"] = cand
+        out["parse_ok"] = True
+    return out
+
+
+def _from_obj(data, out):
+    sql = data.get("sql") or data.get("sql_draft") or data.get("query") or ""
+    sql = str(sql).strip().rstrip(";").strip()
+    out["sql"] = sql
+    out["explanation"] = str(data.get("explanation") or data.get("reason") or "").strip()
+    objs = data.get("objects")
+    if isinstance(objs, list):
+        out["objects"] = [o for o in objs if isinstance(o, dict)][:40]
+    conf = data.get("confidence")
+    try:
+        out["confidence"] = float(conf) if conf is not None else None
+    except (TypeError, ValueError):
+        out["confidence"] = None
+    out["parse_ok"] = True
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 校验（只读 + 语法 + 五层门禁含 L-REQ）
+# ---------------------------------------------------------------------------
+def _review_summary(review):
+    """从 gates.review 结果里提取失败层的简述。"""
+    if not isinstance(review, dict):
+        return ""
+    bits = []
+    for layer in review.get("layers") or []:
+        if isinstance(layer, dict) and layer.get("ok") is False and not layer.get("skipped"):
+            bits.append("%s %s：%s" % (
+                layer.get("layer") or "", layer.get("name") or "",
+                str(layer.get("detail") or "")[:200]))
+    return "；".join(bits) or str(review.get("status") or "")
+
+
+def validate_sql(sql, dataset, requirement=None):
+    """对生成的 SQL 做硬校验。返回 (ok, issues, review)。"""
+    ds = _get_dataset(dataset)
+    if not sql or not sql.strip():
+        return False, ["SQL 为空"], None
+    # ① 只读白名单
+    try:
+        ok, why = planner.is_readonly(sql)
+    except Exception as e:  # noqa: BLE001
+        return False, ["只读检查异常：%s" % str(e)[:160]], None
+    if not ok:
+        return False, [why], None
+    # ② sqlglot 语法（有则解析；无则跳过，交由门禁）
+    try:
+        import sqlglot  # noqa: F401
+        try:
+            sqlglot.parse_one(sql, read="postgres")
+        except Exception as e:  # noqa: BLE001
+            return False, ["SQL 语法解析失败：%s" % str(e)[:200]], None
+    except ImportError:
+        pass
+    # ③ 五层门禁（含 L-REQ 需求要素覆盖）
+    try:
+        review = planner_gates_review(sql, ds.key, requirement)
+    except Exception as e:  # noqa: BLE001
+        # 门禁本身异常时不做"假通过"：视为未通过，交由上层回退确定性，避免静默放行
+        return False, ["门禁审查异常：%s: %s" % (type(e).__name__, str(e)[:160])], None
+    status = (review or {}).get("status")
+    if status == "不通过":
+        return False, ["门禁不通过：%s" % _review_summary(review)], review
+    return True, [], review
+
+
+def planner_gates_review(sql, dataset_key, requirement):
+    """薄封装 gates.review，便于测试时替换/隔离。"""
+    import gates as _gates
+    return _gates.review(sql, dataset=dataset_key, requirement=requirement)
+
+
+# ---------------------------------------------------------------------------
+# 主入口：生成（含修复闭环）
+# ---------------------------------------------------------------------------
+def generate_sql(demand_id=None, dataset="B", nl="", structured=None, knowledge=None):
+    """LLM 原生生成 SQL。返回：
+
+      · 成功：`{ok:True, sql, explanation, objects, confidence, attempts, notes, risks}`
+      · 失败：`{ok:False, error, attempts, risks}`（调用方据此回落确定性规划器）
+    """
+    if not is_enabled():
+        return {"ok": False, "disabled": True, "error": "LLM 未启用", "attempts": [], "risks": []}
+    try:
+        ds = _get_dataset(dataset)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "数据集不可用：%s" % str(e)[:160], "attempts": [], "risks": []}
+
+    # 修复轮次：优先取生效配置（前端「系统设置」可调），否则回落环境变量。
+    # 上限 3 轮——再多的「修 → 判 → 再修」在实践中只会烧 token，不会救回结构错的需求。
+    max_repair = llm.config().get("max_repair")
+    if max_repair is None:
+        max_repair = max(0, int(os.getenv("LLM_MAX_REPAIR", "1") or 1))
+    max_repair = max(0, min(3, int(max_repair)))
+    messages = build_generation_messages(ds, nl, structured=structured, knowledge=knowledge)
+    attempts, notes, risks = [], [], []
+
+    # 单轮预算：**只试一次、且限时**。
+    # 2026-10-30 实测（本地 deepseek-r1:7b）：单次调用 40s 起，大 prompt 更久；
+    # 若再按配置里的 timeout(75s) × 重试 1 次，用户点「生成」要干等 3~5 分钟，
+    # 而实测两轮都被门禁挡下、最终仍回落规划器 —— 等得越久越亏。
+    # 故此处显式收紧：给一次限时尝试，救不回立刻回落，让缺口/退回包及时呈现。
+    # 2026-10-31 复测：本地模型实际分布是 38.9s（语义层内需求，能过门禁）到
+    # 64.8s（跨表需求，被 L2 正确拦下）。原 45s 恰好卡在中间 ⇒ 语义层内能跑通的
+    # 需求也被判超时，属"本来能成却先砍掉"。故默认放宽到 90s：
+    # 本地联调以「能跑通」为先，接入正式 API（3~8s）后应回落到 45s 以内。
+    _budget = int(os.getenv("LLM_SQL_TIMEOUT", "90") or 90)
+    last_err = ""
+
+    for i in range(max_repair + 1):
+        resp = llm.chat(messages, json_mode=True, timeout=_budget, max_retries=0)
+        if not resp.get("ok"):
+            last_err = resp.get("error") or "LLM 调用失败"
+            attempts.append({"round": i + 1, "ok": False, "error": last_err})
+            risks.append("LLM 调用失败：%s" % last_err)
+            break
+        parsed = parse_generation_response(resp.get("content") or "")
+        sql = parsed.get("sql") or ""
+        # 只对「模型产出的 SQL」做标识符间距规范化；确定性规划器的 SQL 不经过这里，
+        # 门禁判据也不受影响（规范化只加空白，不改标识符、不改字面量）。
+        if sql:
+            sql = _normalize_identifier_spacing(sql)
+        ok, issues, review = validate_sql(sql, ds, structured)
+        attempts.append({
+            "round": i + 1,
+            "ok": ok,
+            "sql": sql[:600],
+            "issues": issues,
+            "latency_ms": resp.get("latency_ms"),
+        })
+        if ok:
+            notes.append("LLM 首轮即通过门禁" if i == 0 else "LLM 第 %d 轮修复后通过门禁" % (i + 1))
+            return {
+                "ok": True,
+                "sql": sql,
+                "explanation": parsed.get("explanation") or "",
+                "objects": parsed.get("objects") or [],
+                "confidence": parsed.get("confidence"),
+                "review_status": (review or {}).get("status"),
+                "attempts": attempts,
+                "notes": notes,
+                "risks": risks,
+            }
+        last_err = "；".join(issues) or "未通过校验"
+        if not sql:
+            # 「拿不到 SQL」有两种性质完全不同的原因，旧文案一律写成「闭集内无法满足」，
+            # 会把业务方误导向「去改需求」：
+            #   a) 模型明确说了闭集内无解（有 explanation，sql 为空）——该退需求/补语义层；
+            #   b) 模型输出了内容但不是合法 JSON（长尾重复、引号/括号未闭合）——本地小模型
+            #      常见，该换更大模型或缩上下文，跟需求写得清不清楚无关。
+            _raw = (parsed.get("raw") or "").strip()
+            if _raw and not (parsed.get("explanation") or "").strip():
+                last_err = (
+                    "模型输出无法解析出 SQL（原始约 %d 字符，疑似 JSON 未闭合或多轮重复）"
+                    "；本地小模型常见，换更大模型或缩短上下文可缓解" % len(_raw)
+                )
+                risks.append(last_err)
+            else:
+                risks.append("LLM 表示闭集内无法满足需求：%s" % (parsed.get("explanation") or "")[:200])
+            break
+        if i < max_repair:
+            messages = build_repair_messages(ds, nl, sql, last_err, structured=structured)
+
+    return {
+        "ok": False,
+        "error": last_err or "LLM 未产出可校验 SQL",
+        "attempts": attempts,
+        "risks": risks,
+    }
