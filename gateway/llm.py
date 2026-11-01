@@ -137,6 +137,86 @@ def completions_url(base_url):
     return u + "/chat/completions"
 
 
+def models_url(base_url):
+    """把根地址规范成 `.../models`（OpenAI 兼容的模型清单）。
+
+    用途是把「通不通」和「模型快不快」分开：清单接口是**纯元数据、秒级返回**，
+    而 chat 要等推理完成。推理模型一次最小请求也能跑二十几秒，
+    单靠 chat 测连通，会把「模型慢」误报成「地址不通」。
+    """
+    u = (base_url or "").rstrip("/")
+    if not u:
+        return ""
+    if u.endswith("/chat/completions"):
+        u = u[: -len("/chat/completions")]
+    if u.endswith("/models"):
+        return u
+    return u + "/models"
+
+
+def list_models(cfg, timeout=None):
+    """列一次模型清单（**永不抛异常**）。
+
+    返回：`{"ok": bool, "status": int?, "models": [str], "error": str?}`
+    失败时 `status` 保留 HTTP 码，让调用方能分清「401 密钥不对」与「404 不支持这个接口」。
+    """
+    url = models_url(cfg.get("base_url"))
+    if not url:
+        return {"ok": False, "error": "接口地址为空", "models": []}
+    to = cfg.get("timeout", 60) if timeout is None else timeout
+    headers = {"Accept": "application/json"}
+    if cfg.get("api_key"):
+        headers["Authorization"] = "Bearer %s" % cfg["api_key"]
+    try:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=to) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", "replace")[:200]
+        except Exception:  # noqa: BLE001
+            detail = ""
+        return {"ok": False, "status": getattr(e, "code", 0), "error": detail, "models": []}
+    except Exception as e:  # noqa: BLE001  超时 / 连接 / DNS
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:200]), "models": []}
+
+    names = []
+    try:
+        data = json.loads(raw)
+        for item in (data.get("data") or data.get("models") or []):
+            if isinstance(item, dict):
+                n = item.get("id") or item.get("name") or item.get("model") or ""
+            else:
+                n = item
+            if n:
+                names.append(str(n))
+    except (ValueError, AttributeError, TypeError):
+        # 清单格式不认识不算失败：地址是通的，只是这个代理不按 OpenAI 规范返回
+        return {"ok": True, "status": 200, "models": [], "unparsed": True}
+    return {"ok": True, "status": 200, "models": names}
+
+
+def model_listed(model, names):
+    """模型名是否在清单里。容忍 `:latest` 后缀与大小写差异，不容忍拼错。"""
+    m = (model or "").strip().lower()
+    if not m:
+        return None
+    pool = [str(n).strip().lower() for n in (names or [])]
+    if not pool:
+        return None  # 清单为空/未解析 ⇒ 无从判断，别硬说「不在了」
+    for n in pool:
+        if n == m:
+            return True
+        # OpenAI 兼容层有时返回 `models/xxx`；Ollama 的 tag 可能省略 `:latest`
+        base = n.split("/")[-1]
+        if base == m or base.split(":")[0] == m.split(":")[0] and (":" not in m or ":" not in base):
+            return True
+        if base == m + ":latest" or m == base + ":latest":
+            return True
+    return False
+
+
+
 def chat(messages, *, json_mode=False, timeout=None, max_retries=None, temperature=None, cfg=None):
     """调用 chat/completions。
 

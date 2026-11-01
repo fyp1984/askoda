@@ -660,11 +660,64 @@ def _candidate(payload):
     )
 
 
-def test_connection(payload=None, timeout=None):
-    """用当前（或界面草稿）配置发一次最小请求，验证「地址 / 密钥 / 模型名」三件事。
+def _list_models(cfg, timeout):
+    """间接调用 `llm.list_models`，同样留替换点（自测不打网络）。"""
+    import llm
 
-    为什么值得单独做一个动作：这三者任意一个填错，症状都是「生成不出来 SQL」，
-    而真正的报错藏在重试之后。点一下测试，10 秒内就能分清是谁的问题。
+    return llm.list_models(cfg, timeout=timeout)
+
+
+def _probe(cfg, timeout):
+    """第一段：只问「地址通不通、密钥认不认、模型在不在」——纯元数据，秒级。
+
+    2026-11-01 事故：推理模型（deepseek-r1:7b）连「回复两个字」都要思考 359 个
+    token、跑 23 秒，而测试动作只等 20 秒 ⇒ 报「地址不通或网络被拦」。
+    实测容器到该端口 0.06 秒就 200，网络完全没问题——**是模型慢，不是不通**。
+    所以探活必须单独做一段：拿不到清单才叫不通，拿得到清单就只剩慢。
+    """
+    res = _list_models(cfg, timeout)
+    names = res.get("models") or []
+    listed = None
+    try:
+        import llm
+
+        listed = llm.model_listed(cfg.get("model"), names)
+    except Exception:  # noqa: BLE001
+        listed = None
+    err = res.get("error") or ""
+    low = err.lower()
+    # 「这段结论能不能定案」：不是所有失败都等于「地址错」。
+    # 401/403、连接被拒、DNS 失败、超时 ⇒ 定案；
+    # 404 / 清单格式不认识 ⇒ **定不了**（很多自建代理压根不实现 /models），
+    # 这种情况必须放行到第二段，否则会把「能用但没清单接口」的代理误判成不通。
+    conclusive = bool(res.get("ok")) or bool(res.get("status") in (401, 403)) or (
+        "timed out" in low
+        or "timeout" in low
+        or "refused" in low
+        or "getaddrinfo" in low
+        or "name or service not known" in low
+        or "connectionreset" in low
+    )
+    return {
+        "reachable": bool(res.get("ok")),
+        "status": res.get("status"),
+        "model_count": len(names),
+        "model_listed": listed,
+        "conclusive": conclusive,
+        "error": err,
+    }
+
+
+def test_connection(payload=None, timeout=None):
+    """验证「地址 / 密钥 / 模型名」三件事，并分清「不通」与「太慢」。
+
+    分两段，因为这两件事的修法完全不同：
+      ① 清单探测（秒级）：`GET {base}/models`。地址错、密钥错、模型名错，
+         在这一步就能定死，且**不会因为模型慢而误判**。
+      ② 生成探测：真发一句「回复两个字：可用」。验证端到端能出内容，
+         这一步受模型速度支配，超时只说明「这台机器跑这个模型跟不上」。
+
+    返回里 `probe` 段把两段的结论都摊开，`notice` 只讲人话。
     """
     cfg, used_saved = _candidate(payload)
     if not (cfg["base_url"] and cfg["api_key"] and cfg["model"]):
@@ -673,7 +726,36 @@ def test_connection(payload=None, timeout=None):
             "error": "配置不完整，无法测试：请先填好接口地址、API Key、模型名。",
             "config": _safe_cfg(cfg),
         }
-    to = _num(timeout, min(20, cfg["timeout"]), 3, 120, int)
+    # 超时不再写死：跟随「这份草稿 / 已保存配置」里的单次调用超时。
+    # 旧代码是 min(20, cfg["timeout"])，页面上填 90 也照样 20 秒判死。
+    # timeout 传 0/负数 表示「没指定」⇒ 用配置里的值。
+    want = timeout if (timeout or 0) > 0 else cfg["timeout"]
+    to = _num(want, cfg["timeout"], 3, 300, int)
+
+    probe = _probe(cfg, min(8, to))
+    out = {
+        "ok": False,
+        "config": _safe_cfg(cfg),
+        "used_saved_credential": used_saved,
+        "probe": probe,
+    }
+
+    # 探活就把话说死了的，别再去等生成 —— 等下去只会得到一条误导人的超时。
+    # 但「定不了案」的失败（如自建代理不实现 /models）必须放行到第二段。
+    if not probe["reachable"] and probe.get("conclusive"):
+        reason = _diagnose(
+            {"ok": False, "status": probe.get("status"), "error": probe.get("error")},
+            cfg,
+            probe,
+        )
+        out["error"] = probe.get("error") or "模型清单接口不可用"
+        out["notice"] = reason
+        return out
+    if probe.get("model_listed") is False:
+        out["error"] = "模型清单里没有「%s」" % cfg["model"]
+        out["notice"] = _diagnose({"ok": False, "status": 404}, cfg, probe)
+        return out
+
     t0 = time.time()
     res = _chat(
         [
@@ -685,20 +767,21 @@ def test_connection(payload=None, timeout=None):
         max_retries=0,
     )
     ms = int((time.time() - t0) * 1000)
-    out = {
-        "ok": bool(res.get("ok")),
-        "latency_ms": res.get("latency_ms", ms),
-        "config": _safe_cfg(cfg),
-        "used_saved_credential": used_saved,
-    }
+    out["latency_ms"] = res.get("latency_ms", ms)
+
     if res.get("ok"):
         reply = str(res.get("content") or "").strip()
+        out["ok"] = True
         out["reply"] = reply[:80]
         out["model_reported"] = res.get("model") or cfg["model"]
         out["notice"] = "连通正常，可以保存。" if used_saved else "连通正常（用的是这次填的密钥）。"
+        if not reply:
+            # 推理模型会把 token 全用在思考上，返回体里 content 是空的。
+            # 这是「通但答非所问」，不拦保存，但要让人心里有数。
+            out["notice"] += " 注意：这次模型没有输出可见内容（推理模型的思考过程不计入正文），生成 SQL 时可能偏慢。"
     else:
         out["error"] = res.get("error") or "调用失败"
-        out["notice"] = _diagnose(res, cfg)
+        out["notice"] = _diagnose(res, cfg, probe)
     return out
 
 
@@ -711,12 +794,27 @@ def _safe_cfg(cfg):
     }
 
 
-def _diagnose(res, cfg):
-    """把底层报错翻译成「该改哪里」。**不暴露任何内部地址与堆栈。**"""
+def _diagnose(res, cfg, probe=None):
+    """把底层报错翻译成「该改哪里」。**不暴露任何内部地址与堆栈。**
+
+    `probe` 是第一段（模型清单）的结论。它决定「超时」这句话该怎么说：
+    探得通 ⇒ 地址与密钥都没问题，是**模型慢**；探不通 ⇒ 才是地址/网络问题。
+    旧版本一律说「地址不通或网络被拦」，2026-11-01 因此把人带去查网络。
+    """
     status = res.get("status")
     err = str(res.get("error") or "")
+    probe = probe or {}
+    reachable = bool(probe.get("reachable"))
+    listed = probe.get("model_listed")
+    count = probe.get("model_count") or 0
+
     if status in (401, 403):
         return "鉴权被拒（HTTP %s）：API Key 不对、已过期，或没有该模型的权限。换一把密钥试试。" % status
+    if status == 404 and reachable and listed is False:
+        return "模型名不对：这个地址下没有「%s」。从清单里挑一个（共 %d 个），或先在上面拉取模型再选。" % (
+            cfg.get("model") or "-",
+            count,
+        )
     if status == 404:
         return "地址不对（HTTP 404）：接口地址通常要带 /v1 或 /compatible-mode/v1 这类后缀，检查一下再试。"
     if status == 429:
@@ -724,7 +822,16 @@ def _diagnose(res, cfg):
     if status and 400 <= status < 500:
         return "请求被拒（HTTP %s）：多为模型名不存在或参数不被支持。核对模型名。" % status
     if "timed out" in err.lower() or "timeout" in err.lower():
-        return "连接超时：地址不通或网络被拦。若用自建代理，确认地址与端口可从服务器访问。"
+        if reachable:
+            return (
+                "通路正常，是模型太慢：地址和密钥都对（已识别到 %d 个模型），"
+                "但这次生成在超时内没回完。把「单次调用超时」调大，或换一个更快的模型"
+                "（推理型模型答一句话也要几十秒，用来生成 SQL 常常不够）。" % count
+            )
+        msg = "连接超时：地址不通或网络被拦。若用自建代理，确认地址与端口可从服务器访问。"
+        if probe and probe.get("conclusive") is False:
+            msg += "（这个地址没有提供模型清单，无法先单独确认可达性。）"
+        return msg
     if "Name or service not known" in err or "getaddrinfo" in err or "NameError" in err:
         return "域名解析失败：接口地址的域名拼写有问题，或服务器没有外网 DNS。"
     if "Connection refused" in err or "ConnectionReset" in err:

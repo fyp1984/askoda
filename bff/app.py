@@ -1374,7 +1374,7 @@ class LlmTestIn(BaseModel):
     base_url: str = Field(default="")
     model: str = Field(default="")
     api_key: str = Field(default="", description="留空则用已保存的密钥测")
-    timeout: int = Field(default=20, ge=3, le=120)
+    timeout: int = Field(default=90, ge=3, le=300, description="秒；不传则用配置里的单次调用超时")
 
 
 @app.get(f"{API}/settings/llm", tags=["系统设置"])

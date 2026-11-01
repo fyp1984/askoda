@@ -119,7 +119,9 @@ export default function PageSettings({
     setTested(null)
     setError(null)
     try {
-      const r = await api.testLlm({ ...draft(), timeout: 20 })
+      // 超时跟随页面上「单次调用超时」这一项，不再写死 20 秒：
+      // 推理型模型答一句话就要二三十秒，写死会把「模型慢」报成「地址不通」。
+      const r = await api.testLlm({ ...draft(), timeout: Math.min(300, Math.max(3, Number(timeoutSec) || 60)) })
       setTested(r)
       onNotify?.(r.ok ? '连接测试通过' : '连接测试未通过，按提示检查')
     } catch (e) {
@@ -425,26 +427,38 @@ export default function PageSettings({
         </label>
 
         {tested ? (
-          <div className={tested.ok ? 'warnbox' : 'errbox'}>
-            <div className={tested.ok ? 'warnbox-title' : 'errbox-title'}>
-              {tested.ok ? `连接正常（${tested.latency_ms ?? '-'} ms）` : '连接失败'}
-            </div>
-            <div className={tested.ok ? 'warnbox-hint' : 'errbox-hint'}>
-              {tested.notice ? <RichText text={tested.notice} /> : null}
-            </div>
-            {tested.ok ? (
-              <div className="hint-inline">
-                被测配置：{tested.config?.model || '-'} @ {tested.config?.base_url || '-'}
-                {tested.reply ? (
-                  <>
-                    　模型回话：<RichText text={tested.reply} />
-                  </>
+          (() => {
+            // 三态，不是二态：地址通了但模型没在超时内回完，既不是「正常」也不该说「连接失败」——
+            // 说成失败会把人带去查网络，而实际要改的是模型或超时。
+            const reachable = !!tested.probe?.reachable
+            const light = tested.ok || reachable
+            return (
+              <div className={light ? 'warnbox' : 'errbox'}>
+                <div className={light ? 'warnbox-title' : 'errbox-title'}>
+                  {tested.ok
+                    ? `连接正常（${tested.latency_ms ?? '-'} ms）`
+                    : reachable
+                      ? '通路正常，但这次生成没回完'
+                      : '连接失败'}
+                </div>
+                <div className={light ? 'warnbox-hint' : 'errbox-hint'}>
+                  {tested.notice ? <RichText text={tested.notice} /> : null}
+                </div>
+                {tested.ok ? (
+                  <div className="hint-inline">
+                    被测配置：{tested.config?.model || '-'} @ {tested.config?.base_url || '-'}
+                    {tested.reply ? (
+                      <>
+                        　模型回话：<RichText text={tested.reply} />
+                      </>
+                    ) : null}
+                  </div>
+                ) : tested.error ? (
+                  <pre className="sqlbox small">{tested.error}</pre>
                 ) : null}
               </div>
-            ) : tested.error ? (
-              <pre className="sqlbox small">{tested.error}</pre>
-            ) : null}
-          </div>
+            )
+          })()
         ) : null}
 
         {!ro ? (

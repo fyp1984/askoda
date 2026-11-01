@@ -148,6 +148,25 @@ def patch_chat(fn):
         S._chat = old
 
 
+@contextlib.contextmanager
+def patch_models(fn):
+    """替换第一段探活（模型清单）。默认桩 = 「地址通、模型在清单里」。
+
+    真实探活会往被测地址发 GET；自检不许打网络，必须显式打桩。
+    默认给「通」，让原有那些「测 chat 行为」的用例不必逐个改语义。
+    """
+    old = S._list_models
+    S._list_models = fn
+    try:
+        yield
+    finally:
+        S._list_models = old
+
+
+def _models_ok(cfg, timeout=None):
+    return {"ok": True, "status": 200, "models": [cfg.get("model") or "m"]}
+
+
 def _row(**kw):
     base = {
         "provider": "deepseek",
@@ -468,7 +487,7 @@ def _t_test_incomplete():
         calls.append(kw)
         return {"ok": True, "content": "可用"}
 
-    with env(**_NO_ENV), fake_db(None), patch_chat(fake_chat):
+    with env(**_NO_ENV), fake_db(None), patch_chat(fake_chat), patch_models(_models_ok):
         r = S.test_connection({})
         assert r["ok"] is False, r
         assert calls == [], "配置不完整却发了请求：%s" % calls
@@ -483,7 +502,7 @@ def _t_test_ok():
         seen.update(kw)
         return {"ok": True, "content": "可用", "model": "deepseek-chat", "latency_ms": 12}
 
-    with env(**_NO_ENV), fake_db(_row(api_key="sk-live-secret")), patch_chat(fake_chat):
+    with env(**_NO_ENV), fake_db(_row(api_key="sk-live-secret")), patch_chat(fake_chat), patch_models(_models_ok):
         r = S.test_connection({})
         assert r["ok"] is True, r
         assert r["notice"] and "可以保存" in r["notice"], r["notice"]
@@ -502,7 +521,7 @@ def _t_test_draft_key():
         seen.update(kw.get("cfg") or {})
         return {"ok": True, "content": "可用", "latency_ms": 5}
 
-    with env(**_NO_ENV), fake_db(_row(api_key="sk-saved")), patch_chat(fake_chat):
+    with env(**_NO_ENV), fake_db(_row(api_key="sk-saved")), patch_chat(fake_chat), patch_models(_models_ok):
         r = S.test_connection({"api_key": "sk-draft", "model": "deepseek-reasoner"})
         assert r["ok"] is True, r
         assert seen.get("api_key") == "sk-draft", "草稿密钥没被用上"
@@ -517,7 +536,7 @@ def _t_test_saved_key():
         seen.update(kw.get("cfg") or {})
         return {"ok": True, "content": "可用", "latency_ms": 5}
 
-    with env(**_NO_ENV), fake_db(_row(api_key="sk-saved")), patch_chat(fake_chat):
+    with env(**_NO_ENV), fake_db(_row(api_key="sk-saved")), patch_chat(fake_chat), patch_models(_models_ok):
         r = S.test_connection({"api_key": ""})
         assert r["ok"] is True, r
         assert seen.get("api_key") == "sk-saved", seen.get("api_key")
@@ -540,12 +559,53 @@ def _t_diagnose():
         assert "9000" not in msg and "wren" not in msg.lower(), "报错里出现了内部地址：%s" % msg
 
 
+@case("误诊回归：探活已通时的超时，绝不能再说是「地址不通」")
+def _t_diagnose_timeout_not_network():
+    """2026-11-01 事故的断言：推理模型慢 23 秒被报成「地址不通或网络被拦」。
+
+    这条断言的作用不是「文案好看」，是**防止把人带去查网络**。
+    """
+    cfg = {"base_url": "http://host.docker.internal:11434/v1", "model": "deepseek-r1:7b", "api_key": "ollama"}
+    res = {"ok": False, "error": "TimeoutError: timed out"}
+    msg = S._diagnose(res, cfg, {"reachable": True, "model_count": 7, "model_listed": True})
+    assert "不通" not in msg and "网络被拦" not in msg, "探活已通却说地址不通：%s" % msg
+    assert "慢" in msg, "没指出真正原因（模型慢）：%s" % msg
+    assert "超时" in msg, "得告诉人调哪个参数：%s" % msg
+
+    # 没探活 / 探活不通 ⇒ 仍然允许说「地址不通」，这是对的，不能为了改文案把真问题含糊掉
+    plain = S._diagnose(res, cfg)
+    assert "不通" in plain, "真·连不上时反而不敢说了：%s" % plain
+
+
+@case("模型名不在清单：报「模型名不对」并给出可选数量，不去怪地址")
+def _t_diagnose_model_missing():
+    cfg = {"base_url": "http://host.docker.internal:11434/v1", "model": "deepseek-r9:99b", "api_key": "k"}
+    msg = S._diagnose({"ok": False, "status": 404}, cfg, {"reachable": True, "model_count": 7, "model_listed": False})
+    assert "模型名不对" in msg and "7" in msg, msg
+
+
+@case("模型清单：地址归一化与模型名匹配")
+def _t_models_url_and_match():
+    assert llm.models_url("http://h:11434/v1") == "http://h:11434/v1/models"
+    assert llm.models_url("http://h:11434/v1/") == "http://h:11434/v1/models"
+    assert llm.models_url("http://h:11434/v1/chat/completions") == "http://h:11434/v1/models"
+    assert llm.models_url("http://h:11434/v1/models") == "http://h:11434/v1/models"
+    assert llm.models_url("") == ""
+
+    pool = ["deepseek-r1:7b", "qwen2.5:1.5b"]
+    assert llm.model_listed("deepseek-r1:7b", pool) is True
+    assert llm.model_listed("qwen2.5", pool) is True, "省略 tag 应能对上"
+    assert llm.model_listed("deepseek-r1:8b", pool) is False, "tag 不同就是不同模型，不能放行"
+    assert llm.model_listed("qwen2.5:3b", pool) is False
+    assert llm.model_listed("anything", []) is None, "清单为空时无从判断，不许硬说没有"
+
+
 @case("测试连接失败：三段式——notice 给人话，error 留原始原因供排障")
 def _t_test_fail_notice():
     def fake_chat(messages, **kw):
         return {"ok": False, "status": 401, "error": "HTTP 401: invalid api key"}
 
-    with env(**_NO_ENV), fake_db(_row()), patch_chat(fake_chat):
+    with env(**_NO_ENV), fake_db(_row()), patch_chat(fake_chat), patch_models(_models_ok):
         r = S.test_connection({})
         assert r["ok"] is False, r
         # 用户话术：说清「该改哪里」，不含工具名与内部地址
@@ -555,6 +615,95 @@ def _t_test_fail_notice():
         blob = json.dumps(r, ensure_ascii=False)
         assert "sk-db-secret-9876" not in blob, "回吐了密钥"
         assert "api.deepseek.com" not in (r.get("notice") or ""), "用户话术里出现了地址"
+
+
+@case("测试连接：探活不通 ⇒ 立即返回，不再等一次生成（否则多等一整个超时）")
+def _t_test_probe_blocks_chat():
+    calls = []
+
+    def fake_chat(messages, **kw):
+        calls.append(kw)
+        return {"ok": False, "error": "TimeoutError: timed out"}
+
+    def fake_models(cfg, timeout=None):
+        return {"ok": False, "error": "URLError: Connection refused", "models": []}
+
+    with env(**_NO_ENV), fake_db(_row()), patch_chat(fake_chat), patch_models(fake_models):
+        r = S.test_connection({})
+        assert r["ok"] is False, r
+        assert calls == [], "地址都不通还去等生成，用户要多等一整个超时"
+        assert r["probe"]["reachable"] is False, r
+        assert "端口" in (r.get("notice") or "") or "连不上" in (r.get("notice") or ""), r.get("notice")
+
+
+@case("测试连接：地址没有 /models 接口（404）时不许判死，要继续用生成验证")
+def _t_test_models_404_not_fatal():
+    """有些自建代理/网关只实现 chat/completions，不实现 /models。
+
+    这一类必须放行到第二段：拿不到清单 ≠ 不能生成。
+    否则「昨天还能测通」的配置，今天升级后变成「地址不对」。
+    """
+    calls = []
+
+    def fake_chat(messages, **kw):
+        calls.append(kw)
+        return {"ok": True, "content": "可用", "latency_ms": 9}
+
+    def fake_models(cfg, timeout=None):
+        return {"ok": False, "status": 404, "error": "HTTP 404: not found", "models": []}
+
+    with env(**_NO_ENV), fake_db(_row()), patch_chat(fake_chat), patch_models(fake_models):
+        r = S.test_connection({})
+        assert len(calls) == 1, "404 应当放行到生成验证，实际调用次数 %d" % len(calls)
+        assert r["ok"] is True, r
+        assert r["probe"]["conclusive"] is False, r["probe"]
+
+
+@case("报错翻译：超时且探活无定论 ⇒ 说明「无法先确认可达性」，不假装确定")
+def _t_diagnose_timeout_inconclusive():
+    cfg = {"base_url": "https://proxy.example/v1", "model": "m", "api_key": "k"}
+    msg = S._diagnose(
+        {"ok": False, "error": "TimeoutError: timed out"},
+        cfg,
+        {"reachable": False, "conclusive": False},
+    )
+    assert "无法先单独确认可达性" in msg, msg
+
+
+@case("测试连接：探活通、生成超时 ⇒ 结论是「模型慢」，不是「连接失败」")
+def _t_test_slow_model():
+    def fake_chat(messages, **kw):
+        return {"ok": False, "error": "TimeoutError: timed out"}
+
+    with env(**_NO_ENV), fake_db(_row(model="deepseek-r1:7b", timeout=90)), patch_chat(fake_chat), patch_models(_models_ok):
+        r = S.test_connection({})
+        assert r["ok"] is False, "没真出内容就不能算通过"
+        assert r["probe"]["reachable"] is True and r["probe"]["model_listed"] is True, r["probe"]
+        assert "慢" in (r.get("notice") or ""), r.get("notice")
+        assert "不通" not in (r.get("notice") or ""), "又误诊成网络问题了：%s" % r.get("notice")
+
+
+@case("测试连接：超时跟随配置，不再写死 20 秒")
+def _t_test_timeout_follows_config():
+    seen = {}
+
+    def fake_chat(messages, **kw):
+        seen["timeout"] = kw.get("timeout")
+        return {"ok": True, "content": "可用", "latency_ms": 5}
+
+    with env(**_NO_ENV), fake_db(_row(timeout=90)), patch_chat(fake_chat), patch_models(_models_ok):
+        S.test_connection({})
+        assert seen["timeout"] == 90, "页面上填 90，测试却按 %s 秒判死" % seen["timeout"]
+
+    # 显式传 0 表示「没指定」⇒ 用配置值，不能被 _num 的下限夹成 3 秒
+    with env(**_NO_ENV), fake_db(_row(timeout=45)), patch_chat(fake_chat), patch_models(_models_ok):
+        S.test_connection({}, timeout=0)
+        assert seen["timeout"] == 45, seen["timeout"]
+
+    # 显式传值优先于配置
+    with env(**_NO_ENV), fake_db(_row(timeout=45)), patch_chat(fake_chat), patch_models(_models_ok):
+        S.test_connection({}, timeout=120)
+        assert seen["timeout"] == 120, seen["timeout"]
 
 
 # ---------------------------------------------------------------------------

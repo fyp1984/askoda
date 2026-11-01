@@ -528,6 +528,17 @@ export type LlmTestResp = {
   notice?: string
   error?: string
   config?: { base_url?: string; model?: string; credential_masked?: string }
+  /** 第一段探活（模型清单）的结论：用来区分「地址不通」和「模型太慢」 */
+  probe?: {
+    reachable?: boolean
+    status?: number
+    model_count?: number
+    /** true=清单里有；false=没有；null=清单为空或不认识，无法判断 */
+    model_listed?: boolean | null
+    /** 这段结论能否定案：false 表示该地址不提供模型清单，需靠生成结果判断 */
+    conclusive?: boolean
+    error?: string
+  }
 }
 
 // ---------------------------------------------------------------------------
