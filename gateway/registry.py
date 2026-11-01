@@ -149,8 +149,11 @@ def refresh(force: bool = False) -> list:
             key=key,
             label=row.get("label") or key,
             domain=row.get("domain") or "",
-            wren_url=row.get("wren_url") or "",
-            mdl_path=row.get("mdl_path") or "",
+            # wren_url / mdl_path 走 raw_row：list_rows() 是给界面看的脱敏视图，
+            # 里面没有地址字段。用它拼端点会得到空串 → 端点变成 "/mcp"
+            # → L4 语义门禁报 unknown url type: '/mcp'（2026-11-01 实测踩过）。
+            wren_url=(raw.get("wren_url") or "").strip(),
+            mdl_path=(raw.get("mdl_path") or "").strip(),
             pg_dsn=raw.get("pg_dsn") or "",
             mdl_data=mdl,
         )
