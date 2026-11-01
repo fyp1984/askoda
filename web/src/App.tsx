@@ -14,10 +14,9 @@ import PageDelivery from './pages/PageDelivery'
 import PageSettings from './pages/PageSettings'
 import PageMetrics from './pages/PageMetrics'
 import DemandStatusActions from './components/DemandStatusActions'
-import { Card } from './components/ui'
 
-/** 模块 key（左侧导航）。知识管理入口已按 CR009 剔除——知识收集/治理全部在 WeKnora 平台完成，Askoda 经 MCP 消费。 */
-type MenuKey = 'demand' | 'mdl' | 'datasource' | 'metrics' | 'audit' | 'system'
+/** 模块 key（左侧导航）。知识管理入口已按 CR009 剔除——知识收集/治理全部在 WeKnora 平台完成，Askoda 经 MCP 消费。复盘留痕菜单已移除：审计回放常驻「出数与交付」页底部。 */
+type MenuKey = 'demand' | 'mdl' | 'datasource' | 'metrics' | 'system'
 /** 需求链路内的步骤 key。'list' 是需求列表枢纽页，不计入向导五步。 */
 type StepKey = 'list' | 'submit' | 'analysis' | 'confirm' | 'sql' | 'delivery'
 
@@ -400,27 +399,6 @@ function AppShell() {
 
           {menu === 'metrics' ? (
             <PageMetrics dataset={dataset} actor={actor} readonly={readonlyModule} onNotify={notify} />
-          ) : null}
-
-          {menu === 'audit' ? (
-            <div className="page">
-              <Card title="复盘留痕" collapsible id="audit">
-                <p className="muted">
-                  审计回放按「需求」维度展开：打开一条需求，进入「出数与交付」，页面底部有一块
-                  <strong>「审计回放」</strong>（默认收起，点标题展开），可看到完整判断链回放
-                  （每次执行的 SQL、门禁结论、知识引用与责任人）。
-                </p>
-                <p>
-                  {demandId ? (
-                    <button className="primary" onClick={() => onWizardStep('delivery')}>
-                      前往当前需求的回放
-                    </button>
-                  ) : (
-                    '先选一条需求，再回放它的处理记录。'
-                  )}
-                </p>
-              </Card>
-            </div>
           ) : null}
 
           {menu === 'system' ? (

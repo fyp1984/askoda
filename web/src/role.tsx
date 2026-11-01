@@ -37,6 +37,9 @@ export interface NavItem {
  * 导航资产（= 前端 need ↔ BFF scope 契约的静态投影）。
  * 业务术语按《UI 优化方案 v1.0》权威表：业务说法字典 / 经验库 / 取数通道 /
  * 复盘留痕 / 数据空间。
+ * 菜单「复盘留痕」已移除（2026-11-01，用户判定）：该页只是一张指路卡，
+ * 真正的审计回放常驻「出数与交付」页底部（AuditReplay），按需求进入更顺；
+ * 术语本身仍属权威表，仅菜单不再单列。
  */
 export const NAV_ITEMS: NavItem[] = [
   // 我要做的事：需求全链路
@@ -73,13 +76,6 @@ export const NAV_ITEMS: NavItem[] = [
     access: { R1: 'hidden', R2: 'readonly', R3: 'full', R4: 'full' },
   },
   // 治理与运营
-  {
-    key: 'audit',
-    label: '复盘留痕',
-    zone: 'govern',
-    desc: '完整判断链回放，谁在何时改了什么',
-    access: { R1: 'hidden', R2: 'readonly', R3: 'readonly', R4: 'full' },
-  },
   {
     key: 'system',
     label: '系统设置',
