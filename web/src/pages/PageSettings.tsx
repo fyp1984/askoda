@@ -19,23 +19,9 @@ import KnowledgeBinding from '../components/KnowledgeBinding'
  *  3. **没配齐就说清缺什么**：`missing` 直接翻译成人话，不含内部字段名。
  */
 
-const MISSING_LABEL: Record<string, string> = {
-  base_url: '接口地址',
-  api_key: 'API Key',
-  model: '模型名',
-}
-
 const ACTION_LABEL: Record<string, string> = {
   save: '保存配置',
   reset: '恢复系统默认',
-}
-
-function whyNotEffective(s: LlmSettings | null): string {
-  if (!s) return '配置尚未读取'
-  if (!s.enabled) return '大模型开关是关的，SQL 生成走确定性规划器'
-  const miss = s.missing || []
-  if (miss.length) return `还缺 ${miss.map((m) => MISSING_LABEL[m] || m).join('、')}`
-  return '配置已生效'
 }
 
 function sourceLabel(s: LlmSettings | null): string {
@@ -271,12 +257,6 @@ export default function PageSettings({
           </div>
         ) : null}
 
-        <p className="muted">
-          {data?.effective
-            ? '大模型已接入：复杂需求会由它按语义层闭集写 SQL，写出来的每条仍要过后门禁（对象闭集、只读、需求要素覆盖）；过不了就退回规则生成，不会放行。'
-            : `当前未接入大模型：${whyNotEffective(data)}。此时需求照样能出数，用的是确定性规则（覆盖标准统计口径，复杂表达会明确拒绝并说明缺什么）。`}
-        </p>
-
         {data?.db_error ? (
           <div className="warnbox">
             <div className="warnbox-title">配置存储暂不可用</div>
@@ -340,9 +320,6 @@ export default function PageSettings({
                 setTested(null)
               }}
             />
-            <span className="hint-inline">
-              通常要带 <code>/v1</code> 这类后缀；用自建代理时填代理地址。
-            </span>
           </div>
           <div className="field">
             <label className="field-label" htmlFor="llm-model">
@@ -365,7 +342,6 @@ export default function PageSettings({
                 <option key={m} value={m} />
               ))}
             </datalist>
-            <span className="hint-inline">必须与服务商侧开通的模型名完全一致。</span>
           </div>
         </div>
 
@@ -386,9 +362,7 @@ export default function PageSettings({
               setTested(null)
             }}
           />
-          <span className="hint-inline">
-            凭据：{credHint}。密钥只进不出，页面不会回显明文。
-          </span>
+          <span className="hint-inline">凭据：{credHint}</span>
         </div>
 
         <div className="field-row">
@@ -461,7 +435,11 @@ export default function PageSettings({
             {tested.ok ? (
               <div className="hint-inline">
                 被测配置：{tested.config?.model || '-'} @ {tested.config?.base_url || '-'}
-                {tested.reply ? `　模型回话：${tested.reply}` : ''}
+                {tested.reply ? (
+                  <>
+                    　模型回话：<RichText text={tested.reply} />
+                  </>
+                ) : null}
               </div>
             ) : tested.error ? (
               <pre className="sqlbox small">{tested.error}</pre>
@@ -481,26 +459,6 @@ export default function PageSettings({
             ) : null}
           </div>
         ) : null}
-      </Card>
-
-      <Card title="生效规则与影响面" collapsible id="settings-llm-rules" defaultOpen={false}>
-        <ul className="notes">
-          <li>
-            地址 / 密钥 / 模型名<b>三项配齐且开关打开</b>才会真正调用大模型；任一项缺失即视为未接入。
-          </li>
-          <li>
-            未接入时行为与之前<b>完全一致</b>：需求分析、口径确认、规则生成、门禁、留痕都照常，
-            只是复杂表达会被明确拒绝并说明缺什么，不会硬编一条可能错的 SQL。
-          </li>
-          <li>
-            接入后每条候选 SQL 仍要过<b>同一套门禁</b>（对象闭集 / 只读 / 需求要素覆盖）；过不了就退回规则生成。
-            <b>门禁不放松，这是接大模型的前提。</b>
-          </li>
-          <li>
-            在界面保存过一次之后，<b>以界面配置为准</b>（环境变量只作首次默认值）；
-            想改回环境变量，点「恢复系统默认」。
-          </li>
-        </ul>
       </Card>
 
       {data?.recent_changes?.length ? (
@@ -529,9 +487,6 @@ export default function PageSettings({
               </tbody>
             </table>
           </div>
-          <p className="muted">
-            只记录「谁在什么时候改了什么」，不记录密钥本身——留痕不该成为第二份密钥。
-          </p>
         </Card>
       ) : null}
     </div>

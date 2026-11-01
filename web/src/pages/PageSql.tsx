@@ -310,7 +310,7 @@ export default function PageSql({
 
         {exec ? (
           <Section title="结果集" id="sql-resultset">
-            <p className="muted">{exec.execution_summary}</p>
+            <p className="muted"><RichText text={exec.execution_summary} /></p>
             <p>
               交付判定：
               {exec.deliverable ? (

@@ -179,9 +179,6 @@ export default function KnowledgeBinding({
 
       {visible.length > 0 ? (
         <>
-          <p className="muted">
-            下面是知识底座对该应用**可见**的全部库；勾选表示参与问答。不勾也可以保存——表示明确不接知识库。
-          </p>
           <div className="table-wrap">
             <table className="grid">
               <thead>
@@ -215,7 +212,9 @@ export default function KnowledgeBinding({
                           ? '环境变量默认'
                           : '-'}
                     </td>
-                    <td className="snippet">{kb.description || '-'}</td>
+                    <td className="snippet">
+                      {kb.description ? <RichText text={kb.description} /> : '-'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -241,9 +240,6 @@ export default function KnowledgeBinding({
             {busy === 'test' ? '检索中…' : '试一下'}
           </button>
         </div>
-        <span className="hint-inline">
-          用**已保存**的配置检索（改了勾选先保存，再试）。只回显命中条数与来源文档名。
-        </span>
       </div>
 
       {tested ? (
@@ -260,7 +256,7 @@ export default function KnowledgeBinding({
                 <li key={i}>
                   {s.document_name || '未知文档'}
                   {typeof s.similarity === 'number' ? `（相似度 ${s.similarity.toFixed(3)}）` : ''}
-                  {s.snippet ? <div className="hint-inline">{s.snippet}</div> : null}
+                  {s.snippet ? <div className="hint-inline"><RichText text={s.snippet} /></div> : null}
                 </li>
               ))}
             </ul>
@@ -275,19 +271,6 @@ export default function KnowledgeBinding({
           </button>
         </div>
       ) : null}
-
-      <ul className="notes">
-        <li>
-          可见范围由底座决定：在知识库平台把库绑定到本应用的 MCP 端点后，这里才会出现。
-          这是**硬边界**，勾选改不了它。
-        </li>
-        <li>
-          保存后<b>下一次检索即生效</b>，不用重启服务；正在跑的需求不受影响。
-        </li>
-        <li>
-          引用的文档名与片段会随每次取数一起留痕，可在「出数与交付」的回放里逐条核对。
-        </li>
-      </ul>
     </Card>
   )
 }
