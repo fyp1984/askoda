@@ -401,7 +401,8 @@ function AppShell() {
             <div className="page">
               <Card title="复盘留痕" collapsible id="audit">
                 <p className="muted">
-                  审计回放按「需求」维度展开：打开一条需求，进入「出数与交付」即可看到完整判断链回放
+                  审计回放按「需求」维度展开：打开一条需求，进入「出数与交付」，页面底部有一块
+                  <strong>「审计回放」</strong>（默认收起，点标题展开），可看到完整判断链回放
                   （每次执行的 SQL、门禁结论、知识引用与责任人）。
                 </p>
                 <p>

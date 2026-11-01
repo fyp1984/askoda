@@ -24,8 +24,28 @@ import { Card, ErrorBox, Loading } from './ui'
  *    而是回传后端算好的 `version_idx`，避免选第 3 行却回放成第 20 次。
  * 2. **快照 ≠ 当前态**。回放内容来自历史留痕，不受此后元数据/知识库变动影响。
  *    这一点必须写在界面上，否则会被误读成"现在再跑一次的结果"。
+ *
+ * 为什么默认收起（2026-11-01 用户反馈「太占篇幅」）：
+ * 这块只在「这条数为什么长这样」时才需要——日常交付路径（确认口径 → 出数 →
+ * 收口）根本用不到，却要占掉半屏。故整卡默认折叠，点开才展示。
+ * ⚠️ 数据加载放在**内层组件**里，跟着展开才 mount：折叠时不该发回放请求，
+ *    否则"收起来省篇幅"就只是视觉上的自我安慰，网络与后端照样每次跑一遍。
  */
 export default function AuditReplay({ demandId }: { demandId: string }) {
+  return (
+    <Card
+      title={`审计回放 · ${demandId}`}
+      tone="muted"
+      collapsible
+      defaultOpen={false}
+      id="delivery-audit-replay"
+    >
+      <AuditReplayBody demandId={demandId} />
+    </Card>
+  )
+}
+
+function AuditReplayBody({ demandId }: { demandId: string }) {
   const [data, setData] = useState<SqlRunReplayResp | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
   const [snapshot, setSnapshot] = useState<ReplaySnapshot | null>(null)
@@ -65,7 +85,7 @@ export default function AuditReplay({ demandId }: { demandId: string }) {
     [demandId],
   )
 
-  // 进入页面自动拉最近一次：技术人员的默认问题就是"最新那条数是怎么来的"
+  // 展开后才 mount，这时才拉最近一次：技术人员的默认问题就是"最新那条数是怎么来的"
   useEffect(() => {
     void load(0)
   }, [load])
@@ -80,22 +100,19 @@ export default function AuditReplay({ demandId }: { demandId: string }) {
   const structReq = snapshot?.input?.structured_requirement
 
   return (
-    <Card
-      title={`审计回放 · ${demandId}`}
-      tone="muted"
-      extra={
-        <button onClick={() => load(0)} disabled={busy}>
+    <>
+      <div className="audit-bar">
+        <p className="muted">
+          按版本精确复原当次运行的完整判断链：当时的结构化需求 → SQL → 门禁 → 结果 → 知识引用。
+          快照来自历史留痕，<strong>不受此后元数据或知识库变动影响</strong>。
+        </p>
+        <button type="button" onClick={() => load(0)} disabled={busy}>
           {busy ? '回放中…' : '刷新'}
         </button>
-      }
-    >
+      </div>
+
       <ErrorBox error={error} />
       {busy && !data ? <Loading tip="正在复原执行快照…" /> : null}
-
-      <p className="muted">
-        按版本精确复原当次运行的完整判断链：当时的结构化需求 → SQL → 门禁 → 结果 → 知识引用。
-        快照来自历史留痕，<strong>不受此后元数据或知识库变动影响</strong>。
-      </p>
 
       {!busy && versions.length === 0 ? (
         <p className="muted">{data?.notice || '该需求还没有任何 SQL 执行记录，无可回放。'}</p>
@@ -314,6 +331,6 @@ export default function AuditReplay({ demandId }: { demandId: string }) {
           ) : null}
         </>
       ) : null}
-    </Card>
+    </>
   )
 }

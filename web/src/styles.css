@@ -743,6 +743,16 @@ table.grid td:first-child, table.grid th:first-child { white-space: nowrap; }
 .sec-body { margin-top: 10px; }
 .sec-block.collapsed > .sec-body { display: none; }
 
+/* ── 审计回放：说明文字与「刷新」同排 ──
+   刷新按钮原本挂在卡片头上，但卡片改成默认折叠后，头部只剩折叠开关；
+   按钮跟着内容走，展开才出现，避免「收起来的卡片上还挂着一个能点出请求的按钮」。 */
+.audit-bar {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; margin-bottom: 10px;
+}
+.audit-bar > .muted { margin: 0; flex: 1 1 auto; min-width: 0; }
+.audit-bar > button { flex: 0 0 auto; }
+
 /* ── 槽位卡折叠（六槽位内每一项；红色框圈住的就是槽位名）── */
 .slot-toggle {
   display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0;

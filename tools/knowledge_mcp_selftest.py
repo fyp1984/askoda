@@ -20,6 +20,7 @@ status → delete 全链路闭环，并断言返回形状与 RAGFlow 直连版�
 """
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gateway"))
 
@@ -86,8 +87,8 @@ def main():
     if not ok:
         fails.append("health 失败：%s" % h)
 
-    # 2. list_documents：至少能列出（askoda-零售会员域应有 4 篇语料）
-    lst = kb.list_documents(limit=20)
+    # 2. list_documents：至少能列出（当前生效库里应有语料）
+    lst = kb.list_documents(limit=50)
     ok = _check("list_documents.ok", lst.get("ok") is True and lst.get("total", 0) > 0,
                 "total=%s" % lst.get("total"))
     docs = lst.get("documents") or []
@@ -111,7 +112,21 @@ def main():
         fails.append("search 失败：%s" % str(res)[:300])
 
     # 4. upload → status → delete 闭环（临时件，验证后即删）
-    test_name = "mcp-selftest-临时件.md"
+    #
+    # ★ 名字必须每轮不同。此前用固定名 `mcp-selftest-临时件.md`：一旦某轮在删除前
+    #   异常退出（底座忙、超时、进程被杀），残留件会让**下一轮上传被防重拦下**，
+    #   门禁从此常红——而根因只是"上次没跑完"。实测 2026-11-01 就栽在这里。
+    # ★ 顺手把历次留下的同名临时件清掉：只认 `mcp-selftest-` 前缀，
+    #   绝不碰业务文档；清不掉也不影响本轮结论（不加入 fails）。
+    for d in docs:
+        if str(d.get("name", "")).startswith("mcp-selftest-"):
+            try:
+                kb.delete_document(d["id"], actor="mcp-selftest-清理")
+                print("  [清理] 上一轮残留的临时件 %s" % d.get("name"))
+            except Exception as e:  # noqa: BLE001
+                print("  [清理] 残留件 %s 未清掉（%s），不影响本轮判断"
+                      % (d.get("name"), type(e).__name__))
+    test_name = "mcp-selftest-临时件-%s.md" % datetime.now().strftime("%m%d-%H%M%S")
     up = kb.upload_document(test_name, "# MCP 自检件\n\n集成自证临时文档，验证后即删。")
     ok = _check("upload.ok", up.get("ok") is True, "id=%s" % (up.get("document_ids") or ["-"])[0])
     if not up.get("ok"):
