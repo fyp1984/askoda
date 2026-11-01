@@ -63,6 +63,15 @@ export const NAV_ITEMS: NavItem[] = [
     desc: '已接入的数据源与表',
     access: { R1: 'readonly', R2: 'readonly', R3: 'full', R4: 'readonly' },
   },
+  {
+    key: 'metrics',
+    label: '口径维护',
+    zone: 'assets',
+    desc: '业务口径怎么算：登记、校验、当场试一句',
+    // 口径是「怎么算」的约定，改错不会报错、只会算错 ⇒ 只给数据管家与管理员改。
+    // 分析师能看，业务方不看（他们关心的是结果对不对，不是公式怎么写）。
+    access: { R1: 'hidden', R2: 'readonly', R3: 'full', R4: 'full' },
+  },
   // 治理与运营
   {
     key: 'audit',

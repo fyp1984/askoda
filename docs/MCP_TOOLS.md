@@ -1,9 +1,9 @@
-# MCP 工具面参考（51 个工具）
+# MCP 工具面参考（65 个工具）
 
 > 本文是 [Askoda](../README.md) 的**能力清单与操作手册**。
 > 想快速跑起来看[快速开始](../README.md#快速开始)；要部署到机器上看[部署手册](DEPLOYMENT.md)。
 
-51 个工具由网关通过**一个** streamable-http 端点暴露，按业务域分为十组。
+65 个工具由网关通过**一个** streamable-http 端点暴露，按业务域分为十一组。
 **工具名与入参以 `gateway/app.py` 的 `@mcp.tool` 注册处为唯一事实源**，
 下表与之逐条一致（自动核验：`python3 tools/mcp_acceptance_check.py`）。
 返回字段的完整承诺与边界条件见项目文档工作空间的《MCP 工具契约与注册说明》。
@@ -27,30 +27,35 @@
 
 | # | 域 | 数 | 工具 |
 |---|---|---|---|
-| 1 | 健康与数据集 | 4 | `gateway_health` `datasets` `knowledge_health` `schema_version` |
+| 1 | 健康与数据集 | 8 | `gateway_health` `datasets` `dataset_register` `dataset_probe` `dataset_registry` `dataset_delete` `knowledge_health` `schema_version` |
 | 2 | 兜底规划与 Wren 直通 | 5 | `plan` `wren_manifest` `wren_dry_run` `wren_query` `ask` |
-| 3 | 需求受理 | 6 | `demand_create` `demand_get` `demand_list` `demand_summarize` `demand_set_status` `demand_similar_precheck` |
-| 4 | 知识储备（检索 + 准入） | 7 | `knowledge_search` `knowledge_documents` `knowledge_retire` `knowledge_citation_list` `knowledge_upload` `knowledge_document_status` `knowledge_delete` |
+| 3 | 需求受理 | 10 | `demand_create` `demand_get` `demand_list` `demand_summarize` `demand_set_status` `demand_clarify` `demand_return` `demand_supplement` `demand_purge` `demand_similar_precheck` |
+| 4 | 知识储备（检索 + 准入） | 10 | `knowledge_search` `knowledge_documents` `knowledge_retire` `knowledge_citation_list` `knowledge_upload` `knowledge_document_status` `knowledge_delete` `knowledge_list_kbs` `knowledge_bind` `knowledge_settings` |
 | 5 | 元数据字典 | 3 | `metadata_lookup` `metadata_glossary` `metadata_collect` |
 | 6 | 附件 | 3 | `attachment_put` `attachment_list` `attachment_url` |
 | 7 | 语义分析与确认闭环 | 7 | `analysis_first_round` `analysis_rounds` `analysis_get` `analysis_evidence` `confirmation_generate` `confirmation_list` `confirmation_answer` |
 | 8 | 结构化需求与上下文包 | 5 | `schema_scan` `requirement_structured` `requirement_get` `schema_candidates` `sql_context_pack` |
 | 9 | 生成 · 门禁 · 执行 | 8 | `sql_review` `sql_plan` `sql_generate` `sql_execute_readonly` `sql_run_get` `sql_run_list` `sql_run_replay` `sql_optimize` |
 | 10 | 系统配置（大模型连接） | 3 | `llm_config_get` `llm_config_set` `llm_config_test` |
+| 11 | 口径维护 | 3 | `metric_list` `metric_save` `metric_preview` |
 
-合计 **51**。
+合计 **65**（2026-11-01 用 `tools/list` 实测；M10/M11 新增的 14 个此前未进本表，已补齐）。
 
 > ⚠️ **工具面是按位契约**：修改工具的**入参名或顺序**会让已发布的调用方全部失效。
 > 新增可以，**改名与改顺序不行**——这是六条红线之一。
 
 ---
 
-#### 域 1 · 健康与数据集（4）
+#### 域 1 · 健康与数据集（8）
 
 | 工具                 | 入参            | 返回要点                                                                                  | 用途                 |
 | ------------------ | ------------- | ------------------------------------------------------------------------------------- | ------------------ |
 | `gateway_health`   | —             | `{status, service, version, datasets[], components{meta_db, attachments, knowledge}}` | 全局探活；先跑它再谈别的       |
 | `datasets`         | —             | `{datasets:[{key, label, 模型数, 字段数, 关系数}]}`                                            | 确认双库在册、选库          |
+| `dataset_register` | ★`key`, `mdl_json`/`mdl_path`, `engine`, `label`, `domain`, `enabled` | `{ok, dataset}`；MDL 缺 models 直接拒 | 登记新库（MDL 入库，不落文件） |
+| `dataset_probe`    | ★`key`, `engine`, `dbname`, `mdl_json?` | `{ok, checks{连接/引擎/MDL 三判据分开报}}` | 登记前自检 |
+| `dataset_registry` | — | `{items[], 每个含 key/label/models/fields}` | 已登记清单 |
+| `dataset_delete`   | ★`key`, `actor` | `{ok}`；**只取消登记，不删业务库** | 下线一个库 |
 | `knowledge_health` | —             | `{ok, 可见数据集, 已解析文档数}`                                                                 | 知识底座可用性            |
 | `schema_version`   | `dataset="B"` | `{schema_version, 表数, 字段数}`                                                           | 取最近一次 Schema 快照版本号 |
 
@@ -66,7 +71,7 @@
 
 > `plan` / `ask` **只走确定性规划器**，不做语义分析与确认流转；后者是 `analysis_first_round` 的职责。
 
-#### 域 3 · 需求受理（6）
+#### 域 3 · 需求受理（10）
 
 | 工具                        | 入参                                                                                                                                                      | 返回要点                                                        | 用途   |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ---- |
@@ -75,11 +80,15 @@
 | `demand_list`             | `status=None`, `limit=20`, `offset=0`                                                                                                                   | 需求单列表（可按状态过滤）                                               | 看板   |
 | `demand_summarize`        | `demand_id=None`                                                                                                                                        | 给单号=单汇总；不给=全局看板                                             | 管理   |
 | `demand_set_status`       | ★`demand_id` ★`status`, `note=None`, `actor=""`                                                                                                         | 状态流转，不可覆盖、逐条留痕                                              | 回退闭环 |
+| `demand_clarify`          | ★`demand_id`, `actor=""`                                                                                                                                | 生成待确认问题清单（五槽位缺口）                                            | 读懂需求 |
+| `demand_return`           | ★`demand_id` ★`reason`, `actor=""`                                                                                                                      | 退回业务方，原因留痕                                                      | 退回   |
+| `demand_supplement`       | ★`demand_id` ★`content`, `actor=""`                                                                                                                     | 补录业务说明，写事件流                                                     | 补料   |
+| `demand_purge`            | `demand_ids=[]`, `dry_run=true`, `actor=""`                                                                                                             | **先 dry-run 摊开各子表行数**，确认后才真删；默认不删                            | 清理测试数据 |
 | `demand_similar_precheck` | ★`title`, `description=""`, `top=5`, `threshold=0.55`                                                                                                   | 提交前查重：返回相似需求候选与相似度；独立入口、不写库                                 | 提交门户 |
 
 状态取值：`待分析 / 分析中 / 待业务确认 / 待补充修改 / 待审核通过 / 已通过 / 已退回`。
 
-#### 域 4 · 知识储备（7）
+#### 域 4 · 知识储备（10）
 
 <p align="center">
 
@@ -92,6 +101,9 @@
 | `knowledge_delete`          | ★`document_id`, `actor=""`                                                                 | 撤库结果；只删 RAGFlow 文档，不碰需求单与附件                                                                  | 知识准入 · 撤库 |
 | `knowledge_retire`          | ★`citation_id`, `reason=""`, `actor=""`                                                    | 把某条知识引用标记为已下架/已回退                                                                            | 引用留痕治理    |
 | `knowledge_citation_list`   | `demand_id=""`, `include_retired=False`, `limit=50`                                        | 知识引用留痕记录（按时间倒序）                                                                              | 引用可追溯     |
+| `knowledge_list_kbs`        | —                                                                                          | 可见知识库清单（名称 / 文档数 / 能力位）                                                                    | 绑定前先看有什么 |
+| `knowledge_bind`            | ★`kb_ids=[]`, `actor=""`                                                                   | 绑定生效知识库；**三层作用域：底座可见 > 界面 > 单次显式**                                                          | 切换知识底座    |
+| `knowledge_settings`        | —                                                                                          | 当前绑定、候选库、生效来源（`db`/`env`）                                                                  | 设置页读取     |
 
 </p>
 
@@ -179,7 +191,7 @@
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------ |
 | `llm_config_get`  | —                                                                                                                                                                           | `{source, effective, missing[], has_credential, credential_masked, providers[], recent_changes[]}`；**不回明文密钥** | 读配置与生效状态 |
 | `llm_config_set`  | `provider=""`, `base_url=""`, `model=""`, `api_key=""`, `enabled=true`, `temperature=0`, `timeout=60`, `max_repair=1`, `clear_credential=false`, `reset=false`, `actor=""` | 部分更新；`api_key` 留空=不改，`clear_credential`=清空，`reset`=退回环境变量；校验不过返回 `{ok:false, errors[]}` 且**不落库**          | 保存并即时生效 |
-| `llm_config_test` | `provider=""`, `base_url=""`, `model=""`, `api_key=""`, `timeout=20`                                                                                                        | `{ok, latency_ms, notice, used_saved_credential, config{...}}`；失败时 `notice` 给人话、`error` 留原始原因                 | 先测后存    |
+| `llm_config_test` | `provider=""`, `base_url=""`, `model=""`, `api_key=""`, `timeout=0`（0=跟随配置）                                                                                                        | `{ok, latency_ms, notice, probe{reachable, model_count, model_listed}, used_saved_credential}`；**先探活再生成**，失败时可区分「地址不通」与「模型太慢」                 | 先测后存    |
 
 > **配置优先级**：元数据库 `llm_settings` 有行 ⇒ 整行生效（界面保存的）；没有行 ⇒ `LLM_*` 环境变量。
 > **不在字段级混合**——一半来自库、一半来自环境变量的组合没人能解释清楚。
@@ -187,6 +199,29 @@
 >
 > **密钥只进不出**：三个工具的任何出参都不含明文密钥（只给 `credential_masked` 尾号）；
 > 变更留痕写 `config_events`，只记「是否换过凭据」，不记密钥本身。
+>
+> **测试连接为什么分两段**：推理模型（如 `deepseek-r1:7b`）答一句「可用」也要 20–30 秒，
+> 若只发一次生成请求，超时会把「模型慢」误报成「地址不通」（2026-11-01 实测踩过）。
+> 故先 `GET {base}/models` 秒级确认地址/密钥/模型名，再发一次真实生成。
+
+#### 域 11 · 口径维护（3）
+
+| 工具               | 入参                                        | 返回要点                                                                 | 用途       |
+| ---------------- | ----------------------------------------- | -------------------------------------------------------------------- | -------- |
+| `metric_list`    | `dataset="C"`                             | `{version, views[{name, columns, comment, statement}], metrics[], models}` | 读当前生效口径 |
+| `metric_save`    | ★`dataset`, `metrics{views,metrics}`, `dry_run=false`, `actor` | 校验 → **热部署引擎** → 落库；返回 `{ok, version, added[], removed[], persist_warning}`；校验不过返回 `problems[]` 逐条原因 | 保存并生效    |
+| `metric_preview` | `dataset="C"`, ★`question`, `limit=30`     | `{metric, metric_label, sql, row_count, columns, rows}`；不建需求单、只读执行 | 改完试一句    |
+
+> **口径的真源是库**（`dataset_registry.mdl_json` 的 `x_askoda_metrics`），不是仓库里的文件；
+> `db/credit/04_metrics.json` 只是初始种子（重建环境时导入）。
+> 为什么：网关规划器读的就是库，文件改了不跑脚本就**静默不生效**。
+>
+> **保存顺序不可反**：先部署引擎、成功后才落库。反过来会出现「库里是新口径、引擎还是旧的」，
+> 页面显示改了、跑出来还是旧数——最难查的一种状态。
+>
+> ⚠️ **引擎启动读工作区 `mdl.json`**：热部署只改进程内存，所以保存后还要写回
+> `/app/engine-workspace-c`（compose 里的 bind mount）。写不回去时保存照常成功，
+> 但 `persist_warning` 会说明「引擎重启后会回滚」——这条必须显示给用户。
 
 #### 典型操作动线（八步链路）
 
@@ -213,7 +248,7 @@ demand_create
 # 1) 探活：status=ok，双库都 ok
 curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool
 
-# 2) 握手 + 取工具面（应返回 51 个工具）
+# 2) 握手 + 取工具面（应返回 65 个工具）
 SID=$(curl -sD- -o/dev/null -X POST http://127.0.0.1:18080/mcp \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}}' \
@@ -239,7 +274,7 @@ curl -s -X POST http://127.0.0.1:18080/mcp \
 #### 5.10.1 接入前后自查（3 步）
 
 1. `curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool` → `status` 应为 `ok`（知识库单独展示，不可用不拖垮整体，会如实进 `degraded`）；
-2. 客户端 `tools/list` → 应为 **51 个**；
+2. 客户端 `tools/list` → 应为 **65 个**；
 3. 冒烟：调 `datasets` 看双库（A / B）是否都在册。
 
 #### 5.10.2 常用运维动作
@@ -248,7 +283,7 @@ curl -s -X POST http://127.0.0.1:18080/mcp \
 docker compose ps                 # 看状态（wren-mcp-a/b、assistant-minio 无 healthcheck，只显示 Up 是正常的，见 5.2）
 docker compose up -d --build      # 改过 gateway/ 后重建
 python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # 双探活（HTTP + MCP，含真调一次 gateway_health）
-python3 tools/mcp_acceptance_check.py                                 # 工具面 51 个逐条核对
+python3 tools/mcp_acceptance_check.py                                 # 工具面 65 个逐条核对
 ```
 
 > ⚠️ 容器内代码平铺 `/app`，但 `tools/` 不在 build context —— 跑容器内脚本前需 `docker cp`；走 HTTP 的脚本**必须在宿主跑**，容器内会 connection refused。

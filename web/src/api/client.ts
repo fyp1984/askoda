@@ -11,12 +11,15 @@ export class ApiError extends Error {
   code: string
   hint: string
   status: number
+  /** 原始错误体（口径校验的逐条原因等结构化信息在这里，不进 message） */
+  body: Partial<ApiErrorBody> & Record<string, unknown>
   constructor(status: number, body: Partial<ApiErrorBody>) {
     super(body.message || `请求失败（HTTP ${status}）`)
     this.name = 'ApiError'
     this.status = status
     this.code = body.code || 'UNKNOWN'
     this.hint = body.hint || '请稍后重试；若持续失败，请联系运维。'
+    this.body = (body ?? {}) as Partial<ApiErrorBody> & Record<string, unknown>
   }
 }
 
@@ -53,6 +56,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const post = <T,>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) })
+
+const put = <T,>(path: string, body?: unknown) =>
+  request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) })
 
 export const api = {
   health: () => request<Record<string, unknown>>('/health'),
@@ -178,6 +184,14 @@ export const api = {
   llmSettings: () => request<LlmSettings>('/settings/llm'),
   saveLlmSettings: (body: LlmSettingsIn) => post<LlmSaveResp>('/settings/llm', body),
   testLlm: (body: LlmTestIn) => post<LlmTestResp>('/settings/llm/test', body),
+
+  // ---- 口径维护（M11）----
+  // 口径是数据：读回来的是当前生效版本，保存走的是一次「校验 + 热部署 + 落库」。
+  metrics: (dataset: string) => request<MetricsResp>(`/metrics/${encodeURIComponent(dataset)}`),
+  saveMetrics: (body: { dataset: string; metrics: unknown; dry_run?: boolean; actor?: string }) =>
+    put<MetricSaveResp>('/metrics', body),
+  previewMetric: (body: { dataset: string; question: string; limit?: number }) =>
+    post<MetricPreviewResp>('/metrics/preview', body),
 
   // ---- 系统设置 · 知识库接入（M10）----
   knowledgeSettings: () => request<KnowledgeSettings>('/settings/knowledge'),
@@ -632,4 +646,71 @@ export type PurgeResp = {
   would_delete?: Record<string, number>
   missing?: string[]
   notice?: string
+}
+
+// ---------------------------------------------------------------------------
+// 口径维护（M11）
+// ---------------------------------------------------------------------------
+export type MetricView = {
+  name: string
+  columns?: string[]
+  comment?: string
+  /** 只有编辑草稿里才有完整语句；列表读回来是空的（视图由数据侧维护） */
+  statement?: string
+}
+
+export type MetricDef = {
+  key: string
+  label: string
+  aliases: string[]
+  view: string
+  expr: string
+  unit?: string
+  fmt?: string
+  /** snapshot=时点快照（取最新一期）；flow=区间流水（按自然月） */
+  time_mode: 'snapshot' | 'flow'
+  time_col: string
+  dims: string[]
+  definition?: string
+  caveats?: string
+  source?: string
+}
+
+export type MetricsResp = {
+  ok: boolean
+  dataset: string
+  version: string
+  views: MetricView[]
+  metrics: MetricDef[]
+  models?: number
+  updated_by?: string
+  updated_at?: string
+}
+
+export type MetricSaveResp = {
+  ok: boolean
+  dataset: string
+  version: string
+  views: number
+  metrics: number
+  added: string[]
+  removed: string[]
+  dry_run?: boolean
+  notice?: string
+}
+
+export type MetricPreviewResp = {
+  ok: boolean
+  question: string
+  metric?: string
+  metric_label?: string
+  engine?: string
+  sql?: string
+  row_count?: number
+  columns?: string[]
+  rows?: Record<string, unknown>[]
+  blocked?: boolean
+  reason?: string
+  guide?: string
+  error?: string
 }

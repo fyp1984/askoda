@@ -89,6 +89,8 @@ def _refuse(dataset_key, concept, reason, guide):
         "dataset": dataset_key,
         "engine": "metric-planner",
         "blocked": True,
+        "metric": "",
+        "metric_label": "",
         "intent": "硬门禁拒绝：「%s」" % concept,
         "sql": "",
         "objects": [],
@@ -107,6 +109,10 @@ def _ok(dataset_key, metric, sql, objects, notes):
         "dataset": dataset_key,
         "engine": "metric-planner",
         "blocked": False,
+        # 命中口径单独给出来：需求留痕与「口径维护」页的试跑都要显示「用的是哪一条」，
+        # 只从 intent 里 regex 抠名字太脆。
+        "metric": metric.get("key") or "",
+        "metric_label": metric.get("label") or metric.get("key") or "",
         "intent": "命中口径「%s」" % (metric.get("label") or metric.get("key")),
         "sql": sql,
         "objects": objects,

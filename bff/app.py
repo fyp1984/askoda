@@ -75,19 +75,24 @@ app.add_middleware(
 # PRD §12.7 界面原则 2：任何硬门禁拒绝都要附「为什么拒绝 + 去哪里治理」。
 # --------------------------------------------------------------------------
 class ApiError(Exception):
-    def __init__(self, code: str, message: str, hint: str, status: int = 400):
+    def __init__(self, code: str, message: str, hint: str, status: int = 400,
+                 extra: dict | None = None):
         super().__init__(message)
         self.code = code
         self.message = message
         self.hint = hint
         self.status = status
+        # 结构化附加信息（如口径校验的逐条原因）。**不参与脱敏**：
+        # 调用方只放已经确认可以给前端看的内容，别把原始堆栈塞进来。
+        self.extra = extra or {}
 
 
 @app.exception_handler(ApiError)
 async def _api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
     return JSONResponse(
         status_code=exc.status,
-        content={"code": exc.code, "message": redact_mcp_tool(exc.message), "hint": exc.hint},
+        content={"code": exc.code, "message": redact_mcp_tool(exc.message), "hint": exc.hint,
+                 **(exc.extra or {})},
     )
 
 
@@ -1327,6 +1332,106 @@ async def datasource_unregister(key: str, actor: str = "") -> Any:
             code="DATASET_DELETE_FAILED",
             message=str(exc),
             hint="移除失败。请稍后重试；业务库本身不受影响。",
+        )
+    return sanitize(data)
+
+
+# --------------------------------------------------------------------------
+# M11 · 口径维护
+#
+# 为什么口径要能在这里改
+# ----------------------
+# 口径（「不良率怎么算」「放款金额含不含冲正」）以前写在文件里，改一条要改 JSON、
+# 跑脚本、重建镜像。业务侧一句话说不清的口径，就这么长期停在"没人敢改"的状态。
+# 搬到界面上以后，改完点保存当场生效；改错了由同一套判据拦下来（与门禁同一份实现）。
+# --------------------------------------------------------------------------
+@app.get(f"{API}/metrics/{{dataset}}", tags=["口径维护"])
+async def metrics_get(dataset: str) -> Any:
+    """该数据集当前生效的口径：视图 + 口径 + 版本。"""
+    try:
+        data = await call("metric_list", {"dataset": dataset.strip().upper()})
+    except McpError as exc:
+        raise ApiError(
+            code="METRIC_UNAVAILABLE",
+            message=str(exc),
+            hint="网关未就绪或元数据库不可用；先确认后端状态，再回来刷新。",
+        )
+    if data.get("ok") is False:
+        raise ApiError(
+            code=data.get("code") or "METRIC_UNAVAILABLE",
+            message=data.get("error") or "读不到口径",
+            hint="确认该数据集已登记，且 MDL 已内联到登记表（数据源页可查）。",
+        )
+    return sanitize(data)
+
+
+class MetricSaveIn(BaseModel):
+    dataset: str = Field(default="C")
+    metrics: dict[str, Any] = Field(default_factory=dict, description="整份口径草稿：views + metrics")
+    dry_run: bool = Field(default=False, description="true=只校验不保存")
+    actor: str = Field(default="")
+
+
+@app.put(f"{API}/metrics", tags=["口径维护"])
+async def metrics_save(body: MetricSaveIn) -> Any:
+    """保存口径并即时生效。
+
+    校验不通过返回 422 与**逐条原因**：口径写错不会报错、只会算错，
+    所以宁可拦在保存这一步，也不能让它悄悄生效。
+    """
+    try:
+        data = await call(
+            "metric_save",
+            {
+                "dataset": body.dataset.strip().upper(),
+                "metrics": body.metrics,
+                "dry_run": body.dry_run,
+                "actor": body.actor,
+            },
+        )
+    except McpError as exc:
+        raise ApiError(
+            code="METRIC_SAVE_FAILED",
+            message=str(exc),
+            hint="保存没成功。确认网关与引擎都在线后重试；库里的旧口径仍然可用。",
+        )
+    if data.get("ok") is False:
+        problems = data.get("problems") or []
+        raise ApiError(
+            code=data.get("code") or "METRIC_INVALID",
+            message=(data.get("error") or "保存被拒绝"),
+            hint="\n".join(problems) if problems else "按提示改完再保存。",
+            extra={"problems": problems, "notice": data.get("notice") or ""},
+        )
+    return sanitize(data)
+
+
+class MetricPreviewIn(BaseModel):
+    dataset: str = Field(default="C")
+    question: str = Field(default="")
+    limit: int = Field(default=30, ge=1, le=200)
+
+
+@app.post(f"{API}/metrics/preview", tags=["口径维护"])
+async def metrics_preview(body: MetricPreviewIn) -> Any:
+    """用一句话试跑当前口径：命中哪条、生成什么 SQL、返回几行。"""
+    if not body.question.strip():
+        raise ApiError(
+            code="QUESTION_REQUIRED",
+            message="没有给试跑的问法。",
+            hint="写一句业务话术，例如「统计本月各贷款产品的放款金额」。",
+        )
+    try:
+        data = await call(
+            "metric_preview",
+            {"dataset": body.dataset.strip().upper(), "question": body.question.strip(),
+             "limit": body.limit},
+        )
+    except McpError as exc:
+        raise ApiError(
+            code="METRIC_PREVIEW_FAILED",
+            message=str(exc),
+            hint="试跑没成功。确认引擎在线、口径已保存后再试。",
         )
     return sanitize(data)
 

@@ -12,11 +12,12 @@ import PageConfirm from './pages/PageConfirm'
 import PageSql from './pages/PageSql'
 import PageDelivery from './pages/PageDelivery'
 import PageSettings from './pages/PageSettings'
+import PageMetrics from './pages/PageMetrics'
 import DemandStatusActions from './components/DemandStatusActions'
 import { Card } from './components/ui'
 
 /** 模块 key（左侧导航）。知识管理入口已按 CR009 剔除——知识收集/治理全部在 WeKnora 平台完成，Askoda 经 MCP 消费。 */
-type MenuKey = 'demand' | 'mdl' | 'datasource' | 'audit' | 'system'
+type MenuKey = 'demand' | 'mdl' | 'datasource' | 'metrics' | 'audit' | 'system'
 /** 需求链路内的步骤 key。'list' 是需求列表枢纽页，不计入向导五步。 */
 type StepKey = 'list' | 'submit' | 'analysis' | 'confirm' | 'sql' | 'delivery'
 
@@ -395,6 +396,10 @@ function AppShell() {
               onNotify={notify}
               onRegistryChanged={loadDatasets}
             />
+          ) : null}
+
+          {menu === 'metrics' ? (
+            <PageMetrics dataset={dataset} actor={actor} readonly={readonlyModule} onNotify={notify} />
           ) : null}
 
           {menu === 'audit' ? (

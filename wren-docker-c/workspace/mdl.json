@@ -1,33 +1,35 @@
 {
-  "catalog": "credit",
-  "schema": "public",
-  "dataSource": "postgres",
+  "views": [
+    {
+      "name": "mt_putout_m",
+      "statement": "SELECT date_trunc('month', a.putoutdate) AS stat_month, a.businesstype AS prdno, a.accountingorgid AS org_no, c.customertype AS cust_type, SUM(a.businesssum) AS putout_amt, COUNT(*) AS putout_cnt FROM acct_loan a LEFT JOIN customer_info c ON c.customerid = a.customerid GROUP BY date_trunc('month', a.putoutdate), a.businesstype, a.accountingorgid, c.customertype"
+    },
+    {
+      "name": "mt_loan_snap",
+      "statement": "SELECT dp_load_dt AS stat_date, prdno, prdnm, acgorgno AS org_no, acgorgnm AS org_nm, blgbrchno AS branch_no, fivelvlcgycd_jg AS five_level, custtypbcgy AS cust_type, bsnsts, SUM(dblbal) AS loan_bal, SUM(coalesce(oduebal, 0)) AS overdue_bal, SUM(dblamt) AS loan_amt, COUNT(*) AS loan_cnt, COUNT(DISTINCT bnkincustno) AS cust_cnt FROM rpt_loan_dtl GROUP BY dp_load_dt, prdno, prdnm, acgorgno, acgorgnm, blgbrchno, fivelvlcgycd_jg, custtypbcgy, bsnsts"
+    }
+  ],
   "models": [
     {
       "name": "dwd_lan_dbl_fcti",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "dwd",
-        "table": "dwd_lan_dbl_fcti"
-      },
       "columns": [
         {
           "name": "dp_load_dt",
           "type": "date",
-          "isPrimaryKey": true,
-          "description": "数据日期；快照日期（分区字段）；非空"
+          "description": "数据日期；快照日期（分区字段）；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "syscgy",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "系统类别；业务系统类别码（101=信贷，304=助贷，101 之外的信用卡另处理）；码值：SYSCGY；非空"
+          "description": "系统类别；业务系统类别码（101=信贷，304=助贷，101 之外的信用卡另处理）；码值：SYSCGY；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "dblno",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "借据号；数仓口径借据主键；非空"
+          "description": "借据号；数仓口径借据主键；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "dblamt",
@@ -90,22 +92,22 @@
           "description": "合同编号；所属合同编号"
         }
       ],
+      "primaryKey": "dp_load_dt",
       "description": "贷款借据事实表；粒度：一行一条借据在某个快照日（DP_LOAD_DT）的事实；坑点：★ 数仓表必须带快照日条件",
-      "primaryKey": "dp_load_dt"
+      "tableReference": {
+        "table": "dwd_lan_dbl_fcti",
+        "schema": "dwd",
+        "catalog": "credit"
+      }
     },
     {
       "name": "rpt_loan_dtl",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "dwm",
-        "table": "rpt_loan_dtl"
-      },
       "columns": [
         {
           "name": "dblno",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "借据编号；非空"
+          "description": "借据编号；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "cntrno",
@@ -760,26 +762,26 @@
         {
           "name": "dp_load_dt",
           "type": "date",
-          "isPrimaryKey": true,
-          "description": "数据日期（快照日）；按 01_表知识库 的粒度补入，02_字段知识库未列；非空"
+          "description": "数据日期（快照日）；按 01_表知识库 的粒度补入，02_字段知识库未列；非空",
+          "isPrimaryKey": true
         }
       ],
+      "primaryKey": "dblno",
       "description": "贷款明细报表宽表；粒度：一行一条借据（多系统统一口径）；坑点：★ 数仓表必须带快照日条件；★ 数仓表必须带快照日条件；★ **本表无 SYSCGY 字段**（SYSCGY 仅存在于 DWD 层借据事实表/维表与贴源系统表），禁止套用 DWD 联合主键写法 → 会报 Invalid column reference（2026-09-11 实证）",
-      "primaryKey": "dblno"
+      "tableReference": {
+        "table": "rpt_loan_dtl",
+        "schema": "dwm",
+        "catalog": "credit"
+      }
     },
     {
       "name": "acct_loan",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "acct_loan"
-      },
       "columns": [
         {
           "name": "serialno",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "贷款账号；贷款的业务主键，唯一标识一笔贷款（借据级账务账户）；非空"
+          "description": "贷款账号；贷款的业务主键，唯一标识一笔贷款（借据级账务账户）；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "accountno",
@@ -1007,16 +1009,16 @@
           "description": "是否执行过以物抵债交易；码值：ISINDZ"
         }
       ],
+      "primaryKey": "serialno",
       "description": "贷款-贷款信息；粒度：一行一笔核算借据（账务账户）；坑点：★ 余额为当前快照，不可用于历史时点；多币种不可直接 SUM",
-      "primaryKey": "serialno"
+      "tableReference": {
+        "table": "acct_loan",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "acct_payment_log",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "acct_payment_log"
-      },
       "columns": [
         {
           "name": "relativeobjectno",
@@ -1039,21 +1041,21 @@
           "description": "实还利息；本次实还利息"
         }
       ],
-      "description": "贷款-还款日志；粒度：一行一条还款流水（一借据多条）；坑点：★ 一流水一行，须先按借据聚合"
+      "description": "贷款-还款日志；粒度：一行一条还款流水（一借据多条）；坑点：★ 一流水一行，须先按借据聚合",
+      "tableReference": {
+        "table": "acct_payment_log",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "acct_payment_schedule",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "acct_payment_schedule"
-      },
       "columns": [
         {
           "name": "serialno",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "流水号；业务主键；非空"
+          "description": "流水号；业务主键；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "parentserialno",
@@ -1111,22 +1113,22 @@
           "description": "实还本金；实际已还本金"
         }
       ],
+      "primaryKey": "serialno",
       "description": "贷款-还款计划；粒度：一行一期还款计划（一借据多期）；坑点：★ 一期一行，按揭可达数百期，直接 JOIN 放大行数",
-      "primaryKey": "serialno"
+      "tableReference": {
+        "table": "acct_payment_schedule",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "business_contract",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "business_contract"
-      },
       "columns": [
         {
           "name": "serialno",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "合同流水号；合同业务主键；非空"
+          "description": "合同流水号；合同业务主键；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "artificialno",
@@ -1179,22 +1181,22 @@
           "description": "入账机构；合同的入账机构"
         }
       ],
+      "primaryKey": "serialno",
       "description": "业务合同信息；粒度：一行一份业务合同（授信合同/业务合同）；坑点：★ 与借据为一对多，按合同统计时须先聚合借据侧，否则行数放大",
-      "primaryKey": "serialno"
+      "tableReference": {
+        "table": "business_contract",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "business_duebill",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "business_duebill"
-      },
       "columns": [
         {
           "name": "serialno",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "借据流水号；借据的业务主键，唯一标识一笔借据；非空"
+          "description": "借据流水号；借据的业务主键，唯一标识一笔借据；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "relativeserialno2",
@@ -1267,22 +1269,22 @@
           "description": "结清日期；借据结清日期，为空表示未结清"
         }
       ],
+      "primaryKey": "serialno",
       "description": "业务借据(账户)信息；粒度：一行一笔借据；坑点：★ 与担保/展期/票据直接 JOIN 会放大行数",
-      "primaryKey": "serialno"
+      "tableReference": {
+        "table": "business_duebill",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "business_type",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "business_type"
-      },
       "columns": [
         {
           "name": "typeno",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "业务码值；产品主键码值；非空"
+          "description": "业务码值；产品主键码值；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "typename",
@@ -1295,16 +1297,16 @@
           "description": "状态；产品是否在用"
         }
       ],
+      "primaryKey": "typeno",
       "description": "资产业务品种表；粒度：一行一个资产业务品种",
-      "primaryKey": "typeno"
+      "tableReference": {
+        "table": "business_type",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "classify_record",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "classify_record"
-      },
       "columns": [
         {
           "name": "objectno",
@@ -1317,27 +1319,27 @@
           "description": "分类结果；分类结果码值；码值：CLASSIFYRESULT"
         }
       ],
-      "description": "五级分类数据；粒度：一行一个分类对象的分类记录；坑点：★ 与 ACCT_LOAN.CLASSIFYRESULT 两套口径，待业务确认"
+      "description": "五级分类数据；粒度：一行一个分类对象的分类记录；坑点：★ 与 ACCT_LOAN.CLASSIFYRESULT 两套口径，待业务确认",
+      "tableReference": {
+        "table": "classify_record",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "code_library",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "code_library"
-      },
       "columns": [
         {
           "name": "codeno",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "码值类型；码值集标识（等于字段名）；非空"
+          "description": "码值类型；码值集标识（等于字段名）；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "itemno",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "码值；码值编码；非空"
+          "description": "码值；码值编码；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "itemname",
@@ -1355,16 +1357,16 @@
           "description": "码值编辑来源/可选值串（同上）；按知识库规则补入"
         }
       ],
+      "primaryKey": "codeno",
       "description": "码值表；粒度：一行一个码值（CODENO+ITEMNO）；坑点：★ 码值标准查法：按 COLNAME 检索，取 coleditsource",
-      "primaryKey": "codeno"
+      "tableReference": {
+        "table": "code_library",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "customer_fsrecord",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "customer_fsrecord"
-      },
       "columns": [
         {
           "name": "customerid",
@@ -1374,14 +1376,14 @@
         {
           "name": "recordno",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "记录号；业务主键；非空"
+          "description": "记录号；业务主键；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "reportdate",
           "type": "date",
-          "isPrimaryKey": true,
-          "description": "报表截至日期；VARCHAR2(10)；非空"
+          "description": "报表截至日期；VARCHAR2(10)；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "reportscope",
@@ -1389,22 +1391,22 @@
           "description": "报表口径；码值：REPORTSCOPE"
         }
       ],
+      "primaryKey": "recordno",
       "description": "客户财务报表记录；粒度：一行一个客户的一份财务报表记录",
-      "primaryKey": "recordno"
+      "tableReference": {
+        "table": "customer_fsrecord",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "customer_info",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "customer_info"
-      },
       "columns": [
         {
           "name": "customerid",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "客户编号；业务主键 信贷客户编号 和核心客户编号ECIF客户编号一致；非空"
+          "description": "客户编号；业务主键 信贷客户编号 和核心客户编号ECIF客户编号一致；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "customername",
@@ -1522,16 +1524,16 @@
           "description": "开户机构；统一认证机构号"
         }
       ],
+      "primaryKey": "customerid",
       "description": "客户基本信息；粒度：一行一个客户（含对公/对私/同业/集团，由 CUSTOMERTYPE 区分）；坑点：★ 客户资产类表（约40张）交叉 JOIN 会笛卡尔放大，一次最多关联一张",
-      "primaryKey": "customerid"
+      "tableReference": {
+        "table": "customer_info",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "flow_task",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "flow_task"
-      },
       "columns": [
         {
           "name": "objectno",
@@ -1564,21 +1566,21 @@
           "description": "阶段动作；该节点执行的动作用"
         }
       ],
-      "description": "流程任务；粒度：一行一个流程节点（一借据/申请对应多行）；坑点：需要补充"
+      "description": "流程任务；粒度：一行一个流程节点（一借据/申请对应多行）；坑点：需要补充",
+      "tableReference": {
+        "table": "flow_task",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "guaranty_contract",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "guaranty_contract"
-      },
       "columns": [
         {
           "name": "serialno",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "担保合同编号；担保合同主键；非空"
+          "description": "担保合同编号；担保合同主键；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "guarantorid",
@@ -1601,22 +1603,22 @@
           "description": "担保总金额；担保合同担保总金额"
         }
       ],
+      "primaryKey": "serialno",
       "description": "担保合同信息；粒度：一行一份担保合同；坑点：一个担保合同可对应多个担保物，直接 JOIN 放大担保金额",
-      "primaryKey": "serialno"
+      "tableReference": {
+        "table": "guaranty_contract",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "guaranty_info",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "guaranty_info"
-      },
       "columns": [
         {
           "name": "guarantyid",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "质物编号；担保物主键；非空"
+          "description": "质物编号；担保物主键；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "guarantystatus",
@@ -1634,16 +1636,16 @@
           "description": "本次担保金额；该押品本次担保的金额"
         }
       ],
+      "primaryKey": "guarantyid",
       "description": "担保物信息表；粒度：一行一个抵质押物",
-      "primaryKey": "guarantyid"
+      "tableReference": {
+        "table": "guaranty_info",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "guaranty_relative",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "guaranty_relative"
-      },
       "columns": [
         {
           "name": "objecttype",
@@ -1666,15 +1668,15 @@
           "description": "担保合同流水号；担保合同编号"
         }
       ],
-      "description": "担保关联表；粒度：一行一条担保关联关系；坑点：★ 必须限定 OBJECTTYPE，否则混入其他对象的担保关系"
+      "description": "担保关联表；粒度：一行一条担保关联关系；坑点：★ 必须限定 OBJECTTYPE，否则混入其他对象的担保关系",
+      "tableReference": {
+        "table": "guaranty_relative",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "odm_cms_cms_collateraltype_info",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "odm_cms_cms_collateraltype_info"
-      },
       "columns": [
         {
           "name": "data_dt",
@@ -1767,15 +1769,15 @@
           "description": "属性1"
         }
       ],
-      "description": "odm_cms_cms_collateraltype_info"
+      "description": "odm_cms_cms_collateraltype_info",
+      "tableReference": {
+        "table": "odm_cms_cms_collateraltype_info",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "odm_cms_guaranty_contract",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "odm_cms_guaranty_contract"
-      },
       "columns": [
         {
           "name": "data_dt",
@@ -2033,15 +2035,15 @@
           "description": "范围分区字段"
         }
       ],
-      "description": "odm_cms_guaranty_contract"
+      "description": "odm_cms_guaranty_contract",
+      "tableReference": {
+        "table": "odm_cms_guaranty_contract",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "odm_cms_guaranty_info",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "odm_cms_guaranty_info"
-      },
       "columns": [
         {
           "name": "data_dt",
@@ -2724,15 +2726,15 @@
           "description": "确定担保物价值的评估方法"
         }
       ],
-      "description": "odm_cms_guaranty_info"
+      "description": "odm_cms_guaranty_info",
+      "tableReference": {
+        "table": "odm_cms_guaranty_info",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "odm_cms_guaranty_relative",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "odm_cms_guaranty_relative"
-      },
       "columns": [
         {
           "name": "data_dt",
@@ -2825,21 +2827,21 @@
           "description": "范围分区字段"
         }
       ],
-      "description": "odm_cms_guaranty_relative"
+      "description": "odm_cms_guaranty_relative",
+      "tableReference": {
+        "table": "odm_cms_guaranty_relative",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "org_info",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "org_info"
-      },
       "columns": [
         {
           "name": "orgid",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "机构号；机构主键；非空"
+          "description": "机构号；机构主键；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "orgname",
@@ -2862,16 +2864,16 @@
           "description": "所属地区；机构所属地区码值；码值：BelongArea"
         }
       ],
+      "primaryKey": "orgid",
       "description": "机构表；粒度：一行一个机构",
-      "primaryKey": "orgid"
+      "tableReference": {
+        "table": "org_info",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "rpt_mrtgplg_dtl",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "rpt_mrtgplg_dtl"
-      },
       "columns": [
         {
           "name": "datadt",
@@ -3074,15 +3076,15 @@
           "description": "范围分区字段"
         }
       ],
-      "description": "rpt_mrtgplg_dtl"
+      "description": "rpt_mrtgplg_dtl",
+      "tableReference": {
+        "table": "rpt_mrtgplg_dtl",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "samecustomer_relative",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "samecustomer_relative"
-      },
       "columns": [
         {
           "name": "certenddate",
@@ -3095,21 +3097,21 @@
           "description": "客户关联关系"
         }
       ],
-      "description": "同业客户关联信息；坑点：贴源下发"
+      "description": "同业客户关联信息；坑点：贴源下发",
+      "tableReference": {
+        "table": "samecustomer_relative",
+        "schema": "public",
+        "catalog": "credit"
+      }
     },
     {
       "name": "user_info",
-      "tableReference": {
-        "catalog": "credit",
-        "schema": "public",
-        "table": "user_info"
-      },
       "columns": [
         {
           "name": "userid",
           "type": "varchar",
-          "isPrimaryKey": true,
-          "description": "用户号；用户（客户经理）主键；非空"
+          "description": "用户号；用户（客户经理）主键；非空",
+          "isPrimaryKey": true
         },
         {
           "name": "username",
@@ -3117,10 +3119,18 @@
           "description": "用户名称；用户姓名"
         }
       ],
+      "primaryKey": "userid",
       "description": "用户信息表；粒度：一行一个用户（客户经理）",
-      "primaryKey": "userid"
+      "tableReference": {
+        "table": "user_info",
+        "schema": "public",
+        "catalog": "credit"
+      }
     }
   ],
+  "schema": "public",
+  "catalog": "credit",
+  "dataSource": "postgres",
   "relationships": [
     {
       "name": "acct_loan_customer_info",
@@ -3240,20 +3250,21 @@
       "condition": "classify_record.objectno = business_contract.serialno"
     }
   ],
-  "views": [
-    {
-      "name": "mt_loan_snap",
-      "statement": "SELECT dp_load_dt AS stat_date, prdno, prdnm, acgorgno AS org_no, acgorgnm AS org_nm, blgbrchno AS branch_no, fivelvlcgycd_jg AS five_level, custtypbcgy AS cust_type, bsnsts, SUM(dblbal) AS loan_bal, SUM(coalesce(oduebal, 0)) AS overdue_bal, SUM(dblamt) AS loan_amt, COUNT(*) AS loan_cnt, COUNT(DISTINCT bnkincustno) AS cust_cnt FROM rpt_loan_dtl GROUP BY dp_load_dt, prdno, prdnm, acgorgno, acgorgnm, blgbrchno, fivelvlcgycd_jg, custtypbcgy, bsnsts"
-    },
-    {
-      "name": "mt_putout_m",
-      "statement": "SELECT date_trunc('month', a.putoutdate) AS stat_month, a.businesstype AS prdno, a.accountingorgid AS org_no, c.customertype AS cust_type, SUM(a.businesssum) AS putout_amt, COUNT(*) AS putout_cnt FROM acct_loan a LEFT JOIN customer_info c ON c.customerid = a.customerid GROUP BY date_trunc('month', a.putoutdate), a.businesstype, a.accountingorgid, c.customertype"
-    }
-  ],
   "x_askoda_metrics": {
     "dataset": "C",
-    "version": 1,
+    "version": "3",
     "views": {
+      "mt_putout_m": {
+        "columns": [
+          "stat_month",
+          "prdno",
+          "org_no",
+          "cust_type",
+          "putout_amt",
+          "putout_cnt"
+        ],
+        "comment": "放款流量口径层：一行 = 放款月 × 产品 × 机构 × 客户类型。放款金额是流量，按区间累加；与余额类指标不能混用同一种时间条件。"
+      },
       "mt_loan_snap": {
         "columns": [
           "stat_date",
@@ -3272,17 +3283,6 @@
           "cust_cnt"
         ],
         "comment": "贷款快照口径层：一行 = 数据日期 × 产品 × 机构 × 五级分类 × 客户类型 × 业务状态。余额类指标一律走这里，且必须限定单一 stat_date（两个快照日相加会把金额翻倍且不报错）。"
-      },
-      "mt_putout_m": {
-        "columns": [
-          "stat_month",
-          "prdno",
-          "org_no",
-          "cust_type",
-          "putout_amt",
-          "putout_cnt"
-        ],
-        "comment": "放款流量口径层：一行 = 放款月 × 产品 × 机构 × 客户类型。放款金额是流量，按区间累加；与余额类指标不能混用同一种时间条件。"
       }
     },
     "metrics": [
@@ -3299,6 +3299,7 @@
         "view": "mt_loan_snap",
         "expr": "SUM(loan_bal)",
         "unit": "元",
+        "fmt": "num",
         "time_mode": "snapshot",
         "time_col": "stat_date",
         "dims": [
@@ -3327,6 +3328,7 @@
         "view": "mt_loan_snap",
         "expr": "SUM(loan_cnt)",
         "unit": "笔",
+        "fmt": "num",
         "time_mode": "snapshot",
         "time_col": "stat_date",
         "dims": [
@@ -3355,6 +3357,7 @@
         "view": "mt_loan_snap",
         "expr": "SUM(cust_cnt)",
         "unit": "户",
+        "fmt": "num",
         "time_mode": "snapshot",
         "time_col": "stat_date",
         "dims": [
@@ -3382,6 +3385,7 @@
         "view": "mt_loan_snap",
         "expr": "SUM(overdue_bal)",
         "unit": "元",
+        "fmt": "num",
         "time_mode": "snapshot",
         "time_col": "stat_date",
         "dims": [
@@ -3410,6 +3414,7 @@
         "view": "mt_loan_snap",
         "expr": "SUM(CASE WHEN five_level IN ('S', 'D', 'L') THEN loan_bal ELSE 0 END)",
         "unit": "元",
+        "fmt": "num",
         "time_mode": "snapshot",
         "time_col": "stat_date",
         "dims": [
@@ -3493,6 +3498,7 @@
         "view": "mt_putout_m",
         "expr": "SUM(putout_amt)",
         "unit": "元",
+        "fmt": "num",
         "time_mode": "flow",
         "time_col": "stat_month",
         "dims": [
@@ -3515,6 +3521,7 @@
         "view": "mt_putout_m",
         "expr": "SUM(putout_cnt)",
         "unit": "笔",
+        "fmt": "num",
         "time_mode": "flow",
         "time_col": "stat_month",
         "dims": [
@@ -3537,6 +3544,7 @@
         "view": "mt_putout_m",
         "expr": "SUM(putout_amt) / NULLIF(SUM(putout_cnt), 0)",
         "unit": "元",
+        "fmt": "num",
         "time_mode": "flow",
         "time_col": "stat_month",
         "dims": [

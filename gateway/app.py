@@ -357,6 +357,101 @@ def wren_query(sql: str, dataset: str = "B") -> dict:
     }
 
 
+# --------------------------------------------------------------------------
+# 口径维护（M11）
+#
+# 为什么要这三个工具：口径是**数据**，写在文件里就只能靠人改文件 + 跑脚本，
+# 改错了不报错、只是算错。搬到界面上以后，「登记 → 校验 → 生效」必须是一次动作，
+# 否则界面保存的是草稿、真正跑的还是旧口径，这种"看着改了其实没改"最难查。
+# --------------------------------------------------------------------------
+@mcp.tool
+def metric_list(dataset: str = "C") -> dict:
+    """列出该数据集当前生效的口径（视图 + 口径 + 版本）。"""
+    import metric_store
+
+    try:
+        return metric_store.load(dataset)
+    except metric_store.MetricError as e:
+        return {"ok": False, "code": "METRIC_NOT_READY", "error": str(e)}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:240])}
+
+
+@mcp.tool
+def metric_save(
+    dataset: str = "C",
+    metrics: dict | None = None,
+    dry_run: bool = False,
+    actor: str = "",
+) -> dict:
+    """保存口径并即时生效：先校验，再热部署到引擎，最后落库。
+
+    顺序不可反：**部署成功才落库**。反过来会出现「库里是新口径、引擎还是旧的」，
+    这是最难查的一种状态——页面显示改了，跑出来的还是旧数。
+
+    `dry_run=True` 只校验不保存，用于「点保存前先看一眼有没有错」。
+    """
+    import metric_store
+
+    try:
+        return metric_store.save(dataset, metrics or {}, actor=actor, dry_run=dry_run)
+    except metric_store.MetricError as e:
+        return {"ok": False, "code": "METRIC_NOT_READY", "error": str(e)}
+    except Exception as e:  # noqa: BLE001
+        # 内部异常要与「校验没通过」分开：后者能逐条指出改哪里，前者不能，
+        # 混成同一个 code 会让用户对着空的问题列表反复点保存。
+        return {"ok": False, "code": "METRIC_INTERNAL",
+                "error": "%s: %s" % (type(e).__name__, str(e)[:240])}
+
+
+@mcp.tool
+def metric_preview(dataset: str = "C", question: str = "", limit: int = 30) -> dict:
+    """口径试跑：用一句话走一遍「命中口径 → 生成 SQL → 只读执行」，不动需求单。
+
+    单独做这个动作，是因为改完口径最想知道的是「这句话现在能不能出数」。
+    走需求五步也能验，但要建单、分析、确认，且会往业务表里塞测试数据。
+    """
+    import metric_store
+
+    nl = (question or "").strip()
+    if not nl:
+        return {"ok": False, "error": "请给一句话，才能试跑"}
+    try:
+        plat = registry.get(dataset)
+        import metric_planner
+
+        planned = metric_planner.plan(plat, nl)
+    except metric_store.MetricError as e:
+        return {"ok": False, "code": "METRIC_NOT_READY", "error": str(e)}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:240])}
+
+    if planned.get("blocked"):
+        return {"ok": False, "blocked": True, "reason": planned.get("reason") or "没有命中口径",
+                "guide": planned.get("guide") or "", "question": nl}
+
+    sql = (planned.get("sql") or "").strip()
+    if not sql:
+        return {"ok": False, "reason": "规划器没有产出 SQL", "question": nl}
+    # 试跑是给人看的，不设上限时一条趋势查询也能拉回几千行；只在没写 LIMIT 时补
+    if " limit " not in sql.lower():
+        sql = sql + " LIMIT %d" % max(1, min(int(limit or 30), 200))
+
+    run = wren_query(sql, dataset)
+    return {
+        "ok": bool(run.get("ok")),
+        "question": nl,
+        "metric": planned.get("metric"),
+        "metric_label": planned.get("metric_label"),
+        "engine": planned.get("engine"),
+        "sql": sql,
+        "row_count": run.get("row_count"),
+        "columns": run.get("columns") or [],
+        "rows": run.get("data") or [],
+        "error": run.get("error"),
+    }
+
+
 @mcp.tool
 def ask(nl: str, dataset: str = "B") -> dict:
     """一句话问数（确定性路径）：规划 → 门禁 → 只读执行，返回 SQL 与结果。

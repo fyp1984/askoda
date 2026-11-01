@@ -187,16 +187,25 @@ def _t10():
         _ok("口径 %s 的 time_col 应在视图列里" % m["key"], m["time_col"] in cols, sorted(cols))
 
 
-@case("⑪ 登记文件与 MDL 内嵌口径同源（版本号一致）")
+@case("⑪ 种子的每一条口径都在生效口径里（文件已降级为种子，不再要求版本号一致）")
 def _t11():
+    """2026-11-01 起，真源是库（`dataset_registry.mdl_json`），
+    `db/credit/04_metrics.json` 只是**初始种子**（重建环境时导入）。
+
+    所以「文件版本号 == MDL 版本号」这条判据已经不成立、也不该成立：
+    在界面上改一次口径，库里的版本就往前走，而种子文件不会动。
+    真正要守的是「种子里写的东西，线上都有」——否则重建一次库，口径会静默少几条。
+    """
     ds = _ds()
     reg = ds.mdl["x_askoda_metrics"]
-    file_metrics = _metrics()
-    _ok("版本号应一致", reg.get("version") == file_metrics.get("version"),
-        (reg.get("version"), file_metrics.get("version")))
-    _ok("口径条数应一致",
-        len(reg.get("metrics") or []) == len(file_metrics.get("metrics") or []),
-        (len(reg.get("metrics") or []), len(file_metrics.get("metrics") or [])))
+    seed = _metrics()
+    live_keys = {m.get("key") for m in (reg.get("metrics") or [])}
+    missing = [m.get("key") for m in (seed.get("metrics") or []) if m.get("key") not in live_keys]
+    _ok("种子里的口径必须都在生效口径里", not missing, missing)
+    _ok("生效口径条数不少于种子", len(live_keys) >= len(seed.get("metrics") or []),
+        (len(live_keys), len(seed.get("metrics") or [])))
+    _ok("生效口径必须带版本号（服务端定的，不能是空）", bool(str(reg.get("version") or "").strip()),
+        reg.get("version"))
 
 
 def main():

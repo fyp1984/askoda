@@ -208,6 +208,9 @@ services:
       WREN_C_URL: "http://wren-mcp-c:9000"
       MDL_A_PATH: "/app/mdl/a.json"
       MDL_B_PATH: "/app/mdl/b.json"
+      # M11：口径热部署后要写回引擎的启动文件（见下方 volumes 注释）。
+      # 不配也能跑，只是保存时会在界面提示「引擎重启会回滚」。
+      ASKODA_ENGINE_WORKSPACE_C: "/app/engine-workspace-c"
       # --- M2 新增 ---
       # 网关自有元数据库（需求单 / 元数据字典 / 流转留痕）
       # compose 内部用服务名连元数据库；${COMPOSE_ASSISTANT_DB_DSN:-默认} 允许生产覆盖。
@@ -266,6 +269,13 @@ services:
     #   换库只换镜像内文件 + 注册项，不改网关代码；改 MDL 需 rebuild（~2s）。
     # 另：wren-mcp-a/b 仍挂 ./wren-docker*/workspace:/workspace —— 它们的
     #   connection_info.json 需要随时改指向（接真实库时热改），不能进镜像。
+    volumes:
+      # 唯一的例外（M11 · 2026-11-01）：口径保存后的**写回**通道。
+      # 引擎启动读的是 /workspace/mdl.json，deploy_manifest 只改进程内存；
+      # 不写回文件 ⇒ 引擎一重启，界面刚改的口径会静默回滚，且全程无报错。
+      # 只写 mdl.json 一个文件；目录缺失/不可写时保存照常成功，但界面会明确提示
+      # 「引擎重启后会回滚成旧口径」——不提示比不写更糟。
+      - ./wren-docker-c/workspace:/app/engine-workspace-c
 
   # ------------------------------------------------------------------
   # BFF（Backend for Frontend）· 前端产物同源托管
