@@ -82,6 +82,48 @@ def five_level(od_days: int, finished: bool) -> str:
     return "L"
 
 
+def loan_state(amt: float, term: int, putout: dt.date, od_start, as_of: dt.date):
+    """单一状态函数：任一时点的余额 / 逾期 / 分类 / 状态都从这里出。
+
+    为什么必须只有一个函数
+    ----------------------
+    2026-11-01 实测发现：账务表与数仓快照表各写一套算式，结果**不良类余额全是 0**
+    （旧公式 `amt - amt/term*done` 在借据过了到期日之后一路减到 0，而恰恰是过了到期日的
+    借据才会被标成次级/可疑/损失），并且 dwd 的五级分类与 ACCT_LOAN 的分类**互不相认**
+    （dwd 标 A/D/L/S 的 79 笔，账务表里全是 N）。这种错不报错、门禁也查不出来，
+    只会让「不良率」永远等于 0——正是建 C 库要验的那类口径。
+
+    规则
+    ----
+    · 逾期天数 = as_of − 逾期起始日（逾期起始日按借据固定，不随快照日漂移）
+    · 已还期数 = min(到期应有期数, 已过月数) − 逾期期数（逾期期数 = 逾期天数 // 30）
+    · 余额     = 借据金额 − 每期本金 × 已还期数（>0 才是未偿，逾期借据不会归零）
+    · 逾期余额 = min(余额, 每期本金 × 逾期期数)
+    · 分类     = 0 天正常 / 1–90 关注 / 91–180 次级 / 181–360 可疑 / >360 损失
+    · 状态     = 3 结清（余额已偿清）/ 2 逾期 / 1 正常
+    """
+    pp = round(amt / term, 2)
+    age = months_between(putout, as_of)
+    if age < 0:
+        return None
+    dpd = max(0, (as_of - od_start).days) if od_start else 0
+    od_periods = 0 if dpd <= 0 else min(term, max(1, dpd // 30))
+    paid = max(0, min(term, age) - od_periods)
+    bal = round(max(amt - pp * paid, 0), 2)
+    od_bal = round(min(bal, pp * od_periods), 2)
+    if bal <= 0:
+        sts, lv = "3", "N"
+    elif dpd > 0:
+        sts, lv = "2", five_level(dpd, False)
+    else:
+        sts, lv = "1", "N"
+    return {
+        "pp": pp, "paid": paid, "bal": bal, "od_bal": od_bal,
+        "dpd": dpd, "od_periods": od_periods, "sts": sts, "lv": lv,
+        "finish": add_months(putout, paid) if bal <= 0 else None,
+    }
+
+
 def add_months(d: dt.date, n: int) -> dt.date:
     y = d.year + (d.month - 1 + n) // 12
     m = (d.month - 1 + n) % 12 + 1
@@ -199,6 +241,9 @@ def build_rows(kb_xlsx: str | None) -> dict[str, list[dict]]:
 
     # ---- 合同 / 借据 / 账务 / 计划 / 日志 / 分类 / 流程
     contracts, duebills, loans, sched, paylog, classify, tasks = [], [], [], [], [], [], []
+    # 借据的「生成本源」：期数 + 逾期起始日。快照表/押品报表要按不同观察日重算，
+    # 必须回到这里取参数，不能从已算好的余额反推（反推会把口径分叉成两套）。
+    loan_meta = {}
     seq = 0
     for ci, cust in enumerate(customers):
         cid, cname, ctype = cust["customerid"], cust["customername"], cust["customertype"]
@@ -210,7 +255,9 @@ def build_rows(kb_xlsx: str | None) -> dict[str, list[dict]]:
             cntr_no = "HT%04d%03d" % (ci + 1, k + 1)
             base = rnd.uniform(50, 8000) if ctype == "00" else rnd.uniform(20, 500)
             cntr_amt = round(base * 10000, 2)
-            sign = dt.date(2023, 6, 1) + dt.timedelta(days=rnd.randrange(0, 800))
+            # 放款日铺满到观察日之前（原先只到 2025-08，导致「本月放款」长期只有个位数笔，
+            # 演示与口径验证都看不出东西）
+            sign = dt.date(2023, 6, 1) + dt.timedelta(days=rnd.randrange(0, 1180))
             grt = rnd.choice(GRT_MODES)[0]
             contracts.append({
                 "serialno": cntr_no, "artificialno": cntr_no + "-R", "customerid": cid,
@@ -227,16 +274,22 @@ def build_rows(kb_xlsx: str | None) -> dict[str, list[dict]]:
                 rate = round(rnd.uniform(3.45, 6.50), 4)
                 putout = sign + dt.timedelta(days=30 * (j + 1) + rnd.randrange(0, 20))
                 maturity = add_months(putout, term)
-                finished = maturity <= ASOF
-                od_days = 0
-                if not finished and rnd.random() < 0.08:
-                    od_days = rnd.choice([15, 45, 75, 120, 200, 400])
-                lv = five_level(od_days, finished)
-                sts = "3" if finished else ("2" if od_days else "1")
-                done_terms = max(0, min(term, months_between(putout, ASOF)))
-                bal = 0.0 if finished else round(max(amt - amt / term * done_terms, 0), 2)
-                od_bal = bal if od_days > 90 else 0.0
-                od_int = round(bal * rate / 100 / 12 * max(1, od_days // 30), 2) if od_days else 0.0
+                # 逾期起始日按借据固定一次，之后各表各快照都按它推天数（不随观察日漂移）
+                # 逾期按序号均匀铺开（每 16 笔取 1 笔，逾期天数按类轮转），
+                # 让两个快照日都能同时看到关注/次级/可疑/损失四类；
+                # 纯随机抽会出现「某个快照日只有 A 没有 S/D/L」，图上看不出分层。
+                if seq % 16 == 0:
+                    od_days0 = [15, 45, 75, 120, 200, 400][(seq // 16) % 6]
+                else:
+                    od_days0 = 0
+                od_start = ASOF - dt.timedelta(days=od_days0) if od_days0 else None
+                st = loan_state(amt, term, putout, od_start, ASOF)
+                if st is None:  # 放款日晚于观察日：本笔此时还不存在
+                    continue
+                od_days, lv, sts = st["dpd"], st["lv"], st["sts"]
+                bal, od_bal, paid_terms = st["bal"], st["od_bal"], st["paid"]
+                loan_meta[dbl_no] = (term, od_start)
+                od_int = round(bal * rate / 100 / 12 * st["od_periods"], 2) if st["od_periods"] else 0.0
 
                 duebills.append({
                     "serialno": dbl_no, "relativeserialno2": cntr_no, "mfcustomerid": cust["mfcustomerid"],
@@ -244,7 +297,7 @@ def build_rows(kb_xlsx: str | None) -> dict[str, list[dict]]:
                     "businesscurrency": "CNY", "businesssum": amt, "balance": bal,
                     "normalbalance": round(bal - od_bal, 2), "overduebalance": od_bal,
                     "putoutdate": putout, "maturity": maturity, "actualmaturity": maturity,
-                    "finishdate": maturity if finished else None,
+                    "finishdate": st["finish"],
                 })
                 loans.append({
                     "serialno": "DK%06d" % seq, "accountno": "ACC%012d" % (622200000000 + seq),
@@ -253,16 +306,15 @@ def build_rows(kb_xlsx: str | None) -> dict[str, list[dict]]:
                     "businesssum": amt, "putoutdate": putout, "maturitydate": maturity,
                     "originalmaturitydate": maturity, "operateorgid": org,
                     "accountingorgid": BRANCH_OF.get(org, org), "loanstatus": sts,
-                    "finishdate": maturity if finished else None, "businessdate": ASOF,
+                    "finishdate": st["finish"], "businessdate": ASOF,
                     "overduedays": od_days, "classifyresult": lv,
                     "putoutserialno": "CZ%06d" % seq, "duebillserialno": dbl_no,
                     "normalbalance": round(bal - od_bal, 2), "odintebalance": od_int,
                     "overduebalance": od_bal, "compdintebalance": 0, "fineintebalance": 0,
                 })
-                paid_terms = term if finished else done_terms
+                pp = st["pp"]
                 for p in range(1, term + 1):
                     pay_date = add_months(putout, p)
-                    pp = round(amt / term, 2)
                     sched.append({
                         "serialno": "HD%08d%03d" % (seq, p), "parentserialno": dbl_no,
                         "objecttype": "DUEBILL", "objectno": dbl_no,
@@ -323,18 +375,18 @@ def build_rows(kb_xlsx: str | None) -> dict[str, list[dict]]:
             putout, maturity = d["putoutdate"], d["maturity"]
             if putout > snap:
                 continue
-            term = max(1, months_between(putout, maturity))
-            done = max(0, min(term, months_between(putout, snap)))
-            snap_bal = round(max(d["businesssum"] - d["businesssum"] / term * done, 0), 2)
-            od_days_snap = max(0, (snap - maturity).days) if snap > maturity else 0
-            lv = five_level(od_days_snap, False)
+            term, od_start = loan_meta[d["serialno"]]
+            st = loan_state(d["businesssum"], term, putout, od_start, snap)
+            if st is None:
+                continue
+            snap_bal, od_days_snap, lv, sts = st["bal"], st["dpd"], st["lv"], st["sts"]
             cust = cust_map[d["customerid"]]
             ctype = cust["customertype"]
             grt = cntr_map[d["relativeserialno2"]]["vouchtype"]
             dwd_rows.append({
                 "dp_load_dt": snap, "syscgy": "101", "dblno": d["serialno"],
                 "dblamt": d["businesssum"], "dblbal": snap_bal, "prdno": d["businesstype"],
-                "loansts": d["businessstatus"], "fivelvlcgycd_jg": lv,
+                "loansts": sts, "fivelvlcgycd_jg": lv,
                 "custnm": cust["customername"], "certno": cust["certid"],
                 "bnkincustno": cust["mfcustomerid"], "wrtoffpnp": 0,
                 "wrtoffdt": None, "oper": cust["inputuserid"], "cntrno": d["relativeserialno2"],
@@ -358,11 +410,11 @@ def build_rows(kb_xlsx: str | None) -> dict[str, list[dict]]:
                 "fivelvlcgy": lv, "fivelvlcgycd_jg": lv,
                 "yrbgnfivelvlcgy": "N", "mobgnfivelvlcgy": lv,
                 "operorgnm": ORG_NAME.get(cust["inputorgid"], ""),
-                "bsnsts": d["businessstatus"], "dblsts": d["businessstatus"],
+                "bsnsts": sts, "dblsts": sts,
                 "valtdt": putout, "expdt": maturity, "actexpdt": maturity, "cnlacctdt": None,
                 "loanrate": None, "cntramt": cntr_map[d["relativeserialno2"]]["businesssum"],
                 "dblamt": d["businesssum"], "dblbal": snap_bal, "dblbalcnvtcny": snap_bal,
-                "oduebal": 0, "oduedys": od_days_snap, "pnpoduedys": od_days_snap,
+                "oduebal": st["od_bal"], "oduedys": od_days_snap, "pnpoduedys": od_days_snap,
                 "intoduedys": 0, "maxoduedys": od_days_snap,
                 "onshtdbtintbal": round(snap_bal * 0.02, 2), "offshtdbtintbal": 0,
                 "pnpoduepnyint": 0, "intoduepnyint": 0, "entrbaddt": None,
@@ -427,9 +479,11 @@ def build_rows(kb_xlsx: str | None) -> dict[str, list[dict]]:
                 continue
             if d["putoutdate"] > snap:
                 continue
-            term = max(1, months_between(d["putoutdate"], d["maturity"]))
-            done = max(0, min(term, months_between(d["putoutdate"], snap)))
-            bal = round(max(d["businesssum"] - d["businesssum"] / term * done, 0), 2)
+            term, od_start = loan_meta[d["serialno"]]
+            st = loan_state(d["businesssum"], term, d["putoutdate"], od_start, snap)
+            if st is None:
+                continue
+            bal = st["bal"]
             cust = cust_map[d["customerid"]]
             # 用借据序号取押品，不用 hash()——str 的 hash 每进程不同，会破坏可复现性
             gg = ginfos[int(d["serialno"][2:]) % len(ginfos)]
@@ -441,12 +495,12 @@ def build_rows(kb_xlsx: str | None) -> dict[str, list[dict]]:
                 "curnm": "人民币", "custno": cust["customerid"], "custnm": cust["customername"],
                 "custtyp": cust["customertype"], "prdno": d["businesstype"],
                 "prdnm": PROD_NAME[d["businesstype"]], "loantyp": "自营贷款",
-                "loanterm": term, "fivelvlcgycd": five_level(0, d["maturity"] <= snap),
+                "loanterm": term, "fivelvlcgycd": st["lv"],
                 "grtmode": c["vouchtype"], "grtytyp": "30",
                 "grtyno": gg["guarantyid"], "grtynm": "押品-%s" % gg["guarantyid"],
                 "grtyestn": gg["evalnetvalue"], "grtysts": gg["guarantystatus"],
                 "dblamt": d["businesssum"], "dblbal": bal, "valtdt": d["putoutdate"],
-                "expdt": d["maturity"], "loansts": d["businessstatus"],
+                "expdt": d["maturity"], "loansts": st["sts"],
                 "dblamtcnvtcny": d["businesssum"], "dp_load_dt": snap,
             })
     T["public.rpt_mrtgplg_dtl"] = rpt

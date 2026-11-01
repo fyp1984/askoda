@@ -3239,5 +3239,315 @@
       "joinType": "MANY_TO_ONE",
       "condition": "classify_record.objectno = business_contract.serialno"
     }
-  ]
+  ],
+  "views": [
+    {
+      "name": "mt_loan_snap",
+      "statement": "SELECT dp_load_dt AS stat_date, prdno, prdnm, acgorgno AS org_no, acgorgnm AS org_nm, blgbrchno AS branch_no, fivelvlcgycd_jg AS five_level, custtypbcgy AS cust_type, bsnsts, SUM(dblbal) AS loan_bal, SUM(coalesce(oduebal, 0)) AS overdue_bal, SUM(dblamt) AS loan_amt, COUNT(*) AS loan_cnt, COUNT(DISTINCT bnkincustno) AS cust_cnt FROM rpt_loan_dtl GROUP BY dp_load_dt, prdno, prdnm, acgorgno, acgorgnm, blgbrchno, fivelvlcgycd_jg, custtypbcgy, bsnsts"
+    },
+    {
+      "name": "mt_putout_m",
+      "statement": "SELECT date_trunc('month', a.putoutdate) AS stat_month, a.businesstype AS prdno, a.accountingorgid AS org_no, c.customertype AS cust_type, SUM(a.businesssum) AS putout_amt, COUNT(*) AS putout_cnt FROM acct_loan a LEFT JOIN customer_info c ON c.customerid = a.customerid GROUP BY date_trunc('month', a.putoutdate), a.businesstype, a.accountingorgid, c.customertype"
+    }
+  ],
+  "x_askoda_metrics": {
+    "dataset": "C",
+    "version": 1,
+    "views": {
+      "mt_loan_snap": {
+        "columns": [
+          "stat_date",
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "five_level",
+          "cust_type",
+          "bsnsts",
+          "loan_bal",
+          "overdue_bal",
+          "loan_amt",
+          "loan_cnt",
+          "cust_cnt"
+        ],
+        "comment": "贷款快照口径层：一行 = 数据日期 × 产品 × 机构 × 五级分类 × 客户类型 × 业务状态。余额类指标一律走这里，且必须限定单一 stat_date（两个快照日相加会把金额翻倍且不报错）。"
+      },
+      "mt_putout_m": {
+        "columns": [
+          "stat_month",
+          "prdno",
+          "org_no",
+          "cust_type",
+          "putout_amt",
+          "putout_cnt"
+        ],
+        "comment": "放款流量口径层：一行 = 放款月 × 产品 × 机构 × 客户类型。放款金额是流量，按区间累加；与余额类指标不能混用同一种时间条件。"
+      }
+    },
+    "metrics": [
+      {
+        "key": "loan_balance",
+        "label": "贷款余额",
+        "aliases": [
+          "贷款余额",
+          "余额",
+          "贷款规模",
+          "未偿余额",
+          "存量"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(loan_bal)",
+        "unit": "元",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "five_level",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "所选快照日、口径范围内借据的未偿本金余额合计（DBLBAL 求和）。未结清与已逾期借据都计入，与账务表 ACCT_LOAN 的（正常余额 + 逾期余额）同源同算式。",
+        "caveats": "余额是时点量：必须限定单一数据日期，跨日期相加没有业务含义。",
+        "source": "知识库·贷款借据事实表 DWD_LAN_DBL_FCTI.DBLBAL；知识库 Q1 五级分类以余额口径推导"
+      },
+      {
+        "key": "loan_cnt",
+        "label": "贷款笔数",
+        "aliases": [
+          "贷款笔数",
+          "笔数",
+          "借据笔数",
+          "贷款户数"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(loan_cnt)",
+        "unit": "笔",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "five_level",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "所选快照日在贷借据笔数。快照层每借据一行，故按产品/机构汇总时可安全相加。",
+        "caveats": "「户数」不等于笔数：一个客户可有多笔借据，要户数请用「有贷户数」。",
+        "source": "知识库·贷款借据事实表 主键 (DP_LOAD_DT, SYSCGY, DBLNO)"
+      },
+      {
+        "key": "cust_cnt",
+        "label": "有贷户数",
+        "aliases": [
+          "有贷户数",
+          "客户数",
+          "户数",
+          "贷款客户数"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(cust_cnt)",
+        "unit": "户",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "five_level",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "所选快照日有在贷借据的行内客户数。按维度相加会重复计数同一客户，跨维度合计请以不带维度的那一行为准。",
+        "caveats": "同一客户在多产品下各计一次，总额按维度相加会偏大。",
+        "source": "知识库·贷款明细宽表 BNKINCUSTNO（行内客户号）"
+      },
+      {
+        "key": "overdue_balance",
+        "label": "逾期余额",
+        "aliases": [
+          "逾期余额",
+          "逾期金额",
+          "逾期贷款余额"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(overdue_bal)",
+        "unit": "元",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "five_level",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "所选快照日已逾期部分的未偿本金余额合计（ODUEBAL 求和）。正常部分不计入。",
+        "caveats": "逾期余额 ≠ 不良余额：逾期按「是否到期未还」判定，不良按五级分类（次级+可疑+损失）判定。",
+        "source": "知识库·贷款明细宽表 ODUEBAL；知识库 Q3 逾期口径"
+      },
+      {
+        "key": "npl_balance",
+        "label": "不良贷款余额",
+        "aliases": [
+          "不良贷款余额",
+          "不良余额",
+          "不良贷款",
+          "不良"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(CASE WHEN five_level IN ('S', 'D', 'L') THEN loan_bal ELSE 0 END)",
+        "unit": "元",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "five_level",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "五级分类为次级(S)、可疑(D)、损失(L)的借据余额合计。不良 = 次级 + 可疑 + 损失，不是「逾期 90 天以上」的同义词。",
+        "caveats": "口径来自知识库 Q1：不良按分类字母码判定，不按逾期天数反推；两者在本库可能不一致。",
+        "source": "知识库 Q1 五级分类；字母码 FIVELVLCGYCD_JG ∈ {S, D, L}"
+      },
+      {
+        "key": "npl_ratio",
+        "label": "不良率",
+        "aliases": [
+          "不良率",
+          "不良贷款率",
+          "不良比例"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(CASE WHEN five_level IN ('S', 'D', 'L') THEN loan_bal ELSE 0 END) / NULLIF(SUM(loan_bal), 0)",
+        "unit": "%",
+        "fmt": "pct",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "不良贷款余额 ÷ 各项贷款余额，分子分母取同一快照日。分母为 0 时返回空值，不返回 0——0 会被读成「没有不良」，而事实是「没有贷款」。",
+        "caveats": "分子分母必须同一快照日；按维度分组时是「组内不良率」，不是全行不良率。",
+        "source": "监管口径：不良贷款率 = 不良贷款余额 / 各项贷款余额"
+      },
+      {
+        "key": "overdue_ratio",
+        "label": "逾期率",
+        "aliases": [
+          "逾期率",
+          "逾期贷款率",
+          "逾期比例"
+        ],
+        "view": "mt_loan_snap",
+        "expr": "SUM(overdue_bal) / NULLIF(SUM(loan_bal), 0)",
+        "unit": "%",
+        "fmt": "pct",
+        "time_mode": "snapshot",
+        "time_col": "stat_date",
+        "dims": [
+          "prdno",
+          "prdnm",
+          "org_no",
+          "org_nm",
+          "branch_no",
+          "cust_type",
+          "bsnsts"
+        ],
+        "definition": "逾期余额 ÷ 各项贷款余额，同一快照日。",
+        "caveats": "与不良率不同口径，两个数不相等是正常的。",
+        "source": "知识库 Q3 逾期口径"
+      },
+      {
+        "key": "putout_amt",
+        "label": "放款金额",
+        "aliases": [
+          "放款金额",
+          "发放金额",
+          "放款额",
+          "新增贷款",
+          "投放金额"
+        ],
+        "view": "mt_putout_m",
+        "expr": "SUM(putout_amt)",
+        "unit": "元",
+        "time_mode": "flow",
+        "time_col": "stat_month",
+        "dims": [
+          "prdno",
+          "org_no",
+          "cust_type"
+        ],
+        "definition": "所选区间内商业性借据的发放金额合计（按 PUTOUTDATE 落月）。放款是流量：区间内逐笔相加，跨月累加成立。",
+        "caveats": "放款金额按放款日归月，与「期末余额」不是同一时间口径；两者放在一条 SQL 里比会得出错误结论。",
+        "source": "知识库·业务借据 BUSINESS_DUEBILL.BUSINESSSUM / 账务放款日 ACCT_LOAN.PUTOUTDATE"
+      },
+      {
+        "key": "putout_cnt",
+        "label": "放款笔数",
+        "aliases": [
+          "放款笔数",
+          "发放笔数",
+          "新增笔数"
+        ],
+        "view": "mt_putout_m",
+        "expr": "SUM(putout_cnt)",
+        "unit": "笔",
+        "time_mode": "flow",
+        "time_col": "stat_month",
+        "dims": [
+          "prdno",
+          "org_no",
+          "cust_type"
+        ],
+        "definition": "所选区间内发放的借据笔数。",
+        "caveats": "按放款日统计，与「在贷笔数」不同。",
+        "source": "知识库·业务借据"
+      },
+      {
+        "key": "avg_putout_amt",
+        "label": "笔均放款金额",
+        "aliases": [
+          "笔均放款",
+          "单笔放款金额",
+          "笔均金额"
+        ],
+        "view": "mt_putout_m",
+        "expr": "SUM(putout_amt) / NULLIF(SUM(putout_cnt), 0)",
+        "unit": "元",
+        "time_mode": "flow",
+        "time_col": "stat_month",
+        "dims": [
+          "prdno",
+          "org_no",
+          "cust_type"
+        ],
+        "definition": "放款金额 ÷ 放款笔数，区间内同一口径相除。",
+        "caveats": "是派生指标，不是一张表；先汇总再相除，不要对每行相除后求平均。",
+        "source": "派生：putout_amt / putout_cnt"
+      }
+    ]
+  }
 }

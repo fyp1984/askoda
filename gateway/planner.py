@@ -1312,8 +1312,19 @@ _PLANNERS = {"A": plan_a, "B": plan_b}
 
 
 def plan(dataset, nl):
-    """按数据集选择意图库；未注册意图库的数据集明确拒绝（不静默降级）。"""
+    """按数据集选择意图库；未注册意图库的数据集明确拒绝（不静默降级）。
+
+    2026-11-01 起 A/B 之外的库走 `metric_planner`：口径登记在 MDL 里（数据），
+    编译逻辑只有一套（代码），接新库不再需要写 `plan_c`。
+    判据是「有没有登记口径」，不是「有没有写代码」。
+    """
     if dataset.key not in _PLANNERS:
+        try:
+            import metric_planner  # 惰性导入：A/B 路径不受其影响
+        except Exception:  # noqa: BLE001
+            metric_planner = None
+        if metric_planner is not None and _has_metrics(dataset):
+            return metric_planner.plan(dataset, nl)
         return {
             "dataset": dataset.key,
             "engine": "deterministic-planner",
@@ -1326,6 +1337,15 @@ def plan(dataset, nl):
             "steps": ["确定性兜底不可用 → 交回 LLM 语义分析路径"],
         }
     return _PLANNERS[dataset.key](dataset, nl)
+
+
+def _has_metrics(dataset):
+    """数据集是否已登记口径（x_askoda_metrics 非空）。"""
+    try:
+        reg = (dataset.mdl or {}).get("x_askoda_metrics") or {}
+        return bool(reg.get("metrics"))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ---------------------------------------------------------------------------

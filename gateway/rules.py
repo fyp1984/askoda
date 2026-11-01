@@ -273,6 +273,26 @@ def build_mdl_index(dataset: str) -> dict:
                 if tref:
                     time_cols.add(_norm_sql_name(tref) + "." + n_cn)
         model_cols[mname] = cols
+
+    # 口径视图（MDL.x_askoda_metrics.views）也是可引用的合法对象。
+    # 不登记它们，L1「引用未登记对象」会把每一条口径 SQL 都判红——
+    # 而那种红是假红：视图由引擎展开，业务上完全合法（2026-11-01 接入 C 库时踩过）。
+    _reg_views = (mdl.get("x_askoda_metrics") or {}).get("views") or {}
+    for _vn, _vmeta in _reg_views.items():
+        _v = _norm_sql_name(_vn)
+        all_tables.add(_v)
+        for _c in ((_vmeta or {}).get("columns") or []):
+            _cn = _norm_sql_name(_c)
+            all_columns.add(_cn)
+            all_columns.add(_v + "." + _cn)
+    # 口径登记里声明的时间列也是「合法时间列」：否则 TIME_FIELD_SUSPECT 会把
+    # 每个口径的时间条件都报成警告（stat_month 这类视图列不在物理模型列里）。
+    for _m in ((mdl.get("x_askoda_metrics") or {}).get("metrics") or []):
+        _tc = _m.get("time_col")
+        if _tc:
+            _tcn = _norm_sql_name(_tc)
+            time_cols.add(_tcn)
+            time_cols.add(_norm_sql_name(_m.get("view") or "") + "." + _tcn)
     return {
         "models": out_models,
         "tables": out_tables,
