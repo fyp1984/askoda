@@ -256,3 +256,6 @@
 | 38 | **`wren-mcp-c` 起来了但没 MDL** | 正常现象，不用管 | `wren-docker-c/workspace/mdl.json` 当前为空 | 引擎容器先于库存在，只能空跑。建完 `credit` 库、登记 C 并在页面点「测试」通过后，引擎侧才会装载模型。**现在探针报 `database "credit" does not exist` 是预期结果**，不是故障。 |
 | 39 | **默认库位置由部署侧给，页面不给填** | 已定，不改 | `bff/config.py::DB_DEFAULT_HOST` / `DB_DEFAULT_PORT`，compose 里 `ASKODA_DB_HOST` / `ASKODA_DB_PORT` | 原设计让用户在页面填主机地址，直接撞架构红线 A2（业务用户面前不出现内部地址），G2 拦下 6 处。改为：页面只填库名/端口，主机由 `ASKODA_DB_HOST` 给；没配则报 `DB_HOST_NOT_CONFIGURED` 并指路运维，**不猜、不兜底到 127.0.0.1**（猜错会连到别的库）。 |
 | 40 | **门禁项数 132→134 回填** | ✅ 已闭合 | `tools/gate_count_sync.py --write` | G0 96 / G1 30 / G2 6 / G3 2，日常 126。 |
+| 41 | **`credit` 库已建成** | ✅ 完成（`f5c0075`） | `db/credit/`（01_schema.sql / 02_seed.py / 03_relations.csv / README.md） | 24 表 / 564 列，分 `public` / `dwd` / `dwm`。造数 233 笔借据、金额 27.47 亿、余额 8.51 亿。三判据探针全通（PG 24 表 / MDL 24 模型 564 字段 13 关系 / 引擎侧 `models_match=true`）。 |
+| 42 | **知识库 125 张表里 106 张没有字段定义** | 待补，**不建空表** | `db/credit/README.md` 文末清单 | 只有 25 张有字段级定义（`02_字段知识库`）。建一张没有列的空表只会把「表不存在」变成「列不存在」，更难查。补字段后用 `tools/credit_ddl_from_kb.py` 重新生成即可。 |
+| 43 | **C 库「自然语言→SQL」还出不来** | 待决策（不是建库问题） | `gateway/llm_settings` + `gateway/planner.py` | 两条堵点：① 当前大模型是本地 `deepseek-r1:7b`（推理型，16 tok/s），生成 132 列宽表的 SQL 直接超时；② 确定性兜底 planner 没有 C 库意图库（按 A/B 零售域写的），报「口径未建模」。**给定 SQL 过门禁是通的（status=通过，L1–L4 全过）**，缺的是前面的生成环节。 |
