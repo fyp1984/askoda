@@ -89,14 +89,36 @@ def _fingerprint(section: dict) -> str:
 
 
 def load(dataset: str) -> dict:
-    """读该数据集当前生效的口径。"""
+    """读该数据集当前生效的口径。
+
+    「还没接入登记」**不算错误**：A/B 库仍从原文件读 MDL，本来就没有登记行。
+    这里返回空清单 + registered=False，界面才能显示中性的空状态；
+    若抛错，用户一进页面（默认停在 B 库）就先看到一个红框，像是系统坏了。
+    """
     key = (dataset or "").strip().upper()
-    row = _row(key)
+    if not key:
+        raise MetricError("dataset 不能为空")
+    row = dataset_store.raw_row(key)
+    if not row:
+        return {
+            "ok": True,
+            "dataset": key,
+            "registered": False,
+            "version": "",
+            "views": [],
+            "metrics": [],
+            "models": 0,
+            "updated_by": "",
+            "updated_at": None,
+            "notice": "数据集「%s」还没有接入口径登记，暂无口径可维护"
+                      "（目前只有「信贷业务库 C」接入）。" % key,
+        }
     mdl = _parse_mdl(row)
     sec = metric_spec.section_of(mdl)
     return {
         "ok": True,
         "dataset": key,
+        "registered": True,
         "version": sec.get("version") or "",
         "views": sec.get("views") or [],
         "metrics": sec.get("metrics") or [],

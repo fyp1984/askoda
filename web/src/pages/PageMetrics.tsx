@@ -326,10 +326,14 @@ export default function PageMetrics({
         </div>
 
         {metrics.length === 0 && !loading ? (
-          <p className="muted">这个数据集还没有登记任何口径。登记一条，规划器才认得出业务说法。</p>
+          <p className="muted">
+            {data?.registered === false
+              ? data?.notice || '这个数据集还没有接入口径登记，暂无口径可维护。'
+              : '这个数据集还没有登记任何口径。登记一条，规划器才认得出业务说法。'}
+          </p>
         ) : null}
 
-        {!readonly ? (
+        {!readonly && data?.registered !== false ? (
           <div className="pager">
             <button onClick={() => startEdit()} disabled={!views.length}>
               新增口径
@@ -495,11 +499,17 @@ export default function PageMetrics({
                     <tbody>
                       {preview.rows.slice(0, 20).map((r, i) => (
                         <tr key={i}>
-                          {(preview.columns || []).map((c) => (
-                            <td key={c} className="mono">
-                              {r[c] === null || r[c] === undefined ? '-' : String(r[c])}
-                            </td>
-                          ))}
+                          {(preview.columns || []).map((c, ci) => {
+                            // 后端返回的是「行数组」，按列序取值；也兼容按列名取值的对象行。
+                            // 曾经只按列名取 ⇒ 每格都取不到，整张表全是「-」，
+                            // 看起来像「查出来是空的」，实际数就在手里。
+                            const v = Array.isArray(r) ? r[ci] : (r as Record<string, unknown>)[c]
+                            return (
+                              <td key={c} className="mono">
+                                {v === null || v === undefined ? '-' : String(v)}
+                              </td>
+                            )
+                          })}
                         </tr>
                       ))}
                     </tbody>

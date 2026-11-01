@@ -281,15 +281,25 @@ def _t_save_persist_warning():
             os.environ["ASKODA_ENGINE_WORKSPACE_C"] = old
 
 
-@case("读取：未登记的数据集给明确原因，不返回空壳")
+@case("读取：未登记的数据集 ⇒ 空状态但**必须说明原因**（不许静默空壳，也不许抛红框）")
 def _t_load_unknown():
+    """这里的设计变更：未登记 ≠ 故障。
+
+    A/B 库仍从原文件读 MDL，本来就没有登记行；一进页面（默认停在 B 库）
+    若抛错，用户先看到一个红框，像是系统坏了。所以改为「空清单 + 原因」。
+    但「不返回空壳」的原意必须保留：notice 不能为空，且要指名哪个库有口径。
+    """
     with Patch():
-        try:
-            metric_store.load("Z")
-        except metric_store.MetricError as e:
-            assert "未登记" in str(e), e
-        else:
-            raise AssertionError("未登记的数据集竟然读成功了")
+        r = metric_store.load("Z")
+        assert r["ok"] is True, r
+        assert r.get("registered") is False, r
+        assert r["metrics"] == [] and r["views"] == [] and r["version"] == "", r
+        notice = r.get("notice") or ""
+        assert notice, "空状态必须给出原因，不能是静默空壳"
+        assert "Z" in notice and "C" in notice, "得说清是哪个库没接入、哪个库有：%r" % notice
+        # 已登记的库照旧读出内容，并明确标 registered=True
+        c = metric_store.load("C")
+        assert c["registered"] is True and len(c["metrics"]) == 1, c
 
 
 @case("读取：返回的视图带语句，界面据此展示「这条口径基于什么」")

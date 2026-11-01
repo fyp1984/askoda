@@ -679,6 +679,9 @@ export type MetricDef = {
 export type MetricsResp = {
   ok: boolean
   dataset: string
+  /** 该数据集有没有接入口径登记；false ⇒ 空状态，不是故障 */
+  registered?: boolean
+  notice?: string
   version: string
   views: MetricView[]
   metrics: MetricDef[]
@@ -708,7 +711,8 @@ export type MetricPreviewResp = {
   sql?: string
   row_count?: number
   columns?: string[]
-  rows?: Record<string, unknown>[]
+  /** 后端按「列名数组 + 行数组」返回；也兼容按列名取值的对象行 */
+  rows?: Array<Record<string, unknown> | unknown[]>
   blocked?: boolean
   reason?: string
   guide?: string
