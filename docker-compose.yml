@@ -321,9 +321,19 @@ services:
       - "127.0.0.1:${BFF_HOST_PORT:-18081}:18081"
 
   # ------------------------------------------------------------------
-  # 本地 embedding 服务（B4b · 恢复知识检索召回）
+  # 本地 embedding 服务（B4b · 仅回滚 RAGFlow 直连时使用）
   #
-  # 为什么需要它
+  # 【现状 · 2026-11-02】Askoda 知识检索已于 2026-10-30 切到 WeKnora MCP
+  #   （KNOWLEDGE_BACKEND=mcp-weknora），embedding 由 WeKnora 经 Ollama 的
+  #   bge-m3（11434）承担。RAGFlow 已全部停止（Exited 3 天），本服务近 24h
+  #   真实 embedding 请求为 0。故加 profile 门槛（local-embed），默认 `up -d`
+  #   不再拉起，省下约 2.1GiB 常驻内存。
+  #   回滚 RAGFlow 直连时才需要它：
+  #     docker compose --profile local-embed up -d tei-embedding
+  #   更省事的做法：直接把 RAGFlow 的 embedding base_url 指向
+  #   http://host.docker.internal:11434/v1（Ollama 的 bge-m3，实测向量一致）。
+  #
+  # 为什么需要它（B4b 时期 · 历史背景）
   # ------------
   # RAGFlow 里 `tenant_model_instance.extra.base_url` 现在指向**本机**
   # `http://host.docker.internal:18002/v1`（2026-10-08 从远端主机收回，见下方注释）。
@@ -353,7 +363,8 @@ services:
   #            仍能召回——**向量空间未变，已入库文档无需重建**；
   #            ② 本机单批 16 条实测 3.9s，比远端快一个数量级。
   #
-  #   如需临时停用本机 TEI（省资源）：docker compose stop tei-embedding
+  #   已改为 profile 门槛（local-embed）：默认 `up -d` 不拉起；要重新启用
+  #   `docker compose --profile local-embed up -d tei-embedding`。
   #   回滚到远端：把 RAGFlow 租户的 tenant_model_instance.extra.base_url
   #               改回 http://100.103.240.78:18001/v1（改完需重启 RAGFlow）
   #   模型权重未拉取时：./.models/fetch_bge_m3.sh "$PWD/bge-m3"
@@ -363,6 +374,7 @@ services:
     container_name: askoda-tei-embedding
     restart: unless-stopped
     platform: linux/amd64
+    profiles: ["local-embed"]   # 默认不启动；仅回滚 RAGFlow 直连时才开
     command:
       - "--model-id"
       - "/models/bge-m3"

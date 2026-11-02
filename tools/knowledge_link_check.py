@@ -120,15 +120,15 @@ def check_health(components):
     if not k.get("ok"):
         return False, "knowledge_health.ok=false（base=%s endpoint=%s）" % (
             k.get("base"), k.get("endpoint")), (
-            "① 19380 入口是否可达：curl -o /dev/null -w '{http_code}' "
-            "http://127.0.0.1:19380/api/v1/datasets（401 才是正常）；"
-            "② RAGFlow 容器健康不等于可检索，看 knowledge-overlay/ragflow-upstream/"
-            "ragflow-logs 里的 task_executor 日志；"
+            "① WeKnora 入口是否可达：curl -o /dev/null -w '{http_code}' "
+            "http://127.0.0.1:18180/api/v1/kb（200 才是正常）；"
+            "② ekos-weknora / ekos-weknora-postgres 容器健康不等于可检索，"
+            "看 WeKnora 后台任务日志；"
             "③ 刚重建的话先等 1-2 分钟预热")
     vis = k.get("datasets_visible")
     if not vis:
         return False, "知识库不可见（datasets_visible=%s）" % vis, (
-            "检查 RAGFlow 的 API Key / 租户配置，网关侧 KNOWLEDGE_API_KEY")
+            "检查 WeKnora 的 API Key / 知识库配置，网关侧 KNOWLEDGE_MCP_TOKEN")
     ds = k.get("dataset") or {}
     return True, "可达：知识库「%s」%s 篇文档（%sms）" % (
         ds.get("name"), ds.get("documents"), k.get("ms")), ""
@@ -190,10 +190,10 @@ def check_search(tools, docs, log, base_ok=True):
     return False, "检索失败：ok=%s 引用=%d 条 原始返回=%s" % (
         (last or {}).get("ok"), len((last or {}).get("citations") or []),
         str(last)[:160]), (
-        "底座可达但检索不到，多半是 embedding 链路或 ES 索引："
-        "① 本机 TEI 是否活着（askoda-tei-embedding:18002）；"
-        "② RAGFlow 租户的 base_url 是否指向它；"
-        "③ ES 索引是否已建（docker logs 看 HEAD .../ragflow_doc_meta_* 的 status）")
+        "底座可达但检索不到（WeKnora MCP 路径），多半是 embedding 或知识库索引："
+        "① 知识底座 WeKnora 是否活着（ekos-weknora:18180）；"
+        "② 其 embedding 模型（Ollama bge-m3:11434）是否可达；"
+        "③ 知识库索引是否已建（WeKnora 后台任务日志）")
 
 
 def check_attachments(components):
