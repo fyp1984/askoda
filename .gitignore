@@ -131,6 +131,10 @@ tools/_*
 # ⚠️ 例外：_pyshim/ 是**要提交的正式资产**（仓库自带的 sitecustomize 垫片）⇒ 显式放行
 !tools/_pyshim/
 !tools/_pyshim/**
+# ⚠️ 上面的 `!` 放行是递归的，会把垫片自己的 __pycache__ 一并放行，
+#   覆盖全局的 `__pycache__/` 忽略 ⇒ 跑完门禁后 tools/_pyshim/__pycache__/ 会被
+#   当成未跟踪文件。此处显式重新忽略（后置规则优先）。
+tools/_pyshim/__pycache__/
 
 # 仓库根的本地探针/临时文件（实测出现过 _mvtest3.txt 等）
 /_mvtest*
