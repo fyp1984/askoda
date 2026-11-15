@@ -47,14 +47,16 @@
 
 ### 关于知识库功能（可选）
 
-系统自带的业务口径文档需要 RAGFlow（知识底座）才能用上。
+系统自带的业务口径文档需要一个**知识底座**才能用上。默认走 **WeKnora（经 MCP 接入）**，
+也可回退到 **RAGFlow 直连**。
 
-- **不部署 RAGFlow**：系统照常可用，只是「引用知识文档」这个功能是空的，其他都不受影响。
-- **要部署**：需额外按 [RAGFlow 官方文档](https://github.com/infiniflow/ragflow) 装一套（它自带 MySQL / Elasticsearch / MinIO / Redis，约占 8 GB 内存）。
+- **不接知识底座**：系统照常可用，只是「引用知识文档」这个功能是空的，其他都不受影响。
+- **默认（WeKnora）**：在 WeKnora 建好 MCP endpoint（绑定知识库、启用读写工具），把地址与 token 填进 `.env`（见 [3.2](#32-填知识底座配置)）。
+- **回退（RAGFlow）**：需额外按 [RAGFlow 官方文档](https://github.com/infiniflow/ragflow) 装一套（它自带 MySQL / Elasticsearch / MinIO / Redis，约占 8 GB 内存），并置 `KNOWLEDGE_BACKEND=ragflow`。
 
 <p align="center">
 
-💡 <b>建议：</b>第一次部署先把 RAGFlow 放一边，先把主系统跑通，跑顺了再回来装。
+💡 <b>建议：</b>第一次部署先不接知识底座，先把主系统跑通，跑顺了再回来接。
 
 </p>
 
@@ -218,22 +220,31 @@ Copy-Item .env.example .env
 cp .env.example .env
 ```
 
-### 3.2 填两项必填
+### 3.2 填知识底座配置
 
-用**任意文本编辑器**打开 `.env`（记事本、VS Code 都行），找到这两行：
+用**任意文本编辑器**打开 `.env`（记事本、VS Code 都行）。默认后端是 WeKnora（经 MCP 接入），
+找到这两行：
 
 ```ini
-KNOWLEDGE_API_KEY=
-KNOWLEDGE_DATASET_ID=
+KNOWLEDGE_MCP_URL=
+KNOWLEDGE_MCP_TOKEN=
 ```
 
-**如果暂时没装 RAGFlow**：这两行**留空**，但网关启动会报错，需要按 3.3 处理。
+**如果暂时不接知识底座**：留空即可，知识检索不可用（其余功能不受影响），接入后按 [3.3](#33-暂时不接知识底座怎么办) 处理。
 
-**如果装了 RAGFlow**：在 RAGFlow 界面建数据集、生成 API Key，把两个值填进去（必须来自同一个数据集）。
+**如果接了 WeKnora**：在 WeKnora 建好 MCP endpoint（绑定知识库、启用读写工具），把 endpoint 地址
+（如 `http://host.docker.internal:18180/mcp/{endpoint_id}`）与该 endpoint 的 `mcp_*` token 填进去；
+知识库 ID 填 `KNOWLEDGE_DATASET_ID`（`knowledge_base_id`，逗号分隔多个）。
 
-### 3.3 只想先看界面、不装 RAGFlow 怎么办
+**如果改用 RAGFlow 直连**：在 `.env` 里置 `KNOWLEDGE_BACKEND=ragflow`，再填 `KNOWLEDGE_API_KEY`
+与 `KNOWLEDGE_DATASET_ID`（必须来自同一个数据集）。
 
-把 `.env` 里这一行：
+### 3.3 暂时不接知识底座怎么办
+
+默认后端是 WeKnora（MCP）：把 `KNOWLEDGE_MCP_URL` / `KNOWLEDGE_MCP_TOKEN` 留空即可，
+知识检索不可用，其余功能（需求分析、SQL 生成、门禁、审计）全部正常。
+
+若你走的是 RAGFlow 回退路径（`KNOWLEDGE_BACKEND=ragflow`），把 `.env` 里这一行：
 
 ```ini
 KNOWLEDGE_API_URL=http://host.docker.internal:19380/api/v1
@@ -249,7 +260,7 @@ KNOWLEDGE_API_URL=http://127.0.0.1:19380/api/v1
 
 <p align="center">
 
-⚠️ <b>这一步只是让你快速看到界面。</b>真正要用知识检索，还是得装 RAGFlow。
+⚠️ <b>这一步只是让你快速看到界面。</b>真正要用知识检索，需接入 WeKnora MCP（或用 RAGFlow 回退）。
 
 </p>
 
@@ -317,7 +328,7 @@ bash tools/init_first_run.sh
 **其他可选参数：**
 
 ```bash
-# 连知识文档一起导入（需已部署 RAGFlow）
+# 连知识文档一起导入（需已接入知识底座：WeKnora MCP 或 RAGFlow）
 bash tools/init_first_run.sh --with-knowledge
 
 # 全部做（含业务口径词条）
@@ -346,7 +357,7 @@ bash tools/init_first_run.sh --all
 pip install "psycopg[binary]" "minio>=7.2" "sqlglot>=25.0"
 
 python3 tools/collect_metadata.py --dataset A --dataset B --seed-glossary
-python3 tools/ingest_knowledge.py      # 导入知识文档（需 RAGFlow）
+python3 tools/ingest_knowledge.py      # 导入知识文档（需已接入知识底座：WeKnora MCP 或 RAGFlow）
 python3 tools/seed_glossary.py --apply # 业务口径（可选）
 ```
 
@@ -465,13 +476,13 @@ failed to update builder last activity time ... operation not permitted
 | 页面空白 | 前端产物没构建 | `cd web && npm install && npm run build && cd ..` 再 `docker compose restart bff` |
 | 页面 404 / 白屏 | 端口变了但还用旧地址 | 用新端口访问 |
 | 提交需求报「拿不到表结构」 | 初始化没跑 | 回[第 5 步](#第-5-步--首次初始化) |
-| 知识检索一直是 0 条 | RAGFlow 或 embedding 不可用 | 看 `docker compose logs` 里有没有 `EmbeddingError` |
-| 知识检索报找不到 API Key | `.env` 没填 | 回[3.2](#32-填两项必填) |
+| 知识检索一直是 0 条 | 知识底座（WeKnora / RAGFlow）或 embedding 不可用 | 看 `docker compose logs` 里有没有 `EmbeddingError` |
+| 知识检索报「未配置」 | `.env` 里知识底座配置为空 | 回[3.2](#32-填知识底座配置) |
 
 ### 知识检索全断（重要）
 
-**RAGFlow 每次检索都现场调 embedding，不缓存**，所以 embedding 一挂，检索就全断
-而且**不报错**，只表现为「明明有文档却一条搜不到」。
+**RAGFlow 回退路径下，每次检索都现场调 embedding，不缓存**，所以 embedding 一挂，检索就全断
+而且**不报错**，只表现为「明明有文档却一条搜不到」。（默认的 WeKnora MCP 由底座内部承担 embedding。）
 
 排查顺序（别一上来就重启服务）：
 
@@ -534,23 +545,26 @@ failed to update builder last activity time ... operation not permitted
 | 名称 | 用途 | 是否必须 | 仓库 / 下载 |
 |---|---|---|---|
 | **Docker Desktop / OrbStack** | 跑容器的平台 | ✅ **必须** | <https://www.docker.com/products/docker-desktop/> · <https://orbstack.dev/> |
-| **RAGFlow** | 知识库底座 | ❌ 不装也能跑 | <https://github.com/infiniflow/ragflow> |
+| **WeKnora** | 知识库底座（默认，经 MCP 接入） | ❌ 不接也能跑 | <https://github.com/Tencent/WeKnora> |
+| **RAGFlow** | 知识库底座回退路径 | ❌ 不接也能跑 | <https://github.com/infiniflow/ragflow> |
 | Git | 下载项目 | ❌ 可用 ZIP 代替 | <https://git-scm.com/> |
 | Python | 跑初始化脚本 | ⚠️ 首次初始化需要 | <https://www.python.org/> |
 | Node.js | 只有改前端才需要 | ❌ | <https://nodejs.org/> |
 
-### A.4 关于 RAGFlow 的重要说明
+### A.4 关于知识底座的重要说明
+
+默认知识底座是 **WeKnora**，本项目经 **MCP** 接入（底座侧建 MCP endpoint，应用侧只持有 URL + token）。
 
 <p align="center">
 
-⚠️ <b>RAGFlow 不在本项目仓库里，需要你按官方文档单独部署。</b>
+⚠️ <b>WeKnora / RAGFlow 都不在本项目仓库里，需要你按官方文档单独部署。</b>
 
 </p>
 
-它**自带一整套依赖**（MySQL、Elasticsearch、MinIO、Redis），内存占用约 8 GB。
-部署指引：<https://github.com/infiniflow/ragflow>
+- **WeKnora（默认）**：<https://github.com/Tencent/WeKnora>
+- **RAGFlow（回退）**：<https://github.com/infiniflow/ragflow>，它**自带一整套依赖**（MySQL、Elasticsearch、MinIO、Redis），内存占用约 8 GB。
 
-**RAGFlow 与本项目通过 HTTP API 相连**，不共享数据库、不共享容器，互不影响。
+两者与本项目都通过标准协议相连（WeKnora 经 MCP、RAGFlow 经 HTTP API），不共享数据库、不共享容器，互不影响。
 
 ---
 
@@ -598,18 +612,21 @@ curl -s http://127.0.0.1:18081/api/v1/health | python3 -m json.tool
 curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool
 ```
 
-### 本机 embedding（主用，默认随主栈启动）
+### 本机 embedding（默认不启动）
+
+> 默认知识底座 WeKnora 自带 embedding，本服务仅在回退 RAGFlow 直连
+> （`KNOWLEDGE_BACKEND=ragflow`）时才需要。
 
 ```bash
 # 启动（模型未拉取时先跑 ./.models/fetch_bge_m3.sh "$PWD/bge-m3"）
-docker compose up -d tei-embedding
+docker compose --profile local-embed up -d tei-embedding
 
 # 验证（应返回 200）
 curl -s -m 10 -X POST http://127.0.0.1:18002/embed \
   -H 'Content-Type: application/json' -d '{"inputs":["ok"]}' | head -c 120
 ```
 
-> 之后在 RAGFlow 界面（模型管理 → embedding 模型）把地址改成
+> 之后在 RAGFlow 界面（回退路径：模型管理 → embedding 模型）把地址改成
 > `http://host.docker.internal:18002/v1`。
 
 ### 工程自检

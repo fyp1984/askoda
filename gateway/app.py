@@ -28,7 +28,8 @@ import urllib.request
 4. 确定性兜底：`plan` 工具提供封闭世界 NL→SQL（LLM 路径不可用时的保底）。
 5. 只读保护：`query` 工具仅放行 SELECT / WITH。
 6. **需求受理（M2）**：`demand_*` 四工具 + 入口侧敏感掩码 + 四道提交校验 + 落库留痕。
-7. **知识底座（M2）**：`knowledge_*` 引用式检索（RAGFlow 原生接口，零代码侵入）。
+7. **知识底座（M2）**：`knowledge_*` 引用式检索（默认经 MCP 接入 WeKnora，
+   RAGFlow 直连为回退，零代码侵入）。
 8. **元数据字典（M2）**：`metadata_*` 按表查中文名与口径，MDL 语义与物理结构合流。
 9. **附件（M2）**：`attachment_*` 接入 MinIO，高风险附件上传即提示。
 10. **语义分析与确认闭环（M3）**：`analysis_*` 第一轮语义分析（六槽位 + 证据链 + 规则
@@ -63,7 +64,8 @@ import urllib.request
     WREN_A_URL / WREN_B_URL / MDL_A_PATH / MDL_B_PATH            —— 语义层双库
     ASSISTANT_DB_DSN                                             —— 网关自有元数据库
     MINIO_ENDPOINT / MINIO_ACCESS_KEY / MINIO_SECRET_KEY         —— 附件存储
-    KNOWLEDGE_API_URL / KNOWLEDGE_API_KEY / KNOWLEDGE_DATASET_ID —— RAGFlow 独立栈知识底座
+    KNOWLEDGE_BACKEND / KNOWLEDGE_MCP_URL / KNOWLEDGE_MCP_TOKEN  —— 知识底座（默认 WeKnora MCP）
+    KNOWLEDGE_API_URL / KNOWLEDGE_API_KEY / KNOWLEDGE_DATASET_ID —— RAGFlow 直连回退（KNOWLEDGE_BACKEND=ragflow）
     GATEWAY_HOST / GATEWAY_PORT
 """
 
@@ -158,7 +160,8 @@ async def healthz(_request):
     datasets = [_probe(ds) for ds in registry.all().values()]
     comps = _probe_components()
     # 判定口径：网关自身 + 语义层双库 + 元数据库 + 附件存储决定 ok/degraded；
-    # 知识库（RAGFlow 独立栈）单独展示——它不可用时问数链路仍应可用，故不拖垮整体状态。
+    # 知识库（默认 WeKnora MCP，回退 RAGFlow）单独展示——它不可用时问数链路仍应可用，
+    # 故不拖垮整体状态。
     core_ok = (
         all(d["ok"] for d in datasets)
         and comps["meta_db"].get("ok")
@@ -751,7 +754,7 @@ def demand_supplement(
 
 
 # ---------------------------------------------------------------------------
-# M2 · 知识检索（RAGFlow 引用式召回）
+# M2 · 知识检索（默认 WeKnora MCP 引用式召回，RAGFlow 直连为回退）
 # ---------------------------------------------------------------------------
 @mcp.tool
 def knowledge_list_kbs() -> dict:
@@ -922,9 +925,11 @@ def knowledge_upload(
 ) -> dict:
     """上传一份文档到知识库并触发解析（知识准入）。
 
-    入库分两步（RAGFlow v0.26.4 契约）：先 multipart 直传到数据集，
-    再 `documents/parse` 触发切分+向量化。**解析是异步的**，本调用返回后
-    用 `knowledge_document_status` 轮询进度，不要在本次调用里等。
+    入库分两步：先直传到目标知识库，再触发切分+向量化。
+    具体契约随 `KNOWLEDGE_BACKEND` 而变——默认经 MCP 接入 WeKnora，
+    RAGFlow 直连回退时为 multipart 直传 + `documents/parse`。
+    **解析是异步的**，本调用返回后用 `knowledge_document_status` 轮询进度，
+    不要在本次调用里等。
 
     入参
     ----
@@ -979,7 +984,7 @@ def knowledge_document_status(document_id: str = "", limit: int = 50) -> dict:
 def knowledge_delete(document_id: str, actor: str = "") -> dict:
     """从知识库撤库一份文档（知识准入的反向操作）。
 
-    只删RAGFlow 里的文档，不碰需求单与附件存储。
+    只删知识库（默认 WeKnora，回退 RAGFlow）里的文档，不碰需求单与附件存储。
     """
     try:
         result = knowledge.delete_document(document_id, actor=actor)

@@ -5,7 +5,7 @@
 # docker-compose.yml 的目标环境是 EKOS 产品底座，依赖四样本机没有的外部资源：
 #   ① A/B 两个模拟业务库（ekos-postgres，宿主 15432）
 #   ② 附件对象存储（ekos-minio，宿主 19000/19001）
-#   ③ 知识底座 RAGFlow（宿主 19380）
+#   ③ 知识底座 WeKnora（MCP endpoint，宿主 18180；回退路径为 RAGFlow，宿主 19380）
 #   ④ 两个 external 数据卷（wren-docker_wren-pgdata / wren-docker-b_wren-pgdata-b）
 # 本覆盖层把 ①②④ 用仓库自带的东西还原成自包含的，③ 按部署手册 3.3 降级（知识检索不可用）。
 #
@@ -84,7 +84,8 @@ services:
 
   # ------------------------------------------------------------------
   # ④ 本机 embedding（TEI）：收进 profile，默认不启动
-  #    本机没有 bge-m3 权重（.models/bge-m3 为空），且未部署 RAGFlow 时用不到。
+  #    本机没有 bge-m3 权重（.models/bge-m3 为空），且默认走 WeKnora（embedding
+  #    由其内部承担）时用不到；仅回退 RAGFlow 直连时才需要。
   #    需要时：docker compose -f ... --profile local-embed up -d tei-embedding
   # ------------------------------------------------------------------
   tei-embedding:

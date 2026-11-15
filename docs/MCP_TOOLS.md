@@ -98,7 +98,7 @@
 | `knowledge_documents`       | `limit=50`                                                                                 | 已入库文档（名称 / 解析状态 / 分块数 / 更新时间）                                                                | 知识储备      |
 | `knowledge_upload`          | ★`filename`, ★`content_base64`, `content_type=""`, `actor=""`                              | `document_ids` + `parse_started` + `dedup_checked`；**同名返回 `duplicate=true`**；表格含超长单元格返回 `oversized=true`（附 `cells` 位置表）；`note` 汇总解析/防重/预检提示 | 知识准入 · 上传 |
 | `knowledge_document_status` | `document_id=""`, `limit=50`                                                               | 逐份文档的 `run`（DONE/RUNNING/FAIL）+ `progress` + `chunk_count`                                   | 解析轮询      |
-| `knowledge_delete`          | ★`document_id`, `actor=""`                                                                 | 撤库结果；只删 RAGFlow 文档，不碰需求单与附件                                                                  | 知识准入 · 撤库 |
+| `knowledge_delete`          | ★`document_id`, `actor=""`                                                                 | 撤库结果；只删知识库（默认 WeKnora，回退 RAGFlow）文档，不碰需求单与附件                                                    | 知识准入 · 撤库 |
 | `knowledge_retire`          | ★`citation_id`, `reason=""`, `actor=""`                                                    | 把某条知识引用标记为已下架/已回退                                                                            | 引用留痕治理    |
 | `knowledge_citation_list`   | `demand_id=""`, `include_retired=False`, `limit=50`                                        | 知识引用留痕记录（按时间倒序）                                                                              | 引用可追溯     |
 | `knowledge_list_kbs`        | —                                                                                          | 可见知识库清单（名称 / 文档数 / 能力位）                                                                    | 绑定前先看有什么 |
@@ -107,15 +107,16 @@
 
 </p>
 
-> **检索侧两处实测**：`threshold` **必须 >0**（传 0 会被按 falsy 回退到 0.2）；  
+> **检索侧两处实测（RAGFlow 回退路径；默认 WeKnora MCP 的参数面由底座决定）**：
+> `threshold` **必须 >0**（传 0 会被按 falsy 回退到 0.2）；  
 > `vector_weight` 默认 0.7（官方 0.3 偏关键词，中文长问句易漏召回）。
 >
-> **口语化问句易 0 命中**：RAGFlow 对「坪效怎么算」这类疑问句常返回 0 条，  
+> **口语化问句易 0 命中**：RAGFlow 回退路径对「坪效怎么算」这类疑问句常返回 0 条，  
 > 需去掉疑问词改问「坪效 面积」才召回。这是底座特性，不是故障。
 >
 > **准入侧三处实测**：① 解析是**异步**的，上传后须轮询  
 > `knowledge_document_status`到 `run=DONE` 才算可被检索命中；  
-> ② **同名文件会被 RAGFlow 静默改名**（`x.md` → `x(1).md`），  
+> ② **同名文件会被底座静默改名**（RAGFlow 回退路径实测 `x.md` → `x(1).md`），  
 > 同一口径两版并存会让召回自相矛盾，故本工具**在入库前拦下同名**并返回  
 > `duplicate=true`，前端据此提供「撤掉库中那份再重传」的一键入口；  
 > ③ **表格里超过 2048 字符的单元格会让 embedding 服务静默卡死**  
@@ -124,9 +125,10 @@
 > （`表名!坐标` + 字符数），用户可直接定位去拆。`.xls` 是旧二进制格式扫不了，  
 > 放行但在 `note` 里提示「建议另存为 .xlsx」。
 >
-> **部署前提**：本域依赖 RAGFlow 与 embedding 服务，
+> **部署前提**：默认依赖知识底座 WeKnora（经 MCP 接入，embedding 由底座内部承担）；
+> 回退到 RAGFlow 直连时另需 embedding 服务。
 > 详见[《部署手册》关于知识库功能](DEPLOYMENT.md#关于知识库功能可选)
-> 与[本机 embedding 启动](DEPLOYMENT.md#本机-embedding备用需要时才开)。
+> 与[本机 embedding 启动（回退路径）](DEPLOYMENT.md#本机-embedding默认不启动)。
 
 #### 域 5 · 元数据字典（3）
 

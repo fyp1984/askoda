@@ -1,7 +1,8 @@
 # 服务端网关（MCP 工具面 65 个 · 双库语义层 · 门禁 · 只读执行 · 留痕回放）
 
 数据需求智能分析助手的服务端入口：对 Agent 暴露 MCP 工具，对内接入 Wren 语义层双库、
-自有元数据库与附件对象存储，对下接入 RAGFlow 知识底座。
+自有元数据库与附件对象存储，对下接入知识底座（默认 WeKnora，经 MCP 接入；
+RAGFlow 直连作为回退保留）。
 
 > **语义分析不依赖任何模型。** 结论以「证据编排 + 确定性规则」落地，一律带来源与置信度，
 > 因此 M3 的验收与回放可在任意 Agent（豆包 / Codex / WorkBuddy）上跑，
@@ -50,7 +51,8 @@ docker compose up -d --build
 | 模拟库 B | `127.0.0.1:9002`（MCP）/ `15433`（PG） | 零售会员域，8 表 |
 | 网关元数据库 | `127.0.0.1:15434`（PG） | 需求单 / 事件 / 元数据字典（网关自有） |
 | 附件对象存储 | `127.0.0.1:19000`（S3）/ `19001`（控制台） | MinIO，桶 `askoda-attachments` |
-| 知识底座 | `http://127.0.0.1:19380/api/v1` | RAGFlow 检索接口（网关只做客户端） |
+| 知识底座（默认） | WeKnora MCP endpoint（如 `http://127.0.0.1:18180/mcp/{endpoint_id}`） | 经 MCP 接入（网关只做客户端） |
+| 知识底座（回退） | `http://127.0.0.1:19380/api/v1` | RAGFlow 检索接口（`KNOWLEDGE_BACKEND=ragflow` 时） |
 
 宿主机端口用 `18080` 而非 `8080`：`8080` 已被本项目 `demo-server.py` 长期占用。
 
@@ -198,7 +200,7 @@ docker compose up -d --build
 | `db.py` | 网关自有元数据库：7 张表 DDL + 线程内连接复用 |
 | `demand.py` | 需求受理：四类校验、状态机、事件留痕 |
 | `masking.py` | 入口侧脱敏：7 类规则 + 姓氏闸门 + 区间去重 |
-| `knowledge.py` | RAGFlow 检索客户端：引用解析 + 问句压缩回退 |
+| `knowledge.py` | 知识检索（可切换后端：默认 WeKnora MCP / RAGFlow 直连）：引用解析 + 问句压缩回退 |
 | `metadata.py` | 元数据字典：MDL 语义 × 物理结构合流，"建表但不建模"标注 |
 | `collect.py` | 元数据采集：`native` / `schemacrawler` 双后端 + 交叉校验 |
 | `attachments.py` | MinIO 附件：上传、列举、临时链接、文本风险扫描 |
@@ -262,13 +264,17 @@ $VENV tools/reset_demo_data.py --apply --purge-attachments  # 连同附件对象
 | `WREN_PG_A_DSN` / `WREN_PG_B_DSN` | `postgresql://test:test@wren-postgres-a:5432/test` 等 | 元数据采集直连 DSN |
 | `ASSISTANT_DB_DSN` | `postgresql://assistant:assistant@assistant-postgres:5432/assistant` | 网关自有元数据库 |
 | `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` | `assistant-minio:9000` / `…` / `askoda-attachments` | 附件存储 |
-| `KNOWLEDGE_API_URL` | `http://host.docker.internal:19380/api/v1` | RAGFlow 检索接口 |
-| `KNOWLEDGE_API_KEY` / `KNOWLEDGE_API_KEY_FILE` | 空 | 知识库凭据（二选一） |
-| `KNOWLEDGE_DATASET_ID` | 空 | 目标数据集 |
+| `KNOWLEDGE_BACKEND` | `mcp-weknora` | 知识底座后端（`mcp-weknora` 默认 / `ragflow` 回退） |
+| `KNOWLEDGE_MCP_URL` / `KNOWLEDGE_MCP_TOKEN` | 空 | MCP 底座（WeKnora）地址与 token |
+| `KNOWLEDGE_MCP_PROVIDER` | `weknora` | MCP provider（`weknora` / `ragflow`） |
+| `KNOWLEDGE_KB_IDS` | 空 | MCP 后端默认知识库 ID（逗号分隔；缺省回退 `KNOWLEDGE_DATASET_ID`） |
+| `KNOWLEDGE_API_URL` | `http://host.docker.internal:19380/api/v1` | RAGFlow 检索接口（回退路径） |
+| `KNOWLEDGE_API_KEY` / `KNOWLEDGE_API_KEY_FILE` | 空 | 知识库凭据（回退路径，二选一） |
+| `KNOWLEDGE_DATASET_ID` | 空 | 目标数据集 / 知识库 ID |
 | `KNOWLEDGE_TIMEOUT` | `30` | 检索超时（秒） |
 
-> 容器访问宿主机上的 RAGFlow 走 `host.docker.internal`，编排里已加
-> `extra_hosts: ["host.docker.internal:host-gateway"]`。
+> 容器访问宿主机上的知识底座（WeKnora MCP 或回退的 RAGFlow）走 `host.docker.internal`，
+> 编排里已加 `extra_hosts: ["host.docker.internal:host-gateway"]`。
 
 ## 七、已知工程约束
 
@@ -276,7 +282,7 @@ $VENV tools/reset_demo_data.py --apply --purge-attachments  # 连同附件对象
 2. **数据卷复用**：编排里的 `wren-pgdata` / `wren-pgdata-b` 为 external，指向单栈时代既有卷，历史数据与已部署 MDL 零迁移。M2 新增的 `askoda-pgdata` / `askoda-minio-data` 为本编排自有卷（卷名在 `volumes:` 里显式 `name:` 钉住，与工程名一致，换目录名 / 项目名不影响数据）。
 3. **单栈 compose 与本编排共用容器名与数据卷**（`wren-docker/`、`wren-docker-b/`），**不可同时起两套**；单栈仅作单库调试用。
 4. **入口侧脱敏的作用域边界**：姓名规则靠"首字须为常见姓氏"降误判，因此**孤立人名（如只在句中出现的"李明"而无任何称谓/上下文）不会被识别**。这是刻意的取舍——误掩普通词的代价（需求单读不通）与漏掩的代价（敏感值落库）需要平衡，而真正敏感的手机号/身份证/银行卡/邮箱/地址是**格式驱动**、识别稳定的。详见 `knowledge/02-数据安全与敏感字段管理办法.md`。
-5. **RAGFlow 表格型 chunk 无坐标**：从 markdown 表格切出的 chunk `positions` 为空。`knowledge._locator` 会如实标注为 `position=n/a(表格型chunk未返回坐标)`，下游用 `position_available` 分支处理，不要依赖 `positions` 恒存在。
+5. **知识 chunk 无页级坐标**：RAGFlow 表格型 chunk 与 WeKnora MCP 后端均不返回页级坐标，`positions` 为空。`knowledge._locator` 会如实标注为 `position=n/a(表格型chunk未返回坐标)`，下游用 `position_available` 分支处理，不要依赖 `positions` 恒存在。
 6. **元数据两条采集路径**：`schemacrawler` 后端出结构（表/列/主键），`information_schema` 出类型名，每次采集自动交叉校验，不一致即退出码 2。不要单看一侧就认为字典正确。
 7. **MDL 只在容器内可达**：`MDL_A_PATH` / `MDL_B_PATH` 默认是容器内路径（`/workspace-a/mdl.json`），宿主机直跑网关代码时读不到，P7（表关系）会失败。这不是缺陷，而是编排设计（MDL 以只读卷挂载）；要宿主机复现，把 `MDL_B_PATH` 指向 `wren-docker-b/workspace/mdl.json` 即可。**重要的是失败时不会静默**：`degraded_sources` 会报出 P7 缺失、R1 未生效、置信度压到 0.50 上限。
 8. **镜像标签与版本号同步**：编排里 `image: askoda-gateway:0.3.0`，与 `gateway/app.py` 的 `GATEWAY_VERSION` 一致。**升版本号时两处要一起改**，否则运维侧看标签会误判。
