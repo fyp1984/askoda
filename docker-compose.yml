@@ -189,7 +189,8 @@ services:
       assistant-postgres:
         condition: service_healthy
     extra_hosts:
-      # 容器内直连宿主机的 RAGFlow 独立栈知识底座 API（127.0.0.1:19380 在容器内不可达）
+      # 容器内直连宿主机的知识底座（WeKnora MCP endpoint，回退路径为 RAGFlow API；
+      # 127.0.0.1 在容器内不可达）
       - "host.docker.internal:host-gateway"
     environment:
       GATEWAY_HOST: "0.0.0.0"
@@ -230,20 +231,20 @@ services:
       MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY:?请在 .env 或环境变量中提供 EKOS MinIO 用户名}"
       MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:?请在 .env 或环境变量中提供 EKOS MinIO 密钥}"
       MINIO_BUCKET: "${MINIO_BUCKET:-askoda-attachments}"
-      # RAGFlow v0.26.4 原生检索接口（无 FileBay 兜底分支）。
+      # RAGFlow v0.26.4 原生检索接口（仅 KNOWLEDGE_BACKEND=ragflow 回退时使用；无 FileBay 兜底分支）。
       # 注意：19380 入口目前是 nginx 代理，backend 仍是旧绑定栈内的 ragflow-cpu
       # ——「RAGFlow 独立栈」在物理上尚未成立，见 P1-1。
       KNOWLEDGE_API_URL: "${KNOWLEDGE_API_URL:-http://host.docker.internal:19380/api/v1}"
       KNOWLEDGE_API_KEY: "${KNOWLEDGE_API_KEY:-}"
       KNOWLEDGE_DATASET_ID: "${KNOWLEDGE_DATASET_ID:-}"
       # ── 知识底座可切换（2026-10-30 · MCP 统一接入）────────────────
-      # KNOWLEDGE_BACKEND=ragflow       → RAGFlow REST 直连（默认，历史行为）
-      # KNOWLEDGE_BACKEND=mcp-weknora   → 经 MCP 接入 WeKnora（CR008 产品架构）
+      # KNOWLEDGE_BACKEND=mcp-weknora   → 经 MCP 接入 WeKnora（默认，CR008 产品架构）
+      # KNOWLEDGE_BACKEND=ragflow       → RAGFlow REST 直连（回退，历史行为）
       #   KNOWLEDGE_MCP_URL    如 http://host.docker.internal:18180/mcp/{endpoint_id}
       #   KNOWLEDGE_MCP_TOKEN  WeKnora MCP endpoint 的 mcp_* token
       #   KNOWLEDGE_MCP_PROVIDER  weknora（默认）/ ragflow
       #   KNOWLEDGE_DATASET_ID 复用为 knowledge_base_id（逗号分隔多个）
-      KNOWLEDGE_BACKEND: "${KNOWLEDGE_BACKEND:-ragflow}"
+      KNOWLEDGE_BACKEND: "${KNOWLEDGE_BACKEND:-mcp-weknora}"
       KNOWLEDGE_MCP_URL: "${KNOWLEDGE_MCP_URL:-}"
       KNOWLEDGE_MCP_TOKEN: "${KNOWLEDGE_MCP_TOKEN:-}"
       KNOWLEDGE_MCP_PROVIDER: "${KNOWLEDGE_MCP_PROVIDER:-weknora}"

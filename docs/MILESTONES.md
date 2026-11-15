@@ -30,6 +30,6 @@
 
 ### 3 技术债务清单（已知 · 非阻塞）
 
-- [ ] 知识底座表格型 chunk 的 `positions` 恒空，需 RAGFlow 侧升级后对接精确坐标
+- [ ] 知识底座表格型 chunk 的 `positions` 恒空（默认 WeKnora MCP 与 RAGFlow 回退均不返回页级坐标），需底座侧升级后对接精确坐标
 
 ---

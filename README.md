@@ -130,15 +130,21 @@ curl -s http://127.0.0.1:18081/api/v1/health | python3 -m json.tool
 ```
 
 <details>
-<summary><b>⚠️ 两项必填配置（不填则知识检索不可用）</b></summary>
+<summary><b>⚠️ 知识底座配置（默认 WeKnora · 经 MCP 接入）</b></summary>
+
+默认后端 `KNOWLEDGE_BACKEND=mcp-weknora`：在 WeKnora 建好 MCP endpoint（绑定知识库、
+启用读写工具）后回填下列两项，知识检索即可用。
 
 | 变量 | 说明 |
 |---|---|
-| `KNOWLEDGE_API_KEY` | RAGFlow 侧的 API Key |
-| `KNOWLEDGE_DATASET_ID` | 目标数据集 ID（与 Key 必须成对且同属一个数据集） |
+| `KNOWLEDGE_MCP_URL` | WeKnora MCP endpoint 地址（如 `http://host.docker.internal:18180/mcp/{endpoint_id}`） |
+| `KNOWLEDGE_MCP_TOKEN` | 该 endpoint 的 `mcp_*` token |
+| `KNOWLEDGE_DATASET_ID` | 目标知识库 ID（`knowledge_base_id`，逗号分隔多个） |
 
-取值方式：在 RAGFlow 界面建好数据集并生成 API Key 后回填。
-留空会导致网关启动即硬失败——这是刻意设计，避免「检索恒为空」被误当成正常。
+**回退到 RAGFlow 直连**（`KNOWLEDGE_BACKEND=ragflow`）时改填 RAGFlow 侧的
+`KNOWLEDGE_API_KEY` 与 `KNOWLEDGE_DATASET_ID`（必须成对且同属一个数据集）。
+未配置时知识检索会**硬失败并给出修复指引**——这是刻意设计，避免「检索恒为空」
+被误当成正常。
 
 </details>
 
@@ -169,8 +175,7 @@ flowchart LR
     GW --> W["Wren 语义层 A / B"]
     W --> DB[("模拟业务库 A / B")]
     GW --> META[("元数据库<br/>需求 · 审计 · 字典")]
-    GW --> RF["RAGFlow 知识底座"]
-    RF --> EMB["embedding · TEI"]
+    GW --> RF["知识底座 · WeKnora<br/>（经 MCP 接入）"]
 ```
 
 <p align="center">
@@ -185,7 +190,7 @@ flowchart LR
 |---|---|
 | R1 | 不给业务开源自带的 UI |
 | R2 | 前端只调自研 BFF，不直连任何后端 |
-| R3 | 不 fork、不改开源上游（Wren / RAGFlow 等） |
+| R3 | 不 fork、不改开源上游（Wren / WeKnora / RAGFlow 等） |
 | R4 | 不做 UI 补丁 / DOM 注入 |
 | R5 | API 契约版本化（统一 `/api/v1`） |
 
@@ -322,7 +327,8 @@ python3 tools/gate_all.py                     # 全量（含 G3，会真实连�
 | [Wren Engine Ibis](https://github.com/Canner/wren-engine) | Apache-2.0 | 独立容器 + MCP 协议 |
 | [PostgreSQL](https://www.postgresql.org) | PostgreSQL License | 独立容器 |
 | [MinIO](https://github.com/minio/minio) | AGPL-3.0 | 独立容器（独立服务，未与本项目代码链接） |
-| [RAGFlow](https://github.com/infiniflow/ragflow) | Apache-2.0 | 独立栈 + HTTP 客户端 |
+| [WeKnora](https://github.com/Tencent/WeKnora) | MIT | 独立部署 + MCP 协议（默认知识底座） |
+| [RAGFlow](https://github.com/infiniflow/ragflow) | Apache-2.0 | 独立栈 + HTTP 客户端（知识底座回退路径） |
 
 </p>
 
@@ -330,7 +336,8 @@ python3 tools/gate_all.py                     # 全量（含 G3，会真实连�
 
 <strong>致谢</strong>：语义层能力由
 <a href="https://github.com/Canner/wren-engine">Wren Engine</a> 提供；
-知识底座由 <a href="https://github.com/infiniflow/ragflow">RAGFlow</a> 提供。
-两者均以独立进程 / 标准协议方式接入，<strong>未 fork、未修改上游代码</strong>。
+知识底座由 <a href="https://github.com/Tencent/WeKnora">WeKnora</a> 提供（经 MCP 接入），
+<a href="https://github.com/infiniflow/ragflow">RAGFlow</a> 直连作为回退保留。
+它们均以独立进程 / 标准协议方式接入，<strong>未 fork、未修改上游代码</strong>。
 
 </p>

@@ -135,15 +135,20 @@ curl -s http://127.0.0.1:18081/api/v1/health | python3 -m json.tool
 ```
 
 <details>
-<summary><b>⚠️ Two required settings (knowledge retrieval fails without them)</b></summary>
+<summary><b>⚠️ Knowledge base setup (default: WeKnora over MCP)</b></summary>
+
+The default backend is `KNOWLEDGE_BACKEND=mcp-weknora`: create an MCP endpoint in WeKnora
+(bind the knowledge bases, enable read/write tools), then fill in the two settings below.
 
 | Variable | Meaning |
 |---|---|
-| `KNOWLEDGE_API_KEY` | API key issued by RAGFlow |
-| `KNOWLEDGE_DATASET_ID` | Target dataset ID (must be a matched pair with the key) |
+| `KNOWLEDGE_MCP_URL` | WeKnora MCP endpoint URL (e.g. `http://host.docker.internal:18180/mcp/{endpoint_id}`) |
+| `KNOWLEDGE_MCP_TOKEN` | The `mcp_*` token for that endpoint |
+| `KNOWLEDGE_DATASET_ID` | Target knowledge base ID (`knowledge_base_id`, comma-separated) |
 
-Create the dataset and generate an API key in the RAGFlow UI, then fill these in.
-Leaving them empty makes the gateway **fail fast at startup** — this is deliberate,
+To **fall back to RAGFlow direct connect** (`KNOWLEDGE_BACKEND=ragflow`), fill in RAGFlow's
+`KNOWLEDGE_API_KEY` and `KNOWLEDGE_DATASET_ID` instead (a matched pair in one dataset).
+Leaving them empty makes the gateway **fail fast with a fix hint** — this is deliberate,
 so that "retrieval always returns empty" can never be mistaken for normal behavior.
 
 </details>
@@ -175,8 +180,7 @@ flowchart LR
     GW --> W["Wren semantic layer A / B"]
     W --> DB[("Mock business DBs A / B")]
     GW --> META[("Metadata DB<br/>requirements · audit · dictionary")]
-    GW --> RF["RAGFlow knowledge base"]
-    RF --> EMB["embedding · TEI"]
+    GW --> RF["Knowledge base · WeKnora<br/>(over MCP)"]
 ```
 
 <p align="center">
@@ -192,7 +196,7 @@ flowchart LR
 |---|---|
 | R1 | Never expose an upstream open-source UI to business users |
 | R2 | The frontend calls only our own BFF, never a backend directly |
-| R3 | No forking, no modifying upstream (Wren / RAGFlow) |
+| R3 | No forking, no modifying upstream (Wren / WeKnora / RAGFlow) |
 | R4 | No UI patching / DOM injection |
 | R5 | API contracts are versioned (uniform `/api/v1`) |
 
@@ -338,7 +342,8 @@ Documentation is licensed under **CC BY 4.0**; please attribute.
 | [Wren Engine Ibis](https://github.com/Canner/wren-engine) | Apache-2.0 | Separate container, MCP protocol |
 | [PostgreSQL](https://www.postgresql.org) | PostgreSQL License | Separate container |
 | [MinIO](https://github.com/minio/minio) | AGPL-3.0 | Separate container (standalone service, not linked to this code) |
-| [RAGFlow](https://github.com/infiniflow/ragflow) | Apache-2.0 | Separate stack, HTTP client |
+| [WeKnora](https://github.com/Tencent/WeKnora) | MIT | Separate deployment, MCP protocol (default knowledge base) |
+| [RAGFlow](https://github.com/infiniflow/ragflow) | Apache-2.0 | Separate stack, HTTP client (knowledge-base fallback) |
 
 </p>
 
@@ -346,8 +351,9 @@ Documentation is licensed under **CC BY 4.0**; please attribute.
 
 <strong>Acknowledgements</strong>: semantic layer capability is provided by
 <a href="https://github.com/Canner/wren-engine">Wren Engine</a>; the knowledge base by
-<a href="https://github.com/infiniflow/ragflow">RAGFlow</a>. Both are integrated as
-independent processes over standard protocols, with <strong>no fork and no upstream
-modifications</strong>.
+<a href="https://github.com/Tencent/WeKnora">WeKnora</a> (integrated over MCP), with
+<a href="https://github.com/infiniflow/ragflow">RAGFlow</a> direct connect retained as a
+fallback. They are integrated as independent processes over standard protocols, with
+<strong>no fork and no upstream modifications</strong>.
 
 </p>

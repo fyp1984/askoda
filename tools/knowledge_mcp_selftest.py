@@ -16,7 +16,8 @@ status → delete 全链路闭环，并断言返回形状与 RAGFlow 直连版�
 
 前置：KNOWLEDGE_BACKEND=mcp-*，KNOWLEDGE_MCP_URL/TOKEN 已配置，
 且 endpoint 绑定了至少一个知识库并启用读写工具。
-退出码 0 = 全过，1 = 有失败。
+未配置 MCP 底座（如纯离线 CI）时**优雅 SKIP 并以 0 退出**，不报红。
+退出码 0 = 全过（含 SKIP），1 = 有失败。
 """
 import os
 import sys
@@ -57,12 +58,19 @@ if not os.path.exists("/.dockerenv") and os.getenv("KNOWLEDGE_MCP_URL"):
     os.environ["KNOWLEDGE_MCP_URL"] = os.getenv("KNOWLEDGE_MCP_URL").replace(
         "host.docker.internal", "127.0.0.1")
 
-BACKEND = os.getenv("KNOWLEDGE_BACKEND", "ragflow").strip().lower()
+BACKEND = os.getenv("KNOWLEDGE_BACKEND", "mcp-weknora").strip().lower()
 if not BACKEND.startswith("mcp"):
-    print("KNOWLEDGE_BACKEND=%s 不是 MCP 后端；本自证只测 mcp-*。"
-          "临时切换示例：KNOWLEDGE_BACKEND=mcp-weknora python3 tools/knowledge_mcp_selftest.py"
-          % BACKEND)
-    sys.exit(1)
+    # 后端不是 MCP：本自证不适用。按 .github/workflows/gates.yml 的离线门禁契约
+    # 「缺外部依赖的 G1 脚本应优雅 SKIP 并以 0 退出」，如实 SKIP 而非报红。
+    print("[SKIP] knowledge_mcp_selftest：KNOWLEDGE_BACKEND=%s 不是 MCP 后端，"
+          "本自证只测 mcp-*；如需实测请 KNOWLEDGE_BACKEND=mcp-weknora。" % BACKEND)
+    sys.exit(0)
+
+if not os.getenv("KNOWLEDGE_MCP_URL", "").strip():
+    # 未配置 MCP endpoint（如纯离线 CI / 未接入知识底座）：无底座可测，如实 SKIP。
+    print("[SKIP] knowledge_mcp_selftest：KNOWLEDGE_MCP_URL 未配置，无 MCP 底座可测"
+          "（离线 CI 属正常；接入 WeKnora 后本自证将自动跑通）。")
+    sys.exit(0)
 
 import knowledge as kb  # noqa: E402  （分发块会把六函数绑到 knowledge_mcp）
 

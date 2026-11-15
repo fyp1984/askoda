@@ -66,6 +66,9 @@ curl -s -m 10 http://127.0.0.1:18081/api/v1/health | python3 -m json.tool
 
 ### 0.2 本机 embedding 是否可达
 
+> 默认知识底座 WeKnora（MCP）自带 embedding，本节仅在回退 RAGFlow 直连
+> （`KNOWLEDGE_BACKEND=ragflow`）时才需要。
+
 知识检索的向量服务是**主备**结构：**主为本机 TEI（`18002`），备为远端**（2026-10-08 起
 本机升为主用，远端因一周内多次中断降级为回滚选项）。
 RAGFlow 里的 `base_url` 是静态字符串，**不会自己切**，主挂了检索直接全断。

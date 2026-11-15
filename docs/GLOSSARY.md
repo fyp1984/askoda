@@ -40,8 +40,13 @@ A 库 6 模型/29 字段/5 关系；B 库 8 模型/47 字段/10 关系。SQL 里
 
 > 权威来源：`wren-docker/`、`gateway/wren.py`
 
+### WeKnora
+**开源知识库引擎**（腾讯开源，MIT），作为**默认知识底座**使用，经 **MCP** 接入（底座侧建 MCP endpoint，应用侧只持有 URL + token）。它负责把文档切块、向量化、检索、返回引用片段。
+
+> 权威来源：`gateway/knowledge_mcp.py`、`docker-compose.yml`
+
 ### RAGFlow
-**开源知识库引擎**，作为知识底座使用。它负责把文档切块、向量化、检索、返回带坐标的引用片段。
+**开源知识库引擎**，作为知识底座的**回退路径**（`KNOWLEDGE_BACKEND=ragflow`）使用。它负责把文档切块、向量化、检索、返回带坐标的引用片段。
 
 当前部署下 19380 端口是一个 nginx 反代，**其 backend 仍是旧绑定栈内的 RAGFlow 实例**——"独立栈"这个说法目前不成立。
 
