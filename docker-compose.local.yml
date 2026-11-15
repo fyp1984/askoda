@@ -1,0 +1,101 @@
+# 本地单机（无 EKOS 平台）部署覆盖层 · askoda
+#
+# 为什么需要这一层
+# ----------------
+# docker-compose.yml 的目标环境是 EKOS 产品底座，依赖四样本机没有的外部资源：
+#   ① A/B 两个模拟业务库（ekos-postgres，宿主 15432）
+#   ② 附件对象存储（ekos-minio，宿主 19000/19001）
+#   ③ 知识底座 RAGFlow（宿主 19380）
+#   ④ 两个 external 数据卷（wren-docker_wren-pgdata / wren-docker-b_wren-pgdata-b）
+# 本覆盖层把 ①②④ 用仓库自带的东西还原成自包含的，③ 按部署手册 3.3 降级（知识检索不可用）。
+#
+# 用法（在仓库根执行，两条 -f 顺序不能反）：
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml ps
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml down
+#
+# 说明：本文件只覆盖「外部依赖如何落地」，不改任何业务语义；
+#       网关/ BFF 的镜像、端口、环境变量口径与交付形态保持一致。
+name: askoda
+
+services:
+  # ------------------------------------------------------------------
+  # ① A/B 模拟业务库：本地替代 EKOS 的 ekos-postgres
+  #    同一实例、宿主 15432，库 test（电商域）+ retail（零售会员域），
+  #    建表数据取自仓库自带的 wren-docker*/postgres/init（见 local-dev/init）。
+  #    容器名沿用 EKOS 的 ekos-postgres，便于与文档口径对齐。
+  # ------------------------------------------------------------------
+  local-postgres:
+    image: postgres:15-alpine
+    container_name: ekos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: test
+    ports:
+      - "15432:5432"
+    volumes:
+      - ./local-dev/init:/docker-entrypoint-initdb.d:ro
+      - ./wren-docker:/seed-a:ro
+      - ./wren-docker-b:/seed-b:ro
+      - wren-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ------------------------------------------------------------------
+  # ② 附件对象存储：改用仓库自带的 assistant-minio
+  #    docker-compose.yml 里它被刻意停用（端口不发布，让位给 ekos-minio），
+  #    本机没有 ekos-minio ⇒ 把 19000/19001 还给它，凭据与 .env 的 MINIO_* 一致。
+  #
+  #    image 为什么要换：Docker Hub 上的 minio/minio 已不可拉取
+  #    （实测 docker.m.daocloud.io / docker.xuanyuan.me 均返回 403，quay.io 返回 401），
+  #    故换用 pgsty/minio —— 与官方同源重新发布的 MinIO 二进制镜像，
+  #    版本 RELEASE.2026-08-04T00-00-00Z（官方仓库 minio/minio 的镜像仓库）。
+  #    不影响本工程用法：附件走的是 S3 API（minio-py SDK），与镜像 tag 无关。
+  # ------------------------------------------------------------------
+  assistant-minio:
+    image: ${MINIO_IMAGE:-pgsty/minio:latest}
+    ports:
+      - "${ASSISTANT_MINIO_PORT:-19000}:9000"
+      - "${ASSISTANT_MINIO_CONSOLE_PORT:-19001}:9001"
+
+  # ------------------------------------------------------------------
+  # 语义引擎：依赖本地的 A/B 库就绪后再启动
+  #   它们的 connection_info.json 指向 host.docker.internal:15432，
+  #    在 Rancher Desktop / Docker Desktop 上指向宿主，故显式声明 host-gateway。
+  # ------------------------------------------------------------------
+  wren-mcp-a:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      local-postgres:
+        condition: service_healthy
+
+  wren-mcp-b:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      local-postgres:
+        condition: service_healthy
+
+  # ------------------------------------------------------------------
+  # ④ 本机 embedding（TEI）：收进 profile，默认不启动
+  #    本机没有 bge-m3 权重（.models/bge-m3 为空），且未部署 RAGFlow 时用不到。
+  #    需要时：docker compose -f ... --profile local-embed up -d tei-embedding
+  # ------------------------------------------------------------------
+  tei-embedding:
+    profiles: ["local-embed"]
+
+volumes:
+  # ③ 原为 external（沿用旧机器上的数据卷）。本机没有 ⇒ 改为由本编排自动创建，
+  #    卷名保持与 .env 的 WREN_PG_VOLUME / WREN_PG_VOLUME_B 一致，零迁移口径不变。
+  wren-pgdata:
+    external: false
+    name: ${WREN_PG_VOLUME:-wren-docker_wren-pgdata}
+  wren-pgdata-b:
+    external: false
+    name: ${WREN_PG_VOLUME_B:-wren-docker-b_wren-pgdata-b}
