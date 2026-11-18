@@ -42,7 +42,7 @@ GATEWAY_MCP_URL = "http://127.0.0.1:18080/mcp"
 
 # 代码事实基线（实测值，用于判漂移）
 BASELINE = {
-    "tool_count": 48,
+    "tool_count": 80,
     "rules_count": 11,
     "adversarial_suites": 3,
     "gate_scripts_min": 40,

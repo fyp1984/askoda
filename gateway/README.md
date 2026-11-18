@@ -1,4 +1,4 @@
-# 服务端网关（MCP 工具面 65 个 · 双库语义层 · 门禁 · 只读执行 · 留痕回放）
+# 服务端网关（MCP 工具面 80 个 · 双库语义层 · 门禁 · 只读执行 · 留痕回放）
 
 数据需求智能分析助手的服务端入口：对 Agent 暴露 MCP 工具，对内接入 Wren 语义层双库、
 自有元数据库与附件对象存储，对下接入 RAGFlow 知识底座。
@@ -54,9 +54,9 @@ docker compose up -d --build
 
 宿主机端口用 `18080` 而非 `8080`：`8080` 已被本项目 `demo-server.py` 长期占用。
 
-## 三、MCP 工具面（65 个 · 十域）
+## 三、MCP 工具面（80 个 · 十七域）
 
-> 按落地批次分列：**M1–M3 第一批（28 个）** + **M4–M6 第二批（13 个）** + **后续补齐（7 个）** + **M8 系统配置（3 个）** + **M10 登记与绑定（11 个）** + **M11 口径维护（3 个）**，合计 65 个。
+> 按落地批次分列：**M1–M3 第一批（28 个）** + **M4–M6 第二批（13 个）** + **后续补齐（7 个）** + **M8 系统配置（3 个）** + **M10 登记与绑定（11 个）** + **M11 口径维护（3 个）** + **Demo 全量批 · 新增能力（15 个，见批次 M12–M17）**，合计 80 个。
 > 逐条入参默认值与返回要点，以 [MCP 工具参考](../docs/MCP_TOOLS.md) 与项目文档《MCP 工具契约与注册说明》为事实源（`app.py` 增删工具须同批更新）。
 
 ### M1 · 语义层与问数
@@ -186,12 +186,35 @@ docker compose up -d --build
 > 优先级：`llm_settings` 表有行 ⇒ 整行生效；无行 ⇒ `LLM_*` 环境变量。**不做字段级混合。**
 > 未配置或开关关闭 ⇒ `sql_generate` 回落确定性规划器，行为与引入大模型之前一致。
 
+### M12–M17 · Demo 全量批 · 新增能力（15）
+
+| 工具 | 入参 | 说明 |
+|---|---|---|
+| `compliance_precheck` | `text=""`, `demand_id=""`, `dataset="B"`, `actor=""` | **闸门① 合规预检**（FR-4.11）：语义分析阶段、**早于任何 SQL 生成**；`verdict=拦截/告警/通过` + `risks[]`（含越权、提示注入等） |
+| `compliance_satisfiability` | `demand_id=""`, `dataset="B"`, `text=""`, `actor=""` | **闸门② 可满足性预检**（FR-4.10）：结构化后 / 检索前判「能不能答」，`satisfiable=false` 时给 `missing` 与 `alternatives` |
+| `compliance_danger_guard` | `sql`, `dataset="B"`, `demand_id=""`, `explain_rows=None`, `actor=""` | **闸门③ 危险语句拦截**（FR-7.5）：SQL 生成后；判不了的项显式列 `not_evaluated`，不静默读成「没问题」 |
+| `review_enqueue` | `demand_id`, `sql_run_id`, `dataset="B"`, `sql=""`, `generator=""`, `confidence=None`, `actor=""` | 复核入队（FR-6.7 / D15）：**无条件**建任务，幂等键 = `sql_run_id` |
+| `review_queue` | `status=""`, `dataset=""`, `limit=50` | 复核台队列：待复核优先 + 时间倒序，附 `policy` |
+| `review_detail` | `demand_id` | 某需求的任务 + 结论历史（append-only） |
+| `review_decide` | `task_id`, `decision`, `reviewer=""`, `note=""`, `rewritten_sql=""` | 下结论（通过 / 退回 / 改写）：**只增不改**，留痕到人（`rewritten_sql` 为人工改写，区别于门禁 D1 的 `revised_sql`） |
+| `review_summary` | `demand_id=""`, `dataset=""` | 交付页闸门（AC-10 / AC-13）：`all_approved=true` 才算复核环节通过 |
+| `classification_policies` | `dataset=""` | 分级分类策略台账（FR-7.8）：策略表不可用时 `sealed=true`（失败即关闭） |
+| `classification_policy_save` | `level`, `category`, `pattern`, `algorithm="mask"`, `params=None`, `description=""`, `dataset=""`, `policy_id=""`, `actor=""` | 数据管家维护策略：`pattern` 先校验正则合法性，非法即拒 |
+| `classification_mask_preview` | `dataset`, `columns`, `rows` | 脱敏预览（FR-7.9）：前（原始）/ 后（脱敏）对照 + 逐列分级；**落点在应用端**，不在 SQL 执行端 |
+| `audit_export` | `dataset=""`, `demand_id=""`, `limit=500`, `fmt="csv"`, `actor=""` | 审计导出（FR-7.7）：`fmt ∈ {csv, syslog}`；**取数失败不静默退成空表**，以 `warning` 区分「取数失败」与「本就无留痕」 |
+| `demand_conversation` | `demand_id`, `dataset="B"` | 看会话轮次（FR-4.8）：原需求为第 1 轮，其后每轮追问各成一轮 |
+| `demand_followup` | `demand_id`, `instruction`, `dataset="B"`, `actor="analyst"` | 追问（FR-4.8・P2）：整句追加进需求原文 → 重跑语义分析 → 重合成结构化需求（`version+1`），旧轮次 / 旧版本一律保留 |
+| `ontology_browse` | `dataset="B"`, `domain=""`, `table=""`, `column=""`, `limit=50` | 本体可视化（FR-2.6・P2）：逐层下钻 业务域 → 实体/表 → 字段 → 引用该字段的 CASE，纯只读 |
+
+> **三道闸门位置不同、判据不同，不合并、不复用判据**：① 查「该不该答」→ ② 查「能不能答」→ ③ 查「语句危不危险」。
+> **全量人工复核，不看置信度分流**：每条 SQL 都进队列，`confidence` 仅供复核排序参考，不作为免复核依据。
+> 相关实现见 `compliance.py` / `reviewqueue.py` / `classification.py` / `auditexport.py` / `ontology.py`。
 
 ## 四、代码结构
 
 | 文件 | 职责 |
 |---|---|
-| `app.py` | FastMCP 服务端：65 个工具、`/healthz` 路由、启动入口（启动时幂等建表） |
+| `app.py` | FastMCP 服务端：80 个工具、`/healthz` 路由、启动入口（启动时幂等建表） |
 | `wren.py` | Wren MCP 客户端（streamable-http，会话复用 + 失效重握手） |
 | `registry.py` | 数据集注册表（Wren 端点 + MDL 路径 + PG DSN），**换库只改注册项** |
 | `planner.py` | 确定性规划器兜底（A/B 两套意图库）+ 只读门禁 |
@@ -213,7 +236,7 @@ docker compose up -d --build
 ```bash
 # 在仓库根目录
 python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # 双探活
-python3 tools/mcp_acceptance_check.py                                 # MCP 工具面 65 个逐条核对
+python3 tools/mcp_acceptance_check.py                                 # MCP 工具面 80 个逐条核对
 python3 tools/gate_all.py --layers G0,G1                              # 静态 + 单元门禁（快跑，不写库）
 
 # 离线自证（改动脱敏 / 检索 / 闸门后随手复跑）

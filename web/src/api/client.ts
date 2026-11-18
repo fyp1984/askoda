@@ -130,6 +130,87 @@ export const api = {
     }),
   sqlExecute: (demandId: string, dataset: string, sql?: string) =>
     post<SqlExecResp>(`/demand/${encodeURIComponent(demandId)}/sql/execute`, { dataset, sql }),
+
+  // ---- 三道闸门（FR-4.11 / FR-4.10 / FR-7.5）----
+  // 位置不同、判据不同，**不合并**：合规预检（该不该答）/ 可满足性预检（能不能答）/
+  // 危险语句拦截（语句危不危险）。
+  demandGates: (demandId: string, dataset = 'B') =>
+    request<GatesResp>(`/demand/${encodeURIComponent(demandId)}/gates?dataset=${dataset}`),
+  compliancePrecheck: (body: { text?: string; demand_id?: string; dataset?: string; actor?: string }) =>
+    post<CompliancePrecheckResp>('/compliance/precheck', body),
+  dangerGuard: (body: {
+    sql: string
+    dataset?: string
+    demand_id?: string
+    explain_rows?: number
+    actor?: string
+  }) => post<DangerGuardResp>('/compliance/danger-guard', body),
+
+  // ---- 全量人工复核（FR-6.7 / AC-13 / D15）----
+  reviewQueue: (args: { status?: string; dataset?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (args.status) q.set('status', args.status)
+    if (args.dataset) q.set('dataset', args.dataset)
+    q.set('limit', String(args.limit ?? 50))
+    return request<ReviewQueueResp>(`/review/queue?${q.toString()}`)
+  },
+  reviewDetail: (demandId: string) =>
+    request<ReviewDetailResp>(`/demand/${encodeURIComponent(demandId)}/review`),
+  reviewSummary: (demandId: string, dataset = '') =>
+    request<ReviewSummaryResp>(
+      `/demand/${encodeURIComponent(demandId)}/review/summary?dataset=${encodeURIComponent(dataset)}`,
+    ),
+  reviewDecide: (
+    taskId: string,
+    body: { decision: string; reviewer: string; note?: string; rewritten_sql?: string },
+  ) => post<Record<string, any>>(`/review/${encodeURIComponent(taskId)}/decide`, body),
+
+  // ---- 分级分类自动脱敏（FR-7.8 / FR-7.9）----
+  classificationPolicies: (dataset = '') =>
+    request<ClassificationPoliciesResp>(
+      `/classification/policies?dataset=${encodeURIComponent(dataset)}`,
+    ),
+  saveClassificationPolicy: (body: {
+    level: string
+    category?: string
+    pattern: string
+    algorithm?: string
+    params?: Record<string, unknown>
+    description?: string
+    dataset?: string
+    policy_id?: string
+    actor?: string
+  }) => put<Record<string, any>>('/classification/policies', body),
+  classificationPreview: (body: { dataset?: string; columns: string[]; rows: unknown[][] }) =>
+    post<ClassificationPreviewResp>('/classification/preview', body),
+
+  // ---- P2 三条：多轮追问（FR-4.8）/ 本体可视化（FR-2.6）/ 审计导出（FR-7.7）----
+  // 导读第 1 节：Demo 范围为全量 60 条 FR，P2 三条在 Demo 中照常呈现。
+  conversation: (demandId: string, dataset = 'B') =>
+    request<ConversationResp>(
+      `/demand/${encodeURIComponent(demandId)}/conversation?dataset=${encodeURIComponent(dataset)}`,
+    ),
+  followup: (demandId: string, body: { instruction: string; dataset?: string; actor?: string }) =>
+    post<FollowupResp>(`/demand/${encodeURIComponent(demandId)}/followup`, body),
+  ontologyBrowse: (args: { dataset?: string; domain?: string; table?: string; column?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    q.set('dataset', args.dataset || 'B')
+    if (args.domain) q.set('domain', args.domain)
+    if (args.table) q.set('table', args.table)
+    if (args.column) q.set('column', args.column)
+    q.set('limit', String(args.limit ?? 50))
+    return request<OntologyBrowseResp>(`/ontology/browse?${q.toString()}`)
+  },
+  auditExport: (args: { dataset?: string; demand_id?: string; limit?: number; fmt?: string; actor?: string } = {}) => {
+    const q = new URLSearchParams()
+    if (args.dataset) q.set('dataset', args.dataset)
+    if (args.demand_id) q.set('demand_id', args.demand_id)
+    q.set('limit', String(args.limit ?? 500))
+    q.set('fmt', args.fmt || 'csv')
+    if (args.actor) q.set('actor', args.actor)
+    return request<AuditExportResp>(`/audit/export?${q.toString()}`)
+  },
+
   citations: (demandId: string) =>
     request<{ ok: boolean; source?: string; total?: number; items?: unknown[]; degraded_reason?: string }>(
       `/demand/${encodeURIComponent(demandId)}/citations`,
@@ -310,6 +391,12 @@ export type E2eStatus = {
   requirement: Record<string, any> | null
   context_pack: Record<string, any> | null
   runs: Record<string, any> | null
+  /** 闸门① 合规预检（FR-4.11）：语义分析阶段，早于任何 SQL 生成 */
+  compliance?: CompliancePrecheckResp | null
+  /** 闸门② 可满足性预检（FR-4.10）：结构化后 / 检索前 */
+  satisfiability?: SatisfiabilityResp | null
+  /** 全量人工复核汇总（FR-6.7）：交付页据此判「未经人工确认不得标可执行」 */
+  review_summary?: ReviewSummaryResp | null
   partial_errors: PartialError[]
   healthy: boolean
 }
@@ -334,6 +421,346 @@ export type GateLayer = {
   ok: boolean
   skipped: boolean
   detail: string
+}
+
+// ---------------------------------------------------------------------------
+// 三道闸门（FR-4.11 / FR-4.10 / FR-7.5）
+// 位置不同、判据不同，**不合并**（导读第 2 节第 3 条）：
+//   ① 合规预检（该不该答）→ ② 可满足性预检（能不能答）→ ③ 危险语句拦截（语句危不危险）
+// ---------------------------------------------------------------------------
+/** 合规预检命中项。matched 为 PII 时是预览串数组，命中规则时是命中片段。 */
+export type ComplianceRisk = {
+  type: string
+  severity: string
+  rule_id: string
+  matched: string | string[]
+  why: string
+  suggestion: string
+}
+
+export type CompliancePrecheckResp = {
+  ok: boolean
+  /** 拦截 / 告警 / 通过；'拦截' ⇒ 生成 SQL 之前必须停下 */
+  verdict?: string
+  stage?: string
+  demand_id?: string | null
+  dataset?: string
+  risk_count?: number
+  blocking_count?: number
+  risks?: ComplianceRisk[]
+  rewrite_suggestion?: string
+  /** 误拦率 / 命中率：**目标值 / 演示参数**，非实测（数字纪律） */
+  targets?: Record<string, string>
+  checked_at?: string
+  error?: string
+}
+
+export type SatisfiabilityMissing = { tables?: string[]; columns?: string[]; terms?: string[] }
+export type SatisfiabilityAlternative = { kind: string; label: string; detail: string }
+export type DialectScope = { supported: string[]; unsupported: string[] }
+
+export type SatisfiabilityResp = {
+  ok: boolean
+  /** 不支持 / 部分支持 / 可满足 */
+  verdict?: string
+  satisfiable?: boolean
+  stage?: string
+  demand_id?: string | null
+  dataset?: string
+  reasons?: string[]
+  missing?: SatisfiabilityMissing
+  alternatives?: SatisfiabilityAlternative[]
+  /** 方言不承诺范围（NFR-1.3）：存储过程 / 复杂 UDF / 动态 SQL / 跨库联邦 */
+  dialect_scope?: DialectScope
+  policy?: string
+  error?: string
+}
+
+export type DangerGuardReason = { type: string; detail: string; guide: string }
+
+export type DangerGuardResp = {
+  ok: boolean
+  blocked?: boolean
+  /** 拦截 / 通过 */
+  verdict?: string
+  demand_id?: string | null
+  dataset?: string
+  sql?: string
+  reasons?: DangerGuardReason[]
+  /** 未评估项：**缺席必须显式报未执行**，不得静默读成「没问题」 */
+  not_evaluated?: string[]
+  thresholds?: { explain_rows?: number; note?: string }
+  error?: string
+}
+
+export type GateItem = {
+  seq: number
+  key: string
+  title: string
+  question: string
+  stage: string
+  result: Record<string, any> | null
+}
+
+export type GatesResp = {
+  ok: boolean
+  demand_id?: string
+  dataset?: string
+  /** 闸门③ 实际作用的那条 SQL（该需求最近一次生成 / 交付） */
+  sql_effective?: string
+  gates?: GateItem[]
+}
+
+// ---------------------------------------------------------------------------
+// 全量人工复核（FR-6.7 / AC-13 / D15）—— 质量内核
+// 铁律：每条 SQL 都进队列，**不看置信度分流**；结论只增不改。
+// ---------------------------------------------------------------------------
+export type ReviewPolicy = {
+  full_review: string
+  confidence_routing: boolean
+  note: string
+}
+
+export type ReviewDecision = {
+  decision_id: string
+  task_id: string
+  demand_id?: string
+  decision: string
+  reviewer: string
+  note: string
+  rewritten_sql: string
+  created_at?: string
+}
+
+export type ReviewTaskItem = {
+  task_id: string
+  demand_id: string
+  sql_run_id: string
+  dataset?: string
+  generator?: string
+  confidence?: number | string | null
+  status: string
+  /** 列表接口不返回全文，只给预览 */
+  sql_text?: string
+  sql_preview?: string
+  created_at?: string
+  updated_at?: string
+  /** 明细接口（reviewDetail）才带 */
+  decisions?: ReviewDecision[]
+  latest_decision?: ReviewDecision | null
+}
+
+export type ReviewQueueResp = {
+  ok: boolean
+  total?: number
+  pending?: number
+  items?: ReviewTaskItem[]
+  policy?: ReviewPolicy
+  error?: string
+}
+
+export type ReviewDetailResp = {
+  ok: boolean
+  demand_id?: string
+  total?: number
+  items?: ReviewTaskItem[]
+  policy?: ReviewPolicy
+  error?: string
+}
+
+export type ReviewSummaryResp = {
+  ok: boolean
+  demand_id?: string | null
+  total?: number
+  counts?: Record<string, number>
+  /** 全部已复核通过；交付页据此判「未经人工确认不得标可执行」 */
+  all_approved?: boolean
+  policy?: ReviewPolicy
+  error?: string
+}
+
+// ---------------------------------------------------------------------------
+// 分级分类自动脱敏（FR-7.8 / FR-7.9 · NFR-3.8）
+// 落点在**应用端**，不在 SQL 执行端；默认交付路径不携带脱敏逻辑。
+// ---------------------------------------------------------------------------
+export type LevelLegend = { level: string; label: string }
+
+export type ClassificationPolicyItem = {
+  policy_id: string
+  dataset?: string
+  level: string
+  category?: string
+  pattern: string
+  algorithm: string
+  params?: Record<string, unknown>
+  description?: string
+  enabled?: boolean
+  /** table=界面维护的；builtin=内置默认策略 */
+  source?: string
+  updated_by?: string
+  updated_at?: string
+}
+
+export type ClassificationPoliciesResp = {
+  ok: boolean
+  /** 策略源不可用 ⇒ 失败即关闭（按最高敏感级处理） */
+  sealed?: boolean
+  source_error?: string | null
+  count?: number
+  levels?: LevelLegend[]
+  categories?: string[]
+  algorithms?: Array<{ key: string; label: string }>
+  items?: ClassificationPolicyItem[]
+  note?: string
+  error?: string
+}
+
+export type ColumnClassification = {
+  column: string
+  level: string
+  level_label?: string
+  category?: string
+  algorithm: string
+  algorithm_label?: string
+  matched?: boolean
+  /** closed-by-default ⇒ 未匹配 / 策略源不可用，按最高敏感级关闭 */
+  source?: string
+  description?: string
+  params?: Record<string, unknown>
+  reason?: string
+}
+
+export type ClassificationMaskResp = {
+  ok: boolean
+  sealed?: boolean
+  reveal?: boolean
+  columns?: string[]
+  /** reveal=false 时为脱敏后的行；reveal=true 时为原始行 */
+  rows?: unknown[][]
+  raw_rows?: unknown[][] | null
+  per_column?: ColumnClassification[]
+  applied?: Array<{
+    column: string
+    level: string
+    algorithm: string
+    algorithm_label?: string
+    category?: string
+  }>
+  closed?: Array<{ column: string; reason?: string }>
+  levels?: LevelLegend[]
+  location?: string
+  note?: string
+  error?: string
+}
+
+export type ClassificationPreviewResp = {
+  ok: boolean
+  sealed?: boolean
+  columns?: string[]
+  before_rows?: unknown[][]
+  after_rows?: unknown[][]
+  per_column?: ColumnClassification[]
+  applied?: ColumnClassification[]
+  closed?: ColumnClassification[]
+  levels?: LevelLegend[]
+  location?: string
+  boundary?: string
+  error?: string
+}
+
+// ---- P2 三条：多轮追问（FR-4.8）/ 本体可视化（FR-2.6）/ 审计导出（FR-7.7）----
+// 导读第 1 节：Demo 范围为全量 60 条 FR，P2 三条在 Demo 中照常呈现。
+
+/** 多轮追问 · 会话轮次（对齐 analysis_rounds 与 structured_requirements 版本）。 */
+export type ConversationTurn = {
+  turn: number
+  /** 第 1 轮 = 原始需求；其后各轮 = 多轮追问 */
+  kind: string
+  instruction: string
+  intents: Array<{ kind: string; snippet: string }>
+  round_no: number | null
+  requirement_version: number | null
+  created_at: string
+}
+
+export type ConversationResp = {
+  ok: boolean
+  demand_id?: string
+  dataset?: string
+  title?: string
+  status?: string
+  turn_count?: number
+  turns?: ConversationTurn[]
+  /** 上下文保留口径说明：原文追加 + 历轮分析 + 历版结构化需求，只增不改 */
+  context_policy?: string
+  error?: string
+}
+
+export type FollowupResp = {
+  ok: boolean
+  demand_id?: string
+  dataset?: string
+  turn?: number
+  instruction?: string
+  intents?: Array<{ kind: string; snippet: string }>
+  round_no?: number | null
+  requirement_version?: number | null
+  turns?: ConversationTurn[]
+  context_retained?: string
+  next?: string
+  error?: string
+}
+
+/** 本体可视化浏览：每层给面包屑 + 下一层可下钻项。 */
+export type OntologyNode = {
+  key: string
+  label: string
+  table_name?: string
+  column_name?: string
+  grain?: string
+  description?: string
+  row_estimate?: number | null
+  data_type?: string
+  nullable?: boolean | null
+  is_sensitive?: boolean
+  is_primary_key?: boolean
+  table_count?: number
+}
+
+export type OntologyCase = {
+  key: string
+  sql_run_id: string
+  demand_id: string
+  demand_title: string
+  review_status: string
+  adopted: boolean
+  generator_model: string
+  created_at: string
+}
+
+export type OntologyBrowseResp = {
+  ok: boolean
+  dataset?: string
+  level?: string
+  path?: Array<{ level: string; label: string; domain?: string; table?: string; column?: string }>
+  children?: OntologyNode[]
+  cases?: OntologyCase[]
+  case_note?: string
+  error?: string
+}
+
+/** 审计导出（FR-7.7）：返回内容由前端落成文件下载。 */
+export type AuditExportResp = {
+  ok: boolean
+  format?: string
+  count?: number
+  filename?: string
+  content?: string
+  columns?: string[]
+  retention?: string
+  audit_fields?: string
+  note?: string
+  error?: string
 }
 
 export type SqlResp = {
@@ -383,6 +810,12 @@ export type SqlExecResp = {
   deliverable?: boolean
   deliverable_reason?: string
   adopted?: boolean
+  /** 分级分类脱敏块（FR-7.9）：落点在应用端，不在 SQL 执行端 */
+  masking?: ClassificationMaskResp
+  /** 闸门③ 危险语句拦截结果（FR-7.5） */
+  danger_guard?: DangerGuardResp
+  /** 生成后自动入队的复核任务（FR-6.7，全量入队不看置信度分流） */
+  review_task?: { ok?: boolean; task_id?: string; created?: boolean; status?: string; error?: string }
 }
 
 // ---- 审计回放 ----

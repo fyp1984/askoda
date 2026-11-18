@@ -633,6 +633,20 @@ def first_round(demand_id, dataset="B", actor="analyst", persist=True):
                         "生成 %d 个待确认问题" % openq if openq else "无需业务确认，待审核")
 
     _qs_state = _questions_with_state(demand_id, result.get("questions"))
+
+    # 闸门① 合规预检（FR-4.11）—— **早于任何 SQL 生成**。
+    # 本函数是「语义分析」阶段，SQL 生成在下游 M5，因此这道闸门天然落在生成之前。
+    # 命中敏感明文 / 越权 / 违规意图 / 提示注入即拦截告警，并给合规改写建议。
+    # 预检自身失败不得阻断分析主流程：返回 ok=False 的预检块，由调用方决定是否放行。
+    compliance_block = None
+    try:
+        import compliance as compliance_mod
+        compliance_block = compliance_mod.precheck(
+            demand_id=demand_id, dataset=dataset, actor=actor
+        )
+    except Exception as e:  # noqa: BLE001
+        compliance_block = {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:200])}
+
     return {
         "ok": True,
         "demand_id": demand_id,
@@ -658,6 +672,9 @@ def first_round(demand_id, dataset="B", actor="analyst", persist=True):
         "slots_backfilled": slots_backfilled,
         "slots_backfilled_count": len(slots_backfilled),
         "slots_affected": slots_affected,
+        "compliance": compliance_block,
+        "compliance_verdict": (compliance_block or {}).get("verdict"),
+        "compliance_blocked": bool((compliance_block or {}).get("verdict") == "拦截"),
     }
 
 

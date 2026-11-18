@@ -37,6 +37,7 @@
 """
 import secrets
 import copy
+import time
 
 import db
 import registry
@@ -114,6 +115,7 @@ def execute_readonly(sql, dataset="B", demand_id=None, requirement_version=None,
            suspicious_signals, review, sql_run_id}
     失败：{"ok": False, "error": "..."}
     """
+    t0 = time.time()
     # a. sql 为空兜底：最近一次 generated_sql
     sql_effective = (sql if sql is not None else None)
     if sql_effective is None or str(sql_effective).strip() == "":
@@ -128,6 +130,32 @@ def execute_readonly(sql, dataset="B", demand_id=None, requirement_version=None,
             }
 
     sql_text = str(sql_effective).strip()
+
+    # 闸门③ 危险语句拦截（FR-7.5）—— SQL 生成后、执行前。
+    # 与「门禁 review」分工不同：review 判「SQL 写得对不对」，danger_guard 判
+    # 「语句危不危险」（非只读 / 多语句 / 无边界全表 / 超阈值 / 方言不支持）。
+    # 判据独立、不合并（导读第 2 节第 3 条）。
+    try:
+        import compliance as compliance_mod
+        danger = compliance_mod.danger_guard(
+            sql_text, dataset=dataset, demand_id=demand_id, actor=actor
+        )
+    except Exception as e:  # noqa: BLE001 —— 拦截器自身异常不得静默放过，按「未评估」记
+        danger = {
+            "ok": False, "blocked": False, "verdict": "未评估",
+            "error": "%s: %s" % (type(e).__name__, str(e)[:200]),
+            "not_evaluated": ["danger_guard 自身异常，本次未完成危险语句判定"],
+        }
+    if danger.get("blocked"):
+        return {
+            "ok": False,
+            "blocked": True,
+            "blocked_by": "danger_guard",
+            "error": "危险语句拦截：%s" % "；".join(
+                r.get("detail", "") for r in (danger.get("reasons") or [])
+            )[:300],
+            "danger_guard": danger,
+        }
 
     # ⚠️ REQ-COVERAGE 接线（2026-10-20）：把结构化需求喂给 L-REQ。
     # 不喂 requirement 时 L-REQ 恒判 skipped ⇒ 需求要素在**执行链路**上
@@ -219,7 +247,27 @@ def execute_readonly(sql, dataset="B", demand_id=None, requirement_version=None,
     data = exec_result.get("data") or []
     cols = exec_result.get("columns") or []
     row_count = len(data)
-    sample_rows = copy.deepcopy(data[:5])
+
+    # FR-7.9 分级分类自动脱敏（**应用端**，不在 SQL 执行端）
+    #   · SQL 执行端（Wren）原样返回结果集；脱敏发生在网关/BFF 编排层；
+    #   · 失败即关闭（NFR-3.8）：策略源不可用或字段未匹配 ⇒ 该列按最高敏感级置空；
+    #   · 默认交付路径「复制 SQL + 口径说明」**不携带脱敏逻辑、不得宣称已脱敏**。
+    # 返回给调用方展示 / 导出用的行一律走脱敏后的 masked_data。
+    try:
+        import classification as classification_mod
+        masking_block = classification_mod.mask_rows(dataset, cols, data)
+    except Exception as e:  # noqa: BLE001 —— 脱敏异常 ⇒ 按「失败即关闭」处理
+        masking_block = {
+            "ok": False, "sealed": True,
+            "error": "%s: %s" % (type(e).__name__, str(e)[:200]),
+            "location": "应用端（网关/BFF 编排层），不在 SQL 执行端",
+        }
+    masked_data = (
+        masking_block["rows"]
+        if isinstance(masking_block, dict) and masking_block.get("ok")
+        else [["***"] * len(cols) for _ in data]
+    )
+    sample_rows = copy.deepcopy(masked_data[:5])
 
     # d. 后置审查：传 exec_result 让 L5 真跑
     # ⚠️ 同样传 requirement=_requirement（与预审查**同一个**对象）——
@@ -307,9 +355,12 @@ def execute_readonly(sql, dataset="B", demand_id=None, requirement_version=None,
     validation_result = {
         "row_count": row_count,
         "columns": cols,
-        "sample_first3": copy.deepcopy(data[:3]),
+        "sample_first3": copy.deepcopy(masked_data[:3]),
         "signals": suspicious_signals,
         "l5_ok": l5_layer_ok,
+        # 执行耗时（毫秒）：审计导出 FR-7.4 的「执行耗时」字段取自此处。
+        # 口径 = 本函数入口到出结果的全过程（含门禁与 Wren 往返），非纯网络耗时。
+        "elapsed_ms": int((time.time() - t0) * 1000),
     }
 
     # M6-2 失败回退矩阵：把本次执行的 F4（审查命中规则）/ F5（结果可交付性）
@@ -403,6 +454,19 @@ def execute_readonly(sql, dataset="B", demand_id=None, requirement_version=None,
         return result
 
     adopted = bool(deliverable and review_status_final != "不通过")
+    # FR-6.7 全量人工复核：**每条 SQL 运行无条件入队**，不看置信度分流（D15 / AC-13）。
+    # 系统只出「快捷草稿」；未经人工在真实环境预测试确认，不得标注「可执行」。
+    review_task = None
+    if demand_id:
+        try:
+            import reviewqueue as reviewqueue_mod
+            review_task = reviewqueue_mod.enqueue(
+                demand_id=demand_id, sql_run_id=run_id, dataset=dataset,
+                sql=final_delivery_sql or sql_text, generator=generator_model,
+                actor=actor,
+            )
+        except Exception as e:  # noqa: BLE001 —— 入队失败不得反噬执行结果
+            review_task = {"ok": False, "error": "%s: %s" % (type(e).__name__, str(e)[:200])}
     result = {
         "execution_summary": "Wren 执行成功：%d 行 × %d 列（dataset=%s, generator=%s）" % (
             row_count, len(cols), dataset, generator_model
@@ -419,6 +483,9 @@ def execute_readonly(sql, dataset="B", demand_id=None, requirement_version=None,
         "deliverable": deliverable,
         "deliverable_reason": deliverable_reason,
         "adopted": adopted,
+        "masking": masking_block,
+        "danger_guard": danger,
+        "review_task": review_task,
     }
     result["fallback_matrix"] = fallback_matrix
     if fallback_extra:

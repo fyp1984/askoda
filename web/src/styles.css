@@ -889,3 +889,93 @@ button.secondary:hover:not(:disabled) { background: #f4f9ff; }
 
 /* 卡片右上角的长输入框（试跑问句） */
 .grow { flex: 1 1 320px; min-width: 220px; }
+
+/* ── 三道闸门串联可视化（FR-4.11 / FR-4.10 / FR-7.5）────────────────
+ * 三张节点卡横排、中间箭头串联：刻意不合并成一句「安全检查通过」，
+ * 因为三者在不同阶段回答不同问题（该不该答 / 能不能答 / 语句危不危险）。 */
+.gatepipe { margin: 4px 0; }
+.gatepipe-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.gatepipe-head-l { display: flex; flex-direction: column; gap: 2px; }
+.gatepipe-title { font-size: var(--text-sm); font-weight: 600; color: var(--text); }
+.gatepipe-flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+.gatepipe-node-wrap { display: flex; align-items: stretch; flex: 1 1 260px; min-width: 240px; }
+.gatepipe-node {
+  flex: 1 1 auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2, var(--panel));
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gatepipe-node.node-bad { border-color: var(--danger); background: var(--danger-bg); }
+.gatepipe-arrow { display: flex; align-items: center; justify-content: center; width: 26px; color: var(--muted); font-size: 16px; }
+.gatepipe-node-head { display: flex; align-items: center; gap: 8px; }
+.gatepipe-seq {
+  flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--color-primary, #2563eb); color: #fff;
+  font-size: 11px; display: inline-flex; align-items: center; justify-content: center;
+}
+.gatepipe-node-title { font-size: var(--text-sm); font-weight: 600; color: var(--text); }
+.gatepipe-q { display: flex; align-items: center; gap: 6px; }
+.gatepipe-stage { font-size: 11px; color: var(--muted); }
+.gatepipe-node-body { font-size: 12.5px; color: var(--text); }
+.gatepipe-meta { color: var(--muted); margin-bottom: 4px; }
+.gatepipe-risks, .gatepipe-reasons { margin: 0; padding-left: 16px; }
+.gatepipe-risks li, .gatepipe-reasons li { margin: 4px 0; }
+.gatepipe-risk-head { display: flex; align-items: center; gap: 6px; }
+.gatepipe-risk-why { color: var(--text); }
+.gatepipe-risk-sug { color: var(--state-warning-text); margin-top: 2px; }
+.gatepipe-alts { margin-top: 6px; }
+.gatepipe-alts-title { font-weight: 600; }
+.gatepipe-alts ul { margin: 2px 0; padding-left: 16px; }
+.gatepipe-scope { margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+.gatepipe-noteval { margin-top: 6px; font-size: 11.5px; color: var(--state-warning-text); }
+.gatepipe-noteval-title { font-weight: 600; }
+.gatepipe-noteval ul { margin: 2px 0; padding-left: 16px; }
+.gatepipe-num {
+  margin-top: 6px; font-size: 11.5px; color: var(--muted);
+  border-top: 1px dashed var(--line); padding-top: 4px;
+}
+.gatepipe-num-item { margin-left: 8px; }
+.gatepipe-blocked { border: 1px solid var(--danger); background: var(--danger-bg); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+.gatepipe-blocked-title { color: var(--danger); font-weight: 700; }
+.gatepipe-blocked-body { margin-top: 4px; font-size: 12.5px; color: var(--text); }
+
+/* ── 人工复核（FR-6.7 / AC-13 / D15）──────────────────────────────── */
+.review-policy { border: 1px solid var(--line); background: var(--panel-2, var(--panel)); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+.review-policy-title { font-weight: 600; color: var(--text); }
+.review-policy-body { margin-top: 4px; font-size: 12.5px; color: var(--muted); }
+.review-filters { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 6px 0 10px; font-size: 12.5px; }
+.review-filters label { display: flex; align-items: center; gap: 6px; }
+.review-filters select { font: inherit; font-size: 12.5px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }
+.review-count { color: var(--muted); }
+.review-meta { display: flex; gap: 16px; flex-wrap: wrap; margin: 6px 0 10px; font-size: 12.5px; color: var(--muted); }
+.review-form { display: flex; gap: 14px; flex-wrap: wrap; margin: 6px 0; }
+.review-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.review-form input, .review-form select { font: inherit; font-size: 13px; color: var(--text); background: var(--panel); padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+.review-form-block { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; font-size: 12px; color: var(--muted); }
+.review-form-block textarea { font: inherit; font-size: 13px; color: var(--text); background: var(--panel); padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; resize: vertical; }
+.review-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+
+/* 演示口径与边界说明里的条目列表 */
+.scope-list { margin: 0; padding-left: 18px; }
+.scope-list li { margin: 4px 0; line-height: 1.7; }
+
+/* ── P2 三条（FR-4.8 多轮追问 / FR-2.6 本体可视化 / FR-7.7 审计导出）──
+   导读第 1 节：P2 三条在 Demo 中照常呈现，样式与主链路一致（走设计令牌）。 */
+
+/* 多轮追问：提交行（按钮 + 一行说明），与复核页的动作行同构 */
+.followup-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0; }
+.followup-actions .muted { font-size: 12px; }
+
+/* 本体可视化：可点击的面包屑路径。路径每一段都是按钮（FR-2.6「路径可点击」） */
+.ontology-path {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+  padding: 8px 10px; margin: 8px 0;
+  background: var(--panel-2, var(--panel)); border: 1px solid var(--line); border-radius: 6px;
+  font-size: 13px;
+}
+.ontology-path button[disabled] { color: var(--text); text-decoration: none; cursor: default; font-weight: 600; }
+.ontology-sep { color: var(--muted); margin: 0 2px; }

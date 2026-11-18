@@ -458,7 +458,10 @@ def purge(demand_ids, actor="admin", keep_ids=None, dry_run=False):
         "analysis_rounds",
         "confirmations",
         "structured_requirements",
+        "compliance_checks",     # 三道闸门留痕（FR-4.11 / 4.10 / 7.5）
         "sql_runs",
+        "review_decisions",      # 复核结论（先于任务删：结论挂任务）
+        "review_tasks",          # 人工复核任务（FR-6.7）
         "knowledge_citations",
         "demand_requests",
     )

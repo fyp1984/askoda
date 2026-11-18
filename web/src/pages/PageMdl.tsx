@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, type MdlResp, type MdlTable } from '../api/client'
 import { Card, ErrorBox, Loading } from '../components/ui'
 import { Section } from '../components/Collapsible'
+import OntologyBrowser from '../components/OntologyBrowser'
 import RichText from '../components/RichText'
 
 /**
@@ -285,6 +286,15 @@ export default function PageMdl({ dataset, onNotify }: { dataset: string; onNoti
         ) : (
           <p className="muted">暂无术语条目。</p>
         )}
+      </Card>
+
+      <Card
+        title="本体可视化浏览"
+        collapsible
+        id="mdl-ontology"
+        extra={<span className="muted">FR-2.6 · P2</span>}
+      >
+        <OntologyBrowser dataset={dataset} />
       </Card>
     </div>
   )
