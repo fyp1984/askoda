@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { api, type E2eStatus } from '../api/client'
 import { Card, ErrorBox, Loading, PartialErrorsBox, RuleBadge } from '../components/ui'
 import { Section, SlotCard } from '../components/Collapsible'
+import GatePipeline from '../components/GatePipeline'
+import FollowupPanel from '../components/FollowupPanel'
 import RichText from '../components/RichText'
 import { evName, fmtPct, missReasonText, slotLabel, locatorText, evidenceSummary } from '../lib/display'
 
@@ -138,6 +140,23 @@ export default function PageAnalysis({
                 ) : null}
               </div>
             )}
+
+            <Section
+              title="三道闸门 · 合规与可满足性把关"
+              id="analysis-gates"
+              desc="合规预检（该不该答）→ 可满足性预检（能不能答）→ 危险语句拦截（语句危不危险），位置不同、判据不同，不合并"
+            >
+              <GatePipeline demandId={demandId} dataset={dataset} />
+            </Section>
+
+            <Section
+              title="多轮追问 · 会话上下文"
+              id="analysis-followup"
+              desc="同一会话内「再加一个维度 / 换个时间范围」，每轮各留分析轮次与结构化版本，不丢失上下文"
+              defaultOpen={false}
+            >
+              <FollowupPanel demandId={demandId} dataset={dataset} onDone={onRefresh} />
+            </Section>
 
             <Section
               title="六槽位"

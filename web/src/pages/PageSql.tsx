@@ -6,13 +6,20 @@ import RichText from '../components/RichText'
 import GapFiller from '../components/GapFiller'
 import { fmtReqVer, genLabel } from '../lib/display'
 
-/** 门禁层中文名（后端 layer 为 L0/L1… 技术 id，给业务方看人话）。 */
+/** 门禁层中文名兜底（后端 layer 为 L-REQ/L1… 技术 id，name 字段已带中文名）。
+ *  ★ 口径以 gateway/gates.py 的 layers[] 字面为准：
+ *    L-REQ=需求要素 · L1=语法校验 · L2=静态风险 · L3=只读校验 · L4=语义校验 · L5=结果断言。
+ *  此前这里的映射与后端层名错位（把 L1 译成「静态规则」等），会把门禁结果译错；
+ *  现改为**优先用后端下发的 name**，本表只作兜底。 */
 const GATE_LAYER_ZH: Record<string, string> = {
-  L0: '语法校验',
-  L1: '静态规则',
-  L2: '语义覆盖',
-  L3: '只读执行',
-  L4: '交付判定',
+  'L-REQ': '需求要素',
+  L1: '语法校验',
+  L2: '静态风险',
+  L3: '只读校验',
+  L4: '语义校验',
+  L5: '结果断言',
+  'L-SQLFluff': 'SQLFluff 风格检查',
+  'L-GX': '治理检查',
 }
 
 /**
@@ -286,7 +293,7 @@ export default function PageSql({
                     <tr key={i} className={l.ok ? 'row-ok' : 'row-bad'}>
                       <td>
                         <div className="gate-layer">
-                          <span className="gate-layer-name">{GATE_LAYER_ZH[l.layer] || l.name}</span>
+                          <span className="gate-layer-name">{l.name || GATE_LAYER_ZH[l.layer] || l.layer}</span>
                           <span className="gate-layer-code mono">{l.layer}</span>
                         </div>
                       </td>
@@ -320,6 +327,52 @@ export default function PageSql({
               )}
               <span className="muted"> <RichText text={String(exec.deliverable_reason)} /></span>
             </p>
+
+            {/* 分级分类自动脱敏（FR-7.9）：落点在**应用端**，不在 SQL 执行端 */}
+            {exec.masking ? (
+              <div className={exec.masking.sealed ? 'warnbox' : 'okbox'}>
+                <div className={exec.masking.sealed ? 'warnbox-title' : 'okbox-title'}>
+                  展示结果已按分级分类脱敏（应用端，不在 SQL 执行端）
+                  {exec.masking.sealed ? ' · 策略源不可用，已按最高敏感级关闭' : ''}
+                </div>
+                <div className="muted">
+                  {(exec.masking.applied || []).length > 0 ? (
+                    <>
+                      已脱敏列：
+                      {(exec.masking.applied || [])
+                        .map((a) => `${a.column}（${a.level} ${a.algorithm_label || a.algorithm}）`)
+                        .join('、')}
+                    </>
+                  ) : (
+                    '本次结果列均未命中需脱敏的分级标准。'
+                  )}
+                </div>
+                {(exec.masking.closed || []).length > 0 ? (
+                  <div className="warnbox-hint">
+                    未匹配到分级标准、按最高敏感级关闭的列：
+                    {(exec.masking.closed || []).map((c) => c.column).join('、')}
+                    ——失败即关闭，业务侧不可关闭该行为。
+                  </div>
+                ) : null}
+                <div className="muted">{exec.masking.location}</div>
+              </div>
+            ) : null}
+
+            {/* 全量人工复核入队（FR-6.7）：每条 SQL 都进队列，不看置信度分流 */}
+            {exec.review_task ? (
+              <div className="muted">
+                人工复核：
+                {exec.review_task.ok === false ? (
+                  <>入队失败（{exec.review_task.error}）</>
+                ) : (
+                  <>
+                    已自动进入人工复核队列（任务 <code>{exec.review_task.task_id}</code>，状态
+                    <b>{exec.review_task.status}</b>）
+                    ——全量入队，不按置信度分流；未经人工确认前不得标注「可执行」。
+                  </>
+                )}
+              </div>
+            ) : null}
             {cols.length > 0 ? (
               <div className="table-wrap">
                 <table className="grid">

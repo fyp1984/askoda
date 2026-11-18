@@ -11,12 +11,13 @@ import PageAnalysis from './pages/PageAnalysis'
 import PageConfirm from './pages/PageConfirm'
 import PageSql from './pages/PageSql'
 import PageDelivery from './pages/PageDelivery'
+import PageReview from './pages/PageReview'
 import PageSettings from './pages/PageSettings'
 import PageMetrics from './pages/PageMetrics'
 import DemandStatusActions from './components/DemandStatusActions'
 
 /** 模块 key（左侧导航）。知识管理入口已按 CR009 剔除——知识收集/治理全部在 WeKnora 平台完成，Askoda 经 MCP 消费。复盘留痕菜单已移除：审计回放常驻「出数与交付」页底部。 */
-type MenuKey = 'demand' | 'mdl' | 'datasource' | 'metrics' | 'system'
+type MenuKey = 'demand' | 'review' | 'mdl' | 'datasource' | 'metrics' | 'system'
 /** 需求链路内的步骤 key。'list' 是需求列表枢纽页，不计入向导五步。 */
 type StepKey = 'list' | 'submit' | 'analysis' | 'confirm' | 'sql' | 'delivery'
 
@@ -386,7 +387,17 @@ function AppShell() {
             </>
           ) : null}
 
+          {menu === 'review' ? (
+            <PageReview
+              actor={actor}
+              readonly={isReadonly('review')}
+              onNotify={notify}
+              onOpenDemand={onPickDemand}
+            />
+          ) : null}
+
           {menu === 'mdl' ? <PageMdl dataset={dataset} onNotify={notify} /> : null}
+
           {menu === 'datasource' ? (
             <PageDatasource
               dataset={dataset}

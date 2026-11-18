@@ -50,6 +50,15 @@ export const NAV_ITEMS: NavItem[] = [
     desc: '从提需求到出数交付的一条龙',
     access: { R1: 'full', R2: 'full', R3: 'readonly', R4: 'readonly' },
   },
+  // 质量内核：全量人工复核（FR-6.7 / AC-13 / D15）。
+  // 铁律：每条 SQL 都进队列，**不看置信度分流**；业务方不参与复核，故 R1 hidden。
+  {
+    key: 'review',
+    label: '人工复核',
+    zone: 'do',
+    desc: '逐条复核生成的 SQL：全量入队，不按置信度分流',
+    access: { R1: 'hidden', R2: 'full', R3: 'full', R4: 'full' },
+  },
   // 系统里的资产。菜单「经验库」（知识储备）已按 CR009 剔除：
   // 知识收集/治理全部在 WeKnora 平台完成，Askoda 经 MCP 消费，客户端不设知识管理入口。
   {
