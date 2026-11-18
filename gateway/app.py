@@ -1821,6 +1821,221 @@ def sql_optimize(sql: str, dataset: str = "B") -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# 三道闸门 + 全量人工复核 + 分级分类脱敏
+#   FR-4.11 合规预检 / FR-4.10 可满足性预检 / FR-7.5 危险语句拦截 / FR-6.7 人工复核 /
+#   FR-7.8-7.9 分级分类自动脱敏
+#
+# 这三块是本轮**新增能力**——原型里没有，须新建（技术方案 §11.3）。但仍沿用 _wired
+# 的惰性导入 + 异常兜底约定，保持网关「模块未就位不崩」的一致行为。
+#
+# 三道闸门位置不同、判据不同，**不合并、不复用判据**（导读第 2 节第 3 条）：
+#   闸门① compliance_precheck     语义分析阶段（早于任何 SQL 生成）· 查「该不该答」
+#   闸门② compliance_satisfiability 结构化后 / 检索前              · 查「能不能答」
+#   闸门③ compliance_danger_guard   SQL 生成后                     · 查「语句危不危险」
+# ---------------------------------------------------------------------------
+@mcp.tool
+def compliance_precheck(
+    text: str = "", demand_id: str = "", dataset: str = "B", actor: str = ""
+) -> dict:
+    """闸门① 合规预检（FR-4.11）—— **早于任何 SQL 生成**。
+
+    命中敏感明文 / 越权 / 违规意图 / 提示注入即拦截告警，并给合规改写建议。
+    `verdict='拦截'` ⇒ 调用方**必须**在生成 SQL 之前停下，不接受继续。
+    误拦率 ≤2% / 风险命中率 100% 均为**目标值 / 演示参数**，非实测。
+    """
+    return _wired(
+        "compliance", "precheck",
+        text=text, demand_id=demand_id or None, dataset=dataset, actor=actor,
+    )
+
+
+@mcp.tool
+def compliance_satisfiability(
+    demand_id: str = "", dataset: str = "B", text: str = "", actor: str = ""
+) -> dict:
+    """闸门② 可满足性预检（FR-4.10）—— 结构化后 / 检索前。
+
+    判「能不能答」：需求要素缺结论 / 方言不承诺范围（存储过程 / UDF / 动态 SQL /
+    跨库联邦）⇒ 明确返回「不支持」并给可替代方案，**绝不给出一条错误 SQL**。
+    """
+    return _wired(
+        "compliance", "satisfiability",
+        demand_id=demand_id or None, dataset=dataset, text=text, actor=actor,
+    )
+
+
+@mcp.tool
+def compliance_danger_guard(
+    sql: str, dataset: str = "B", demand_id: str = "", explain_rows: int | None = None,
+    actor: str = "",
+) -> dict:
+    """闸门③ 危险语句拦截（FR-7.5）—— SQL 生成后。
+
+    非只读 / 多语句 / 无边界全表扫描 / EXPLAIN 估算超阈值 / 方言不支持 ⇒ 硬拦截。
+    未评估的项**显式声明在 `not_evaluated`**，不静默读成「没问题」。
+    EXPLAIN 阈值 1000 万行为**演示参数**（`[待核实 per DB]`）。
+    """
+    return _wired(
+        "compliance", "danger_guard",
+        sql, dataset=dataset, demand_id=demand_id or None,
+        explain_rows=explain_rows, actor=actor,
+    )
+
+
+@mcp.tool
+def review_enqueue(
+    demand_id: str, sql_run_id: str, dataset: str = "B", sql: str = "",
+    generator: str = "", confidence: float | None = None, actor: str = "",
+) -> dict:
+    """全量人工复核入队（FR-6.7）—— **无条件**建任务，幂等键 = sql_run_id。
+
+    铁律：不看置信度分流。confidence 仅供复核排序参考，不作为免复核依据。
+    """
+    return _wired(
+        "reviewqueue", "enqueue",
+        demand_id=demand_id, sql_run_id=sql_run_id, dataset=dataset, sql=sql,
+        generator=generator, confidence=confidence, actor=actor or "system",
+    )
+
+
+@mcp.tool
+def review_queue(status: str = "", dataset: str = "", limit: int = 50) -> dict:
+    """复核队列（跨需求 · 待复核优先 + 时间倒序）。"""
+    return _wired(
+        "reviewqueue", "list_queue",
+        status=status or None, dataset=dataset or None, limit=limit,
+    )
+
+
+@mcp.tool
+def review_detail(demand_id: str) -> dict:
+    """某需求的复核任务 + 每个任务的结论历史（append-only，只增不改）。"""
+    return _wired("reviewqueue", "get", demand_id)
+
+
+@mcp.tool
+def review_decide(
+    task_id: str, decision: str, reviewer: str = "", note: str = "", rewritten_sql: str = ""
+) -> dict:
+    """登记复核结论（通过 / 退回 / 改写）。**只增不改**：每次都是新增一条结论行。
+
+    约束：reviewer 必填；「退回 / 改写」必填 note；「改写」必填 rewritten_sql。
+    """
+    return _wired(
+        "reviewqueue", "decide",
+        task_id=task_id, decision=decision, reviewer=reviewer, note=note,
+        rewritten_sql=rewritten_sql,
+    )
+
+
+@mcp.tool
+def review_summary(demand_id: str = "", dataset: str = "") -> dict:
+    """复核态汇总：各状态计数 + `all_approved`。
+
+    交付页据此判定「未经人工在真实环境预测试确认，不得标注可执行」（AC-10 / AC-13）。
+    """
+    return _wired(
+        "reviewqueue", "summary",
+        demand_id=demand_id or None, dataset=dataset or None,
+    )
+
+
+@mcp.tool
+def classification_policies(dataset: str = "") -> dict:
+    """分级分类策略清单（FR-7.8）—— 表中策略 + 内置默认策略兜底。
+
+    策略源不可用时 `sealed=True`（失败即关闭），全部按最高敏感级 L4 处理。
+    """
+    return _wired("classification", "policies", dataset=dataset or None)
+
+
+@mcp.tool
+def classification_policy_save(
+    level: str, category: str, pattern: str, algorithm: str = "mask",
+    params: dict | None = None, description: str = "", dataset: str = "",
+    policy_id: str = "", actor: str = "",
+) -> dict:
+    """新增/更新一条分级分类策略（数据管家动作）。参数含正则时会提前校验合法性。"""
+    return _wired(
+        "classification", "save_policy",
+        level=level, category=category, pattern=pattern, algorithm=algorithm,
+        params=params, description=description, dataset=dataset,
+        policy_id=policy_id or None, actor=actor or "admin",
+    )
+
+
+@mcp.tool
+def classification_mask_preview(dataset: str, columns: list[str], rows: list[list]) -> dict:
+    """分级分类脱敏**预览**（FR-7.9）—— 前（原始）/ 后（脱敏）对照 + 逐列分级。
+
+    脱敏落点在**应用端**（网关/BFF 编排层），不在 SQL 执行端。默认交付路径
+    「复制 SQL + 口径说明」不携带脱敏逻辑、不得宣称已脱敏。
+    """
+    return _wired("classification", "preview", dataset, columns, rows)
+
+
+# ---------------------------------------------------------------------------
+# P2 三条：FR-4.8 多轮追问 / FR-2.6 本体可视化 / FR-7.7 审计导出
+#
+# 导读第 1 节：Demo 范围为全量 60 条 FR，P0/P1/P2 全部纳入，
+# **P2 三条（FR-4.8 / FR-2.6 / FR-7.7）Demo 中照常呈现**。
+# 三者均为只读或「只增不改」的留痕动作，沿用 _wired 的惰性导入 + 异常兜底约定。
+# ---------------------------------------------------------------------------
+@mcp.tool
+def demand_conversation(demand_id: str, dataset: str = "B") -> dict:
+    """多轮追问 · 会话轮次（FR-4.8）。
+
+    列出该需求的全部轮次：原需求为第 1 轮，其后每轮追问各成一轮，
+    各轮的对齐分析轮次（round_no）与结构化需求版本（version）一并给出。
+    """
+    return _wired("followup", "conversation", demand_id, dataset=dataset)
+
+
+@mcp.tool
+def demand_followup(
+    demand_id: str, instruction: str, dataset: str = "B", actor: str = "analyst"
+) -> dict:
+    """多轮追问（FR-4.8）—— 同一会话内「再加一个维度 / 换个时间范围」而不丢失上下文。
+
+    整句追问**追加**进需求原文 → 重跑语义分析（新 round_no）→ 重合成结构化需求
+    （version+1）。旧轮次与旧版本一律保留，任一轮可回放。
+    """
+    return _wired(
+        "followup", "followup",
+        demand_id, instruction, dataset=dataset, actor=actor,
+    )
+
+
+@mcp.tool
+def ontology_browse(
+    dataset: str = "B", domain: str = "", table: str = "", column: str = "", limit: int = 50
+) -> dict:
+    """本体可视化浏览（FR-2.6）—— 业务域 → 实体/表 → 字段 → 引用该字段的 CASE。
+
+    逐层传参下钻；返回面包屑路径（每段可点击）与当前层的下一层可下钻项。
+    """
+    return _wired(
+        "ontology", "browse",
+        dataset=dataset, domain=domain, table=table, column=column, limit=limit,
+    )
+
+
+@mcp.tool
+def audit_export(
+    dataset: str = "", demand_id: str = "", limit: int = 500, fmt: str = "csv", actor: str = ""
+) -> dict:
+    """审计导出与对接（FR-7.7）—— 审计日志按客户 SIEM 要求导出（CSV / Syslog）。
+
+    字段对齐 FR-7.4 全链路审计要素；导出动作本身也留痕。
+    留存期 ≥180 天为 PRD 带 `[假设]` 的**目标值**，导出头部标注非实测。
+    """
+    return _wired(
+        "auditexport", "export_and_log",
+        actor=actor or "admin", dataset=dataset, demand_id=demand_id, limit=limit, fmt=fmt,
+    )
+
+
 @mcp.tool
 def demand_similar_precheck(
     title: str, description: str = "", top: int = 5, threshold: float = 0.55

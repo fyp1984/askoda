@@ -29,6 +29,7 @@ import requirement as requirement_mod
 import demand as demand_mod
 import clarify as clarify_mod
 import fallback as fallback_mod
+import knowledge as knowledge_mod
 
 MISSING_MARK = "无候选结论（该槽位在本轮分析中为空）"
 DRAFT_PASS = "通过"
@@ -741,16 +742,49 @@ def generate(candidate_sql=None, demand_id=None, dataset="B", sql_plan=None):
         _llm_used = False
         _structured = _requirement_safe(demand_id)
         if nl and not _det_first_hit:
+            # 知识驱动生成：先把需求语义检索知识库，将命中片段作为证据注入 LLM prompt
+            # （语义分析 → 知识加载 → 生成 SQL 闭环；仅在确定性未命中时进入此支，
+            #  已通口径的放款/余额等仍走确定性，不受本支影响）。
+            _kb_hits = []
+            try:
+                _kb = knowledge_mod.search(nl, top_k=5, threshold=0.1, vector_weight=0.7)
+                if _kb.get("ok"):
+                    _kb_ctx = _kb.get("answer_context") or ""
+                    if _kb_ctx.strip():
+                        _kb_hits = [b for b in _kb_ctx.split("\n\n") if b.strip()]
+                    elif _kb.get("citations"):
+                        _kb_hits = [
+                            (c.get("snippet") or "")
+                            for c in _kb.get("citations")
+                            if (c.get("snippet") or "").strip()
+                        ]
+                    # 取证留痕：生成期实际检索到的引用落 knowledge_citations
+                    knowledge_mod.record_citations_once(
+                        demand_id, nl, _kb.get("citations") or [],
+                        stage="sqlgen-llm", actor="gateway",
+                        fingerprint="sqlgen-llm|%s|%s" % (dataset, _kb.get("fallback_query") or nl),
+                        dataset_id=dataset,
+                    )
+            except Exception as _ke:  # noqa: BLE001  知识检索失败不阻断生成，仅降级
+                generation_risks.append(
+                    "知识检索异常，已忽略知识上下文：%s" % type(_ke).__name__
+                )
             try:
                 import sqlgen_llm as _llmmod  # 惰性导入：模块缺失不影响既有链路
                 if _llmmod.is_enabled():
                     _lr = _llmmod.generate_sql(
-                        demand_id=demand_id, dataset=dataset, nl=nl, structured=_structured
+                        demand_id=demand_id, dataset=dataset, nl=nl,
+                        structured=_structured, knowledge=_kb_hits,
                     )
                     if _lr.get("ok") and str(_lr.get("sql") or "").strip():
                         sql_draft = str(_lr["sql"]).strip()
                         generator_label = "llm"
                         _llm_used = True
+                        if _kb_hits:
+                            generation_notes.append(
+                                "语义分析→知识加载闭环：已检索并注入 %d 条知识片段到生成上下文"
+                                % len(_kb_hits)
+                            )
                         generation_notes.append(
                             "大模型生成并通过门禁：%s"
                             % (str(_lr.get("explanation") or "")[:200] or "已通过门禁")

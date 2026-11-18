@@ -215,6 +215,64 @@ class DemandSupplementIn(BaseModel):
     actor: str = ""
 
 
+class CompliancePrecheckIn(BaseModel):
+    """闸门① 合规预检（FR-4.11）。可按需求单号、也可直接传文本做即时预检。"""
+
+    dataset: str = "B"
+    demand_id: str = ""
+    text: str = ""
+    actor: str = ""
+
+
+class DangerGuardIn(BaseModel):
+    """闸门③ 危险语句拦截（FR-7.5）。"""
+
+    sql: str = ""
+    dataset: str = "B"
+    demand_id: str = ""
+    explain_rows: int | None = None
+    actor: str = ""
+
+
+class ReviewDecideIn(BaseModel):
+    """复核结论（通过 / 退回 / 改写）。只增不改。"""
+
+    decision: str = Field(min_length=1, description="通过 / 退回 / 改写")
+    reviewer: str = Field(min_length=1, description="复核人（必填，复核必须留痕到人）")
+    note: str = Field(default="", description="退回 / 改写必填理由")
+    rewritten_sql: str = Field(default="", description="改写时必填改写后的 SQL")
+
+
+class ClassificationPolicyIn(BaseModel):
+    """新增/更新一条分级分类策略（FR-7.8）。"""
+
+    level: str = Field(min_length=1, description="L1/L2/L3/L4")
+    category: str = ""
+    pattern: str = Field(min_length=1, description="字段匹配正则")
+    algorithm: str = "mask"
+    params: dict = Field(default_factory=dict)
+    description: str = ""
+    dataset: str = ""
+    policy_id: str = ""
+    actor: str = ""
+
+
+class ClassificationPreviewIn(BaseModel):
+    """分级分类脱敏预览（FR-7.9）：给定列与样本行，返回前后对照。"""
+
+    dataset: str = "B"
+    columns: list[str] = Field(default_factory=list)
+    rows: list[list] = Field(default_factory=list)
+
+
+class FollowupIn(BaseModel):
+    """多轮追问一轮的补充指令（FR-4.8）。"""
+
+    instruction: str = Field(min_length=1, description="追问内容，如「再加一个维度：按渠道拆分」")
+    dataset: str = "B"
+    actor: str = ""
+
+
 # 需求状态机取值，与 gateway/demand.py:40 STATUSES 逐字一致。
 # 在 BFF 侧独立持有一份，是为了让**非法状态在服务端就被拒**，
 # 不透传到网关（网关虽也会拒，但那时已经产生了一次无意义的跨服务调用）。
@@ -603,6 +661,11 @@ async def e2e_status(demand_id: str, dataset: str = "B", run_limit: int = 20) ->
         "requirement": ("requirement_get", {"demand_id": demand_id}),
         "context_pack": ("sql_context_pack", {"demand_id": demand_id, "dataset": dataset}),
         "runs": ("sql_run_list", {"demand_id": demand_id, "limit": run_limit}),
+        # 三道闸门①（合规预检）+ ②（可满足性预检）：语义分析阶段即可判，不依赖 SQL 生成
+        "compliance": ("compliance_precheck", {"demand_id": demand_id, "dataset": dataset}),
+        "satisfiability": ("compliance_satisfiability", {"demand_id": demand_id, "dataset": dataset}),
+        # 全量人工复核汇总（质量内核）：供交付页判「未经人工确认不得标可执行」
+        "review_summary": ("review_summary", {"demand_id": demand_id}),
     }
 
     names = list(specs.keys())
@@ -689,6 +752,9 @@ _NOT_READY_MSG = {
     "analysis": "还没有分析轮次",
     "confirmations": "还没有待确认口径",
     "demand": "取不到该需求",
+    "compliance": "合规预检未完成",
+    "satisfiability": "可满足性预检未完成",
+    "review_summary": "复核队列还未建立",
 }
 
 _NOT_READY_HINT = {
@@ -700,6 +766,9 @@ _NOT_READY_HINT = {
     "analysis": "还没有分析轮次。请到「提个需求」页完成提交后点「开始分析」。",
     "confirmations": "没有待确认问题，说明当前没有需要业务拍板的口径。",
     "demand": "取不到该需求。请确认需求编号是否正确，或该需求是否已被清理。",
+    "compliance": "合规预检是语义分析阶段的一道闸门，跑过「开始分析」后即可看到结论。",
+    "satisfiability": "可满足性预检在结构化需求生成后执行，先完成分析与口径确认。",
+    "review_summary": "还没有 SQL 运行记录，因而复核队列为空；生成并执行一次 SQL 后即产生复核任务。",
 }
 
 
@@ -847,6 +916,221 @@ async def sql_execute(demand_id: str, body: SqlExecuteIn) -> Any:
             hint="没有可执行的 SQL。请先点「生成 SQL」，等门禁通过后再执行。",
         )
     return sanitize(result)
+
+
+# --------------------------------------------------------------------------
+# 12a. 三道闸门（FR-4.11 / FR-4.10 / FR-7.5）—— 位置不同、判据不同，**不合并**
+# --------------------------------------------------------------------------
+# 为什么三道闸门要分别暴露、而不是合成一个「安全检查」：
+#   它们回答三个不同问题（该不该答 / 能不能答 / 语句危不危险），发生阶段也不同
+#   （语义分析 → 结构化后检索前 → SQL 生成后）。合并会把「合规风险」与「能力缺口」
+#   说成同一句错误提示，业务方与复核人都无法据以行动（导读第 2 节第 3 条）。
+@app.get(f"{API}/demand/{{demand_id}}/gates", tags=["取数"])
+async def demand_gates(demand_id: str, dataset: str = "B", actor: str = "") -> Any:
+    """三道闸门串联快照（供「读懂你的需求」页做串联可视化）。
+
+    闸门① 合规预检：语义分析阶段（早于任何 SQL 生成）· 查「该不该答」
+    闸门② 可满足性预检：结构化后 / 检索前 · 查「能不能答」
+    闸门③ 危险语句拦截：SQL 生成后 · 查「语句危不危险」（取该需求最近一次生成的 SQL）
+    """
+    async def _safe(tool: str, args: dict) -> Any:
+        try:
+            data = await call(tool, args)
+            return sanitize(data)
+        except McpError as exc:
+            return {"ok": False, "error": redact_mcp_tool(str(exc))[:200]}
+
+    gate1 = await _safe("compliance_precheck",
+                        {"demand_id": demand_id, "dataset": dataset, "actor": actor})
+    gate2 = await _safe("compliance_satisfiability",
+                        {"demand_id": demand_id, "dataset": dataset, "actor": actor})
+
+    # 闸门③ 作用于「SQL 生成后」，这里取该需求最近一次生成 / 交付的 SQL
+    sql_text = ""
+    try:
+        runs = await call("sql_run_get", {"demand_id": demand_id})
+        items = (runs or {}).get("runs") or []
+        if items:
+            sql_text = (items[0].get("final_delivery_sql")
+                        or items[0].get("generated_sql") or "").strip()
+    except McpError:
+        sql_text = ""
+    gate3 = await _safe("compliance_danger_guard",
+                        {"sql": sql_text, "dataset": dataset, "demand_id": demand_id,
+                         "actor": actor})
+
+    return {
+        "ok": True,
+        "demand_id": demand_id,
+        "dataset": dataset,
+        "sql_effective": sql_text,
+        "gates": [
+            {"seq": 1, "key": "compliance_precheck", "title": "合规预检",
+             "question": "该不该答", "stage": "语义分析（早于任何 SQL 生成）", "result": gate1},
+            {"seq": 2, "key": "compliance_satisfiability", "title": "可满足性预检",
+             "question": "能不能答", "stage": "结构化后 / 检索前", "result": gate2},
+            {"seq": 3, "key": "compliance_danger_guard", "title": "危险语句拦截",
+             "question": "语句危不危险", "stage": "SQL 生成后", "result": gate3},
+        ],
+    }
+
+
+# 12b. POST /api/v1/compliance/precheck —— 即时合规预检（可直接传文本）
+@app.post(f"{API}/compliance/precheck", tags=["取数"])
+async def compliance_precheck(body: CompliancePrecheckIn) -> Any:
+    """即时合规预检：命中敏感明文 / 越权 / 违规意图 / 提示注入即拦截告警。
+
+    可传 `text` 做「输入即判」；也可传 `demand_id` 按需求正文判。
+    `verdict='拦截'` ⇒ 生成 SQL 之前必须停下。误拦率 / 命中率为**演示参数**。
+    """
+    args: dict[str, Any] = {"dataset": body.dataset, "actor": body.actor}
+    if body.text:
+        args["text"] = body.text
+    if body.demand_id:
+        args["demand_id"] = body.demand_id
+    return sanitize(await call("compliance_precheck", args))
+
+
+# 12c. POST /api/v1/compliance/danger-guard —— 即时危险语句拦截
+@app.post(f"{API}/compliance/danger-guard", tags=["取数"])
+async def compliance_danger_guard(body: DangerGuardIn) -> Any:
+    """即时危险语句拦截（FR-7.5）：非只读 / 多语句 / 无边界全表 / 超阈值 / 方言不支持。"""
+    args: dict[str, Any] = {"sql": body.sql, "dataset": body.dataset, "actor": body.actor}
+    if body.demand_id:
+        args["demand_id"] = body.demand_id
+    if body.explain_rows is not None:
+        args["explain_rows"] = body.explain_rows
+    return sanitize(await call("compliance_danger_guard", args))
+
+
+# --------------------------------------------------------------------------
+# 12d. 全量人工复核（FR-6.7 / AC-13 / D15）—— 质量内核
+# --------------------------------------------------------------------------
+@app.get(f"{API}/review/queue", tags=["复核"])
+async def review_queue(status: str = "", dataset: str = "", limit: int = 50) -> Any:
+    """复核队列（跨需求 · 待复核优先 + 时间倒序）。
+
+    全量人工复核：每条 SQL 都进队列，不看置信度分流。
+    """
+    return sanitize(await call("review_queue", {
+        "status": status or "", "dataset": dataset or "", "limit": limit,
+    }))
+
+
+@app.get(f"{API}/demand/{{demand_id}}/review", tags=["复核"])
+async def review_detail(demand_id: str) -> Any:
+    """某需求的复核任务 + 每个任务的结论历史（append-only，只增不改）。"""
+    return sanitize(await call("review_detail", {"demand_id": demand_id}))
+
+
+@app.get(f"{API}/demand/{{demand_id}}/review/summary", tags=["复核"])
+async def review_summary(demand_id: str, dataset: str = "") -> Any:
+    """复核态汇总：各状态计数 + `all_approved`（交付页据此判「不得标可执行」）。"""
+    return sanitize(await call("review_summary", {
+        "demand_id": demand_id, "dataset": dataset or "",
+    }))
+
+
+@app.post(f"{API}/review/{{task_id}}/decide", tags=["复核"])
+async def review_decide(task_id: str, body: ReviewDecideIn) -> Any:
+    """登记一条复核结论（通过 / 退回 / 改写）。只增不改；复核人必填。"""
+    result = await call("review_decide", {
+        "task_id": task_id, "decision": body.decision, "reviewer": body.reviewer,
+        "note": body.note, "rewritten_sql": body.rewritten_sql,
+    })
+    reason = _tool_rejected(result)
+    if reason:
+        raise ApiError(
+            code="REVIEW_DECIDE_REJECTED",
+            message=reason,
+            hint="复核结论没登记成功。请确认已填复核人；「退回 / 改写」需写明理由，"
+                 "「改写」还需给出改写后的 SQL。",
+        )
+    return sanitize(result)
+
+
+# --------------------------------------------------------------------------
+# 12e. 分级分类自动脱敏（FR-7.8 / FR-7.9）—— 应用端，不在 SQL 执行端
+# --------------------------------------------------------------------------
+@app.get(f"{API}/classification/policies", tags=["脱敏"])
+async def classification_policies(dataset: str = "") -> Any:
+    """分级分类策略清单（表中策略 + 内置默认策略兜底）。策略源不可用时 sealed=True（失败即关闭）。"""
+    return sanitize(await call("classification_policies", {"dataset": dataset or ""}))
+
+
+@app.put(f"{API}/classification/policies", tags=["脱敏"])
+async def classification_policy_save(body: ClassificationPolicyIn) -> Any:
+    """新增/更新一条分级分类策略（数据管家动作）。"""
+    result = await call("classification_policy_save", body.model_dump())
+    reason = _tool_rejected(result)
+    if reason:
+        raise ApiError(code="CLASSIFICATION_POLICY_REJECTED", message=reason,
+                       hint="策略没保存成功。请确认分级取值合法、匹配表达式为正则。")
+    return sanitize(result)
+
+
+@app.post(f"{API}/classification/preview", tags=["脱敏"])
+async def classification_preview(body: ClassificationPreviewIn) -> Any:
+    """脱敏**预览**：前（原始）/ 后（脱敏）对照 + 逐列分级。
+
+    脱敏在**应用端**（网关/BFF），不在 SQL 执行端；默认交付路径「复制 SQL + 口径说明」
+    不携带脱敏逻辑、不得宣称已脱敏。
+    """
+    return sanitize(await call("classification_mask_preview", body.model_dump()))
+
+
+# --------------------------------------------------------------------------
+# 12f. P2 三条：多轮追问（FR-4.8）/ 本体可视化（FR-2.6）/ 审计导出（FR-7.7）
+# --------------------------------------------------------------------------
+@app.get(f"{API}/demand/{{demand_id}}/conversation", tags=["取数"])
+async def demand_conversation(demand_id: str, dataset: str = "B") -> Any:
+    """多轮追问 · 会话轮次（FR-4.8）：原需求为第 1 轮，其后每轮追问各成一轮。"""
+    return sanitize(await call("demand_conversation", {
+        "demand_id": demand_id, "dataset": dataset,
+    }))
+
+
+@app.post(f"{API}/demand/{{demand_id}}/followup", tags=["取数"])
+async def demand_followup(demand_id: str, body: FollowupIn) -> Any:
+    """多轮追问一轮（FR-4.8）：追加进需求 → 重跑分析 → 重合成结构化需求（不丢上下文）。"""
+    result = await call("demand_followup", {
+        "demand_id": demand_id, "instruction": body.instruction,
+        "dataset": body.dataset, "actor": body.actor,
+    })
+    reason = _tool_rejected(result)
+    if reason:
+        raise ApiError(
+            code="FOLLOWUP_REJECTED",
+            message=reason,
+            hint="追问没落库。请确认需求号存在、追问内容非空后重试。",
+        )
+    return sanitize(result)
+
+
+@app.get(f"{API}/ontology/browse", tags=["资产"])
+async def ontology_browse(
+    dataset: str = "B", domain: str = "", table: str = "", column: str = "", limit: int = 50
+) -> Any:
+    """本体可视化浏览（FR-2.6）：业务域 → 实体/表 → 字段 → 引用该字段的 CASE。"""
+    return sanitize(await call("ontology_browse", {
+        "dataset": dataset, "domain": domain, "table": table,
+        "column": column, "limit": limit,
+    }))
+
+
+@app.get(f"{API}/audit/export", tags=["审计"])
+async def audit_export(
+    dataset: str = "", demand_id: str = "", limit: int = 500, fmt: str = "csv", actor: str = ""
+) -> Any:
+    """审计导出与对接（FR-7.7）：按客户 SIEM 要求导出 CSV / Syslog。
+
+    返回 JSON（含 `content` / `filename`），由前端落成文件下载；
+    留存期 ≥180 天为 PRD 带 `[假设]` 的**目标值**，导出头部标注非实测。
+    """
+    return sanitize(await call("audit_export", {
+        "dataset": dataset, "demand_id": demand_id, "limit": limit,
+        "fmt": fmt, "actor": actor,
+    }))
 
 
 # 13. GET /api/v1/demand/{id}/citations —— 知识引用明细

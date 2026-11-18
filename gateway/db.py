@@ -444,6 +444,107 @@ DDL = [
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
+    # ------------------------------------------------------------------
+    # 合规检查留痕（FR-4.11 / FR-4.10 / FR-7.5 · 三道闸门）
+    #
+    # 三道闸门位置不同、判据不同（compliance.py 顶部注释详述），共用一张流水表：
+    # stage 区分「合规预检 / 可满足性预检 / 危险语句拦截」，payload 存该次判定全量结果。
+    # 为什么是流水而不是当前态：闸门判定是「这次需求在这一刻被怎么判的」的证据，
+    # 需求改写后重跑必须能并排看到前后两次判定的差异，不能被覆盖。
+    # ------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS compliance_checks (
+        check_id    BIGSERIAL PRIMARY KEY,
+        stage       TEXT NOT NULL,
+        demand_id   TEXT,
+        dataset     TEXT NOT NULL DEFAULT 'B',
+        verdict     TEXT NOT NULL,
+        payload     JSONB NOT NULL DEFAULT '{}'::jsonb,
+        actor       TEXT NOT NULL DEFAULT 'system',
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_compliance_checks_did "
+    "ON compliance_checks (demand_id, check_id DESC)",
+    # ------------------------------------------------------------------
+    # 人工复核任务（FR-6.7 / AC-13 / D15 · 质量内核）
+    #
+    # 铁律：**全量人工复核，不看置信度分流**。每条 SQL 运行都无条件建任务
+    # （enqueue 幂等键 = sql_run_id，唯一索引保证不重复建），confidence 仅作复核排序参考。
+    # status 由**最新一条 review_decisions 派生**（只增不改），不由置信度决定。
+    # ------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS review_tasks (
+        task_id     TEXT PRIMARY KEY,
+        demand_id   TEXT NOT NULL,
+        sql_run_id  TEXT NOT NULL,
+        dataset     TEXT NOT NULL DEFAULT 'B',
+        sql_text    TEXT NOT NULL DEFAULT '',
+        generator   TEXT NOT NULL DEFAULT '',
+        confidence  NUMERIC(5,4),
+        status      TEXT NOT NULL DEFAULT '待复核',
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_review_tasks_run ON review_tasks (sql_run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_review_tasks_did ON review_tasks (demand_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_review_tasks_status ON review_tasks (status, created_at DESC)",
+    # ------------------------------------------------------------------
+    # 复核结论（**只增不改** · append-only）
+    #
+    # 每次「通过 / 退回 / 改写」= 新增一行，不 UPDATE 旧结论。于是复核历史可回放：
+    # 「这条 SQL 谁在何时判过、为什么改、改成什么样」全程留痕，不受后续结论覆盖。
+    # ------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS review_decisions (
+        decision_id TEXT PRIMARY KEY,
+        task_id     TEXT NOT NULL,
+        demand_id   TEXT NOT NULL,
+        decision    TEXT NOT NULL,
+        reviewer    TEXT NOT NULL DEFAULT '',
+        note        TEXT NOT NULL DEFAULT '',
+        rewritten_sql TEXT NOT NULL DEFAULT '',
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_review_decisions_task ON review_decisions (task_id, created_at ASC)",
+    "CREATE INDEX IF NOT EXISTS idx_review_decisions_did ON review_decisions (demand_id, created_at ASC)",
+    # 列名迁移（幂等）：人工复核的「改写」列由 revised_sql 更名为 rewritten_sql。
+    # 「revised_sql」这个名字专留给门禁 D1（F4 门禁失败时的自动改写槽位，恒为 None），
+    # 人工复核的改写是另一件事，不能同名——同名会被红线守卫 R3 一刀切判红。
+    # 已有的库就地改名；全新的库直接按上面的新列名建表，此段命中不了、空跑。
+    """
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'review_decisions'
+                   AND column_name = 'revised_sql') THEN
+        ALTER TABLE review_decisions RENAME COLUMN revised_sql TO rewritten_sql;
+      END IF;
+    END $$;
+    """,
+    # ------------------------------------------------------------------
+    # 分级分类策略（FR-7.8 / FR-7.9 · 应用端脱敏）
+    #
+    # 表可维护、内置默认策略兜底（见 classification._BUILTIN_POLICIES）。
+    # 表为空/不可用时**失败即关闭**：全部按最高敏感级 L4 处理，业务侧无开关可关。
+    # ------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS classification_policies (
+        policy_id   TEXT PRIMARY KEY,
+        dataset     TEXT NOT NULL DEFAULT '',
+        level       TEXT NOT NULL,
+        category    TEXT NOT NULL DEFAULT '',
+        pattern     TEXT NOT NULL,
+        algorithm   TEXT NOT NULL DEFAULT 'mask',
+        params      JSONB NOT NULL DEFAULT '{}'::jsonb,
+        description TEXT NOT NULL DEFAULT '',
+        enabled     BOOLEAN NOT NULL DEFAULT true,
+        updated_by  TEXT NOT NULL DEFAULT 'admin',
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
 ]
 
 
@@ -479,6 +580,10 @@ def table_stats():
         "config_events",
         "kb_settings",
         "dataset_registry",
+        "compliance_checks",
+        "review_tasks",
+        "review_decisions",
+        "classification_policies",
     ):
         try:
             out[t] = query_one("SELECT count(*) AS n FROM %s" % t)["n"]
