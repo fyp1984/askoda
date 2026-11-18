@@ -1,9 +1,9 @@
-# MCP 工具面参考（65 个工具）
+# MCP 工具面参考（80 个工具）
 
 > 本文是 [Askoda](../README.md) 的**能力清单与操作手册**。
 > 想快速跑起来看[快速开始](../README.md#快速开始)；要部署到机器上看[部署手册](DEPLOYMENT.md)。
 
-65 个工具由网关通过**一个** streamable-http 端点暴露，按业务域分为十一组。
+80 个工具由网关通过**一个** streamable-http 端点暴露，按业务域分为十七组。
 **工具名与入参以 `gateway/app.py` 的 `@mcp.tool` 注册处为唯一事实源**，
 下表与之逐条一致（自动核验：`python3 tools/mcp_acceptance_check.py`）。
 返回字段的完整承诺与边界条件见项目文档工作空间的《MCP 工具契约与注册说明》。
@@ -38,8 +38,14 @@
 | 9 | 生成 · 门禁 · 执行 | 8 | `sql_review` `sql_plan` `sql_generate` `sql_execute_readonly` `sql_run_get` `sql_run_list` `sql_run_replay` `sql_optimize` |
 | 10 | 系统配置（大模型连接） | 3 | `llm_config_get` `llm_config_set` `llm_config_test` |
 | 11 | 口径维护 | 3 | `metric_list` `metric_save` `metric_preview` |
+| 12 | 合规三道闸门 | 3 | `compliance_precheck` `compliance_satisfiability` `compliance_danger_guard` |
+| 13 | 全量人工复核 | 5 | `review_enqueue` `review_queue` `review_detail` `review_decide` `review_summary` |
+| 14 | 分级分类与脱敏 | 3 | `classification_policies` `classification_policy_save` `classification_mask_preview` |
+| 15 | 审计导出 | 1 | `audit_export` |
+| 16 | 多轮追问 | 2 | `demand_conversation` `demand_followup` |
+| 17 | 本体可视化 | 1 | `ontology_browse` |
 
-合计 **65**（2026-11-01 用 `tools/list` 实测；M10/M11 新增的 14 个此前未进本表，已补齐）。
+合计 **80**（2026-11-18 用 `tools/list` 实测；域 12–17 共 15 个为「Demo 全量批」新增，此前未进本表，已补齐）。
 
 > ⚠️ **工具面是按位契约**：修改工具的**入参名或顺序**会让已发布的调用方全部失效。
 > 新增可以，**改名与改顺序不行**——这是六条红线之一。
@@ -223,6 +229,76 @@
 > `/app/engine-workspace-c`（compose 里的 bind mount）。写不回去时保存照常成功，
 > 但 `persist_warning` 会说明「引擎重启后会回滚」——这条必须显示给用户。
 
+#### 域 12 · 合规三道闸门（3）
+
+| 工具                          | 入参                                                                 | 返回要点                                                                                                     | 用途                              |
+| --------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `compliance_precheck`       | `text=""`, `demand_id=""`, `dataset="B"`, `actor=""`               | `{verdict（拦截/告警/通过）, stage, risks[{type, severity, matched, rule_id, why, suggestion}], rewrite_suggestion, targets}` | 闸门① 合规预检 FR-4.11（语义分析阶段，**早于任何 SQL 生成**） |
+| `compliance_satisfiability` | `demand_id=""`, `dataset="B"`, `text=""`, `actor=""`              | `{verdict（可满足/部分支持/不支持）, satisfiable, reasons[], missing{tables,columns,terms}, alternatives[], dialect_scope, policy}` | 闸门② 可满足性预检 FR-4.10（结构化后 / 检索前）  |
+| `compliance_danger_guard`   | ★`sql`, `dataset="B"`, `demand_id=""`, `explain_rows=None`, `actor=""` | `{blocked, verdict, reasons[{type, detail, guide}], not_evaluated[], thresholds{explain_rows, note}}`         | 闸门③ 危险语句拦截 FR-7.5（SQL 生成后）     |
+
+> **三道闸门位置不同、判据不同，不合并、不复用判据**（导读第 2 节第 3 条）：① 查「该不该答」→ ② 查「能不能答」→ ③ 查「语句危不危险」。
+> `verdict='拦截'`（闸门①）/ `satisfiable=false`（闸门②）/ `blocked=true`（闸门③）⇒ 调用方**必须停下**，不接受继续。
+> 命中率 100% / 误拦率 ≤2%（FR-4.11）与 EXPLAIN 阈值 1000 万行（NFR-4.5）均为**目标值 / 演示参数**，非实测。
+> 闸门③ 判不了的项（未传 `explain_rows` / sqlglot 不可用等）**显式列在 `not_evaluated`**，不得静默读成「没问题」。
+
+#### 域 13 · 全量人工复核（5）
+
+| 工具               | 入参                                                                                    | 返回要点                                                                        | 用途                       |
+| ---------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------ |
+| `review_enqueue` | ★`demand_id` ★`sql_run_id`, `dataset="B"`, `sql=""`, `generator=""`, `confidence=None`, `actor=""` | `{ok, task_id, created, status}`；**无条件**建任务，幂等键 = `sql_run_id`                | 入队 FR-6.7 / D15          |
+| `review_queue`   | `status=""`, `dataset=""`, `limit=50`                                                  | `{total, pending, items[], policy}`（待复核优先 + 时间倒序）                            | 复核台队列                    |
+| `review_detail`  | ★`demand_id`                                                                           | `{items[]}`，每任务附 `decisions[]`（结论历史）与 `latest_decision`（append-only）       | 看某需求的任务与结论历史             |
+| `review_decide`  | ★`task_id` ★`decision`, `reviewer=""`, `note=""`, `rewritten_sql=""`                  | `{decision_id, decision, status, reviewer, decided_at}`；**只增不改**             | 下结论（通过 / 退回 / 改写）         |
+| `review_summary` | `demand_id=""`, `dataset=""`                                                           | `{total, counts{待复核/已通过/已退回/已改写}, all_approved, policy}`                | 交付页闸门（AC-10 / AC-13）     |
+
+> **铁律：全量人工复核，不看置信度分流**（导读第 2 节第 2 条）。`confidence` 仅供复核排序参考，**不作为免复核依据**。
+> 未经人工在真实环境预测试确认，交付页不得标注「可执行」；`all_approved=true` 才算复核环节通过。
+> `review_decide` 的约束：「退回 / 改写」必填 `note`、「改写」必填 `rewritten_sql`、`reviewer` 必填（复核必须留痕到人）。
+> ⚠️ **`rewritten_sql` 与门禁的 `revised_sql` 不是一回事**：`revised_sql` 是门禁 D1 的「失败时自动改写」槽位（恒为 `None`，红线 R3 盯着），人工复核的改写字段因此另行命名为 `rewritten_sql`，避免同名歧义。
+
+#### 域 14 · 分级分类与脱敏（3）
+
+| 工具                             | 入参                                                                                                          | 返回要点                                                                                          | 用途             |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | -------------- |
+| `classification_policies`      | `dataset=""`                                                                                                | `{ok, sealed, source_error, count, levels[], categories[], algorithms[], items[]}`；策略表不可用时 `sealed=true` | 策略台账 FR-7.8    |
+| `classification_policy_save`   | ★`level` ★`category` ★`pattern`, `algorithm="mask"`, `params=None`, `description=""`, `dataset=""`, `policy_id=""`, `actor=""` | `{ok, policy_id}`；`pattern` 先校验正则合法性，非法即拒                                              | 数据管家维护策略       |
+| `classification_mask_preview`  | ★`dataset` ★`columns` ★`rows`                                                                                 | `{before_rows, after_rows, per_column[], applied[], closed[], location, boundary}`；前（原始）/ 后（脱敏）对照 + 逐列分级 | 脱敏预览 FR-7.9    |
+
+> **脱敏落点在应用端**（网关 / BFF 编排层），**不在 SQL 执行端**；默认交付路径「复制 SQL + 口径说明」不携带脱敏逻辑、不得宣称已脱敏（导读第 2 节第 5 条、NFR-3.8）。
+> **失败即关闭**：策略源不可用 / 字段未匹配 / 算法异常，一律按最高敏感级 L4 处理（`closed-by-default`），业务侧不可关闭（`sealed` 字段标明）。
+> `classification_mask_preview` 要求调用方自带 `columns/rows`——网关不主动从业务库取数做预览。
+
+#### 域 15 · 审计导出（1）
+
+| 工具            | 入参                                                   | 返回要点                                                                                                        | 用途          |
+| ------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------- |
+| `audit_export` | `dataset=""`, `demand_id=""`, `limit=500`, `fmt="csv"`, `actor=""` | `{format, count, filename, content, columns[], retention, audit_fields, note}`；取数失败时附 `warning` | 导出 FR-7.7（P2） |
+
+> 导出格式 `fmt ∈ {csv, syslog}`：csv 为 RFC4180 带表头；syslog 为 RFC5424 风格逐行投递客户 SIEM。
+> 导出字段对齐 FR-7.4 全链路审计要素（提问人 / 问题 / 生成 SQL / 引用口径版本 / 扫及表 / 执行耗时 / 返回行数 / 试跑次数 / 是否人工改写）。
+> **取数失败不静默退成空表**：`warning` 区分「0 行 = 取数失败」与「0 行 = 本就无留痕」；留存期 ≥180 天为带 `[假设]` 的**目标值**。
+> 导出动作本身也留痕（`config_events`）。
+
+#### 域 16 · 多轮追问（2）
+
+| 工具                     | 入参                                              | 返回要点                                                                           | 用途           |
+| ---------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------ | ------------ |
+| `demand_conversation`  | ★`demand_id`, `dataset="B"`                      | 会话轮次：原需求为第 1 轮，其后每轮追问各成一轮；每轮给出对齐的 `round_no` 与结构化需求 `version`                    | 看会话 FR-4.8   |
+| `demand_followup`      | ★`demand_id` ★`instruction`, `dataset="B"`, `actor="analyst"` | 追问整句**追加**进需求原文 → 重跑语义分析（新 `round_no`）→ 重合成结构化需求（`version+1`）；旧轮次 / 旧版本一律保留 | 追问 FR-4.8（P2） |
+
+> 同一会话内「再加一个维度 / 换个时间范围」不丢上下文；**轮次与版本只增不改**，任一轮可回放。
+> 版本对齐按 `source_round`（该版结构化需求由哪一轮产出），**不按位置下标**——早期轮次可能没产出结构化需求，按下标对齐会把版本挂到错误的轮上。
+
+#### 域 17 · 本体可视化（1）
+
+| 工具               | 入参                                                          | 返回要点                                                                                          | 用途           |
+| ---------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------ |
+| `ontology_browse` | `dataset="B"`, `domain=""`, `table=""`, `column=""`, `limit=50` | `{level, path[], children[], cases[], case_note}`；逐层下钻：业务域 → 实体/表 → 字段 → 引用该字段的 CASE | 本体浏览 FR-2.6（P2） |
+
+> 逐层传参下钻（`domain → table → column`）；`path` 为可点击面包屑（每段带 `level` 与查询键），`children` 为当前层的下一层可下钻项。
+> 数据全部来自仓库自有元数据库（`table_docs` / `column_docs` / `sql_runs`），不新建数据源、不调大模型；纯只读。
+
 #### 典型操作动线（八步链路）
 
 ```
@@ -248,7 +324,7 @@ demand_create
 # 1) 探活：status=ok，双库都 ok
 curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool
 
-# 2) 握手 + 取工具面（应返回 65 个工具）
+# 2) 握手 + 取工具面（应返回 80 个工具）
 SID=$(curl -sD- -o/dev/null -X POST http://127.0.0.1:18080/mcp \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}}' \
@@ -274,7 +350,7 @@ curl -s -X POST http://127.0.0.1:18080/mcp \
 #### 5.10.1 接入前后自查（3 步）
 
 1. `curl -s http://127.0.0.1:18080/healthz | python3 -m json.tool` → `status` 应为 `ok`（知识库单独展示，不可用不拖垮整体，会如实进 `degraded`）；
-2. 客户端 `tools/list` → 应为 **65 个**；
+2. 客户端 `tools/list` → 应为 **80 个**；
 3. 冒烟：调 `datasets` 看双库（A / B）是否都在册。
 
 #### 5.10.2 常用运维动作
@@ -283,7 +359,7 @@ curl -s -X POST http://127.0.0.1:18080/mcp \
 docker compose ps                 # 看状态（wren-mcp-a/b、assistant-minio 无 healthcheck，只显示 Up 是正常的，见 5.2）
 docker compose up -d --build      # 改过 gateway/ 后重建
 python3 gateway/healthcheck.py --base http://127.0.0.1:18080 --deep   # 双探活（HTTP + MCP，含真调一次 gateway_health）
-python3 tools/mcp_acceptance_check.py                                 # 工具面 65 个逐条核对
+python3 tools/mcp_acceptance_check.py                                 # 工具面 80 个逐条核对
 ```
 
 > ⚠️ 容器内代码平铺 `/app`，但 `tools/` 不在 build context —— 跑容器内脚本前需 `docker cp`；走 HTTP 的脚本**必须在宿主跑**，容器内会 connection refused。
